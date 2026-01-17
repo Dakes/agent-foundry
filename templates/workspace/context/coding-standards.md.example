@@ -1,0 +1,675 @@
+# Coding Standards & Style Guide
+
+> **How to use this file:**
+> This is a template showing comprehensive coding standards. Customize to match your actual standards.
+> Rename to `coding-standards.md` when ready to use.
+
+## Overview
+
+This document defines the coding standards for all projects in this workspace. These standards ensure consistency, maintainability, and quality across the codebase.
+
+## Language-Specific Guidelines
+
+### TypeScript
+
+#### Type Safety
+```typescript
+// ✅ Good - explicit types, no any
+function processUser(userId: string, name: string): Promise<User> {
+  // implementation
+}
+
+// ❌ Bad - any types, missing return type
+function processUser(userId: any, name: any): any {
+  // implementation
+}
+
+// ✅ Good - use interfaces for clarity
+interface CreateUserRequest {
+  email: string;
+  name: string;
+  role: 'admin' | 'user' | 'guest';
+}
+
+// ❌ Bad - loose object types
+function createUser(user: Record<string, any>): void {
+  // implementation
+}
+```
+
+#### Strict Mode
+- Always use `"strict": true` in tsconfig.json
+- No `// @ts-ignore` comments without justification
+- Enable `"noImplicitAny"` and `"strictNullChecks"`
+
+#### Generics
+```typescript
+// ✅ Good - generic utility functions
+function getCacheItem<T>(key: string): T | null {
+  // implementation
+}
+
+// ✅ Good - constrained generics
+function merge<T extends object>(a: T, b: T): T {
+  return { ...a, ...b };
+}
+
+// ❌ Bad - overly broad generics
+function process<T>(input: T): T {
+  // implementation
+}
+```
+
+### JavaScript/Node.js
+
+#### Async/Await
+```javascript
+// ✅ Good - async/await is more readable
+async function fetchUserData(userId) {
+  try {
+    const response = await fetch(`/api/users/${userId}`);
+    if (!response.ok) throw new Error('HTTP error: ' + response.status);
+    return await response.json();
+  } catch (error) {
+    logger.error('Failed to fetch user', { userId, error });
+    throw error;
+  }
+}
+
+// ❌ Bad - promise chains are harder to read
+function fetchUserData(userId) {
+  return fetch(`/api/users/${userId}`)
+    .then(response => response.json())
+    .catch(error => logger.error('Failed', { userId, error }));
+}
+```
+
+#### Error Handling
+```javascript
+// ✅ Good - specific error types
+class ValidationError extends Error {
+  constructor(message, field) {
+    super(message);
+    this.name = 'ValidationError';
+    this.field = field;
+  }
+}
+
+try {
+  validateEmail(email);
+} catch (error) {
+  if (error instanceof ValidationError) {
+    // Handle validation error specifically
+  } else {
+    // Handle unexpected errors
+  }
+}
+
+// ❌ Bad - generic error handling
+try {
+  validateEmail(email);
+} catch (e) {
+  console.log('Error: ' + e);
+}
+```
+
+### React/JSX
+
+#### Component Structure
+```typescript
+// ✅ Good - clear functional component structure
+interface UserCardProps {
+  userId: string;
+  onSelect?: (userId: string) => void;
+  isLoading?: boolean;
+}
+
+export const UserCard: React.FC<UserCardProps> = ({
+  userId,
+  onSelect,
+  isLoading = false,
+}) => {
+  const [user, setUser] = React.useState<User | null>(null);
+
+  React.useEffect(() => {
+    loadUser(userId).then(setUser);
+  }, [userId]);
+
+  if (isLoading || !user) return <Skeleton />;
+
+  return (
+    <div className="user-card">
+      <h3>{user.name}</h3>
+      <button onClick={() => onSelect?.(userId)}>Select</button>
+    </div>
+  );
+};
+
+// ❌ Bad - no types, unclear structure
+function UserCard(props) {
+  const [user, setUser] = React.useState();
+  React.useEffect(() => {
+    fetch(`/api/users/${props.userId}`).then(r => r.json()).then(setUser);
+  }, [props.userId]);
+  return <div>{user && <h3>{user.name}</h3>}</div>;
+}
+```
+
+#### Hooks
+```typescript
+// ✅ Good - custom hooks for logic
+function useUserData(userId: string) {
+  const [user, setUser] = React.useState<User | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<Error | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+
+    fetchUser(userId)
+      .then(user => !cancelled && setUser(user))
+      .catch(err => !cancelled && setError(err))
+      .finally(() => !cancelled && setIsLoading(false));
+
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  return { user, isLoading, error };
+}
+
+// ✅ Good - dependency arrays are explicit
+React.useEffect(() => {
+  const timer = setTimeout(() => setVisible(false), 5000);
+  return () => clearTimeout(timer);
+}, [setVisible]); // All dependencies listed
+
+// ❌ Bad - missing dependency
+React.useEffect(() => {
+  document.title = `Count: ${count}`;
+}, []); // Missing 'count' dependency!
+```
+
+## File Organization
+
+### Directory Structure
+```
+src/
+├── components/          # Reusable React components
+│   ├── UserCard/
+│   │   ├── UserCard.tsx
+│   │   ├── UserCard.test.tsx
+│   │   └── index.ts
+│   └── Layout/
+├── hooks/              # Custom React hooks
+│   ├── useUserData.ts
+│   └── useAuth.ts
+├── services/           # API clients, external integrations
+│   ├── userService.ts
+│   └── authService.ts
+├── utils/              # Pure utility functions
+│   ├── validators.ts
+│   ├── formatters.ts
+│   └── date-utils.ts
+├── types/              # TypeScript type definitions
+│   ├── user.types.ts
+│   └── api.types.ts
+├── App.tsx            # Root component
+└── index.ts           # Entry point
+```
+
+### File Naming
+- Components: PascalCase, `UserCard.tsx`
+- Services: camelCase, `userService.ts`
+- Utilities: kebab-case, `string-utils.ts`
+- Types: PascalCase + .types extension, `User.types.ts`
+- Tests: Same name + `.test.ts`, `UserCard.test.tsx`
+
+## Code Formatting
+
+### Indentation
+- Use 2 spaces for indentation (not tabs)
+- Continuation lines indented 4 spaces
+- No trailing whitespace
+
+### Line Length
+- Maximum 100 characters
+- Break long lines at logical points
+
+### Spacing
+```typescript
+// ✅ Good spacing
+function calculate(a: number, b: number): number {
+  const result = a + b;
+  return result * 2;
+}
+
+// No space before parentheses in function declarations
+function calculate(a: number) {}
+
+// Space before { in control structures
+if (condition) {
+  // body
+}
+
+// Space after commas
+const items = [1, 2, 3];
+```
+
+## Comments
+
+### When to Comment
+- Explain the WHY, not the WHAT
+- Document non-obvious algorithms
+- Explain trade-offs and decisions
+- Add warnings for gotchas
+
+### Comment Format
+```typescript
+// ✅ Good - explains intent
+// Retry with exponential backoff to avoid overwhelming the service
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxAttempts: number = 3
+): Promise<T> {
+  // implementation
+}
+
+// ✅ Good - documents assumptions
+// WARNING: This assumes the data is sorted by date.
+// The date field MUST be set before calling this function.
+function filterRecentItems(items: Item[]): Item[] {
+  // implementation
+}
+
+// ❌ Bad - just restates code
+const count = 0; // Set count to 0
+
+// ❌ Bad - outdated comment
+// TODO: Fix this later (written 2 years ago)
+```
+
+### JSDoc Comments
+```typescript
+/**
+ * Validates an email address format.
+ *
+ * Checks for valid email format but does NOT verify the address exists.
+ * For real validation, send a verification email.
+ *
+ * @param email - Email address to validate
+ * @returns true if format is valid, false otherwise
+ *
+ * @example
+ * isValidEmail('user@example.com'); // true
+ * isValidEmail('invalid-email');    // false
+ *
+ * @throws Will throw if email is not a string
+ */
+function isValidEmail(email: string): boolean {
+  // implementation
+}
+```
+
+## Testing Standards
+
+### Test Structure
+```typescript
+describe('UserService', () => {
+  describe('getUser', () => {
+    it('should return user by id', async () => {
+      // Arrange
+      const userId = 'user-123';
+      const expectedUser = { id: userId, name: 'John' };
+      mock.db.query.mockResolvedValue(expectedUser);
+
+      // Act
+      const result = await UserService.getUser(userId);
+
+      // Assert
+      expect(result).toEqual(expectedUser);
+    });
+
+    it('should throw error if user not found', async () => {
+      // Arrange
+      mock.db.query.mockResolvedValue(null);
+
+      // Act & Assert
+      await expect(UserService.getUser('invalid-id'))
+        .rejects
+        .toThrow('User not found');
+    });
+  });
+});
+```
+
+### Test Naming
+- Test names should describe the scenario and expected result
+- Format: `should [expected behavior] [when context]`
+- Examples:
+  - `should return user by id`
+  - `should throw error when user not found`
+  - `should handle network timeout gracefully`
+
+### Coverage Targets
+- Minimum 85% code coverage
+- 100% coverage for critical paths (auth, payments, data access)
+- High-value tests > high code coverage (test behavior, not lines)
+
+## Imports and Exports
+
+### Import Order
+```typescript
+// 1. External libraries
+import React from 'react';
+import { useState } from 'react';
+
+// 2. Node.js built-ins
+import { readFile } from 'fs/promises';
+
+// 3. Internal absolute imports
+import { UserService } from '@/services/UserService';
+
+// 4. Internal relative imports
+import { formatDate } from '../utils/formatDate';
+
+// 5. Type imports last
+import type { User } from '@/types/User.types';
+```
+
+### Named Exports (Preferred)
+```typescript
+// ✅ Good - named exports
+export function validateEmail(email: string): boolean {
+  // implementation
+}
+
+export function formatEmail(email: string): string {
+  // implementation
+}
+
+// Usage: import { validateEmail, formatEmail } from '@/utils/email';
+```
+
+### Default Exports (Components Only)
+```typescript
+// ✅ Good - default export for components
+export default function UserCard() {
+  // implementation
+}
+
+// Usage: import UserCard from '@/components/UserCard';
+
+// ❌ Bad - default export for utilities
+export default function validateEmail() {
+  // implementation
+}
+```
+
+## Naming Conventions
+
+### Variables and Constants
+```typescript
+// ✅ Good - descriptive names
+const MAX_RETRY_ATTEMPTS = 3;
+const isLoading = true;
+const userIds = ['id1', 'id2'];
+const defaultTimeout = 5000;
+
+// ❌ Bad - unclear names
+const m = 3;
+const x = true;
+const arr = ['id1', 'id2'];
+const t = 5000;
+
+// ✅ Good - boolean prefix
+const isVisible = true;
+const hasError = false;
+const shouldRetry = true;
+const canDelete = false;
+
+// ❌ Bad - no boolean indicator
+const visible = true;
+const error = false;
+const retry = true;
+const delete_ = false;
+```
+
+### Functions and Methods
+```typescript
+// ✅ Good - verb + noun
+function calculateTotal(): number {}
+function validateEmail(): boolean {}
+function formatDate(): string {}
+function getUserById(): User {}
+
+// ❌ Bad - noun only or vague
+function total(): number {}
+function email(): boolean {}
+function format(): string {}
+function get(): User {}
+```
+
+## Logging
+
+### Log Levels
+```typescript
+// DEBUG - Detailed diagnostic information
+logger.debug('Cache hit for key', { key, duration: 12 });
+
+// INFO - General informational messages
+logger.info('User logged in', { userId, timestamp });
+
+// WARN - Warning conditions, potential issues
+logger.warn('Database query slow', { query: 'SELECT...', duration: 5000 });
+
+// ERROR - Error conditions
+logger.error('Failed to process payment', { orderId, error });
+
+// FATAL - System is unusable
+logger.fatal('Database connection lost, shutting down');
+```
+
+### Logging Best Practices
+```typescript
+// ✅ Good - context included
+logger.error('Failed to fetch user', {
+  userId,
+  attemptNumber: 3,
+  error: error.message,
+  errorCode: error.code,
+});
+
+// ❌ Bad - minimal context
+logger.error('Error: ' + error);
+
+// ✅ Good - structured logging
+logger.info('User registered', {
+  userId,
+  email: user.email,
+  timestamp: new Date(),
+  source: 'api',
+});
+
+// ❌ Bad - unstructured
+logger.info(`User ${user.email} registered at ${new Date()}`);
+```
+
+## Configuration
+
+### Environment Variables
+```
+# ✅ Good - clear naming convention
+APP_NAME=CloudDash
+APP_ENV=production
+DB_HOST=postgres.example.com
+DB_PORT=5432
+DB_NAME=cloudash
+REDIS_HOST=redis.example.com
+API_KEY_PROVIDER=some-provider
+FEATURE_FLAG_NEW_DASHBOARD=true
+```
+
+### Runtime Config
+```typescript
+// ✅ Good - validated at startup
+interface Config {
+  port: number;
+  dbUrl: string;
+  logLevel: 'debug' | 'info' | 'warn' | 'error';
+}
+
+function loadConfig(): Config {
+  const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+  const dbUrl = process.env.DB_URL;
+  if (!dbUrl) throw new Error('DB_URL environment variable required');
+
+  return { port, dbUrl, logLevel: 'info' };
+}
+
+// ❌ Bad - hardcoded values, missing validation
+const port = 3000;
+const dbUrl = 'localhost';
+```
+
+## Performance Guidelines
+
+### Avoid Common Pitfalls
+```typescript
+// ❌ Bad - N+1 query problem
+async function getUsersWithPosts(userIds: string[]) {
+  const users = await db.query('SELECT * FROM users WHERE id IN (...)', userIds);
+  // This loop causes N additional queries!
+  const result = users.map(async (user) => ({
+    ...user,
+    posts: await db.query('SELECT * FROM posts WHERE user_id = ?', user.id),
+  }));
+  return Promise.all(result);
+}
+
+// ✅ Good - batch load with join
+async function getUsersWithPosts(userIds: string[]) {
+  return db.query(`
+    SELECT u.*, json_agg(p.*) as posts
+    FROM users u
+    LEFT JOIN posts p ON u.id = p.user_id
+    WHERE u.id IN (...)
+    GROUP BY u.id
+  `, userIds);
+}
+```
+
+### Memoization
+```typescript
+// ✅ Good - cache expensive computations
+const expensiveCalculation = memoize((input: string) => {
+  // Heavy computation here
+  return result;
+});
+
+// ✅ Good - React.memo for expensive components
+export const ExpensiveComponent = React.memo(function ExpensiveComponent(props: Props) {
+  return <div>{/* complex rendering */}</div>;
+}, (prevProps, nextProps) => {
+  // Return true if props are equal (no re-render needed)
+  return prevProps.id === nextProps.id;
+});
+```
+
+## Security Guidelines
+
+### Input Validation
+```typescript
+// ✅ Good - validate all inputs
+function createUser(email: string, password: string): void {
+  if (!isValidEmail(email)) throw new Error('Invalid email');
+  if (password.length < 12) throw new Error('Password too short');
+  // create user
+}
+
+// ❌ Bad - trust user input
+function createUser(email: string, password: string): void {
+  // Just use what they gave us
+}
+```
+
+### SQL Injection Prevention
+```typescript
+// ✅ Good - parameterized queries
+const user = await db.query(
+  'SELECT * FROM users WHERE email = $1 AND id = $2',
+  [email, userId]
+);
+
+// ❌ Bad - string concatenation
+const user = await db.query(
+  `SELECT * FROM users WHERE email = '${email}' AND id = ${userId}`
+);
+```
+
+### Secrets Management
+```typescript
+// ✅ Good - environment variables
+const apiKey = process.env.EXTERNAL_API_KEY;
+if (!apiKey) throw new Error('EXTERNAL_API_KEY not set');
+
+// ❌ Bad - hardcoded secrets
+const apiKey = 'sk-12345...';
+
+// ❌ Bad - in version control
+const config = {
+  apiKey: 'actual-secret',
+  token: 'another-secret',
+};
+```
+
+## Deprecated Patterns
+
+These patterns should NOT be used in new code:
+
+- `var` declarations (use `const` or `let`)
+- Callback-based async (use async/await)
+- `any` types (use specific types)
+- `== ` or `!=` (use `===` or `!==`)
+- `require()` (use ES6 imports)
+- Global variables
+- `eval()` or dynamic code execution
+
+## Tool Configuration
+
+### ESLint
+All projects should have `.eslintrc.json` with:
+- `"strict": true`
+- `"prettier": true` for formatting integration
+- No `// eslint-disable` without justification
+
+### TypeScript
+All projects should have `tsconfig.json` with:
+- `"strict": true`
+- `"noImplicitAny": true`
+- `"strictNullChecks": true`
+- Target ES2020 or later
+
+### Prettier
+All projects should have `.prettierrc` with:
+- `"printWidth": 100`
+- `"semi": true`
+- `"singleQuote": true`
+- `"trailingComma": "es5"`
+
+## Documentation
+
+### README Requirements
+Every service/module needs a README.md with:
+- Purpose and overview
+- Architecture/design decisions
+- Setup instructions
+- Testing instructions
+- Deployment instructions
+- Known issues
+
+### API Documentation
+- Use OpenAPI/Swagger for REST APIs
+- Generate documentation from code comments
+- Keep docs in sync with implementation
+- Include example requests and responses

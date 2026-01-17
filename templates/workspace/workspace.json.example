@@ -1,0 +1,168 @@
+{
+  "name": "cloudash-web",
+  "description": "CloudDash monitoring dashboard - multi-repo full-stack application",
+  "version": "0.1.0",
+
+  "repositories": [
+    {
+      "name": "backend-api",
+      "url": "git@github.com:acmecorp/cloudash-api.git",
+      "branch": "develop",
+      "directory": "repos/backend/api",
+      "description": "REST API service for dashboards and metrics"
+    },
+    {
+      "name": "backend-collector",
+      "url": "git@github.com:acmecorp/cloudash-collector.git",
+      "branch": "develop",
+      "directory": "repos/backend/collector",
+      "description": "Data collector service for ingesting metrics"
+    },
+    {
+      "name": "backend-alerter",
+      "url": "git@github.com:acmecorp/cloudash-alerter.git",
+      "branch": "develop",
+      "directory": "repos/backend/alerter",
+      "description": "Alert evaluation and notification service"
+    },
+    {
+      "name": "frontend",
+      "url": "git@github.com:acmecorp/cloudash-frontend.git",
+      "branch": "develop",
+      "directory": "repos/frontend",
+      "description": "React-based dashboard UI"
+    },
+    {
+      "name": "shared-types",
+      "url": "git@github.com:acmecorp/cloudash-shared.git",
+      "branch": "develop",
+      "directory": "repos/shared",
+      "description": "Shared types, interfaces, and utilities"
+    },
+    {
+      "name": "infrastructure",
+      "url": "git@github.com:acmecorp/cloudash-infrastructure.git",
+      "branch": "main",
+      "directory": "repos/infrastructure",
+      "description": "Terraform, Helm charts, and deployment configs"
+    }
+  ],
+
+  "agent": {
+    "default_cli": "claude-code",
+    "model": "claude-opus-4.5",
+
+    "context_files": [
+      "context/company.md",
+      "context/instructions.md",
+      "context/coding-standards.md",
+      "context/architecture.md"
+    ],
+
+    "memory_files": [
+      "memory/decisions.md",
+      "memory/progress.md",
+      "memory/blockers.md",
+      "memory/learnings.md"
+    ],
+
+    "task_files": [
+      "PROMPT.md",
+      "@fix_plan.md"
+    ],
+
+    "environment": {
+      "NODE_ENV": "development",
+      "CI": "false",
+      "npm_token": "${NPM_TOKEN}",
+      "github_token": "${GITHUB_TOKEN}"
+    }
+  },
+
+  "vm": {
+    "os": "arch",
+    "cpus": null,
+    "memory_mb": 8192,
+    "disk_gb": 20,
+    "networking": "nat"
+  },
+
+  "development": {
+    "docker_compose": "docker-compose.yml",
+    "services": [
+      {
+        "name": "postgres",
+        "command": "docker-compose up -d postgres"
+      },
+      {
+        "name": "redis",
+        "command": "docker-compose up -d redis"
+      },
+      {
+        "name": "kafka",
+        "command": "docker-compose up -d kafka zookeeper"
+      }
+    ],
+    "setup_script": "scripts/setup.sh",
+    "test_command": "npm test",
+    "build_command": "npm run build",
+    "lint_command": "npm run lint"
+  },
+
+  "deployment": {
+    "kubernetes_namespace": "cloudash",
+    "helm_chart": "repos/infrastructure/helm/cloudash",
+    "container_registry": "ghcr.io/acmecorp",
+    "staging_domain": "staging.cloudash.io",
+    "production_domain": "app.cloudash.io"
+  },
+
+  "organization": {
+    "name": "Acme Corp",
+    "team_lead": "alice@acmecorp.com",
+    "slack_channel": "#engineering",
+    "github_org": "acmecorp"
+  },
+
+  "quality_gates": {
+    "min_test_coverage": 85,
+    "max_bundle_size_mb": 500,
+    "typescript_strict_mode": true,
+    "eslint_required": true,
+    "security_scan": true,
+    "performance_budget": {
+      "api_p95_ms": 200,
+      "frontend_load_seconds": 2.0
+    }
+  },
+
+  "schedule": {
+    "work_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    "max_hours_per_session": 4,
+    "checkpoint_interval_minutes": 60,
+    "memory_update_interval_minutes": 30
+  },
+
+  "git": {
+    "feature_branch_prefix": "feature/",
+    "hotfix_branch_prefix": "hotfix/",
+    "release_branch_prefix": "release/",
+    "commit_message_format": "conventional",
+    "require_code_review": true,
+    "require_tests": true,
+    "require_lint": true
+  },
+
+  "notes": {
+    "setup_status": "Initial setup complete, first feature in progress",
+    "known_issues": [
+      "PostgreSQL performance optimization pending when data volume exceeds 1M rows",
+      "JWT token expiration should be made configurable (see decisions.md)"
+    ],
+    "next_steps": [
+      "Complete user authentication system",
+      "Begin dashboard CRUD operations",
+      "Set up Kafka integration for metrics pipeline"
+    ]
+  }
+}

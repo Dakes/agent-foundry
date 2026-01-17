@@ -1,0 +1,344 @@
+# Fix Plan & Task Prioritization
+
+Task list for the project. Organized by priority. Ralph reads this file to understand what to work on next.
+
+## Format
+
+```markdown
+## [Priority Level]
+
+- [ ] Task description
+  - Subtask 1
+  - Subtask 2
+```
+
+Check off tasks as they're completed. Move completed tasks to "Completed" section.
+
+## High Priority
+
+These are blocking tasks that should be completed first. Each typically takes 3-4 hours.
+
+- [ ] **User authentication system**
+  - [ ] Define User and AuthToken types in shared
+  - [ ] Create users table with proper schema
+  - [ ] Implement AuthService with password hashing
+  - [ ] Implement JWT token generation and validation
+  - [ ] Create /api/auth/login endpoint
+  - [ ] Create /api/auth/refresh endpoint
+  - [ ] Create /api/auth/logout endpoint
+  - [ ] Implement auth middleware for protected routes
+  - [ ] Create login form component in frontend
+  - [ ] Add auth context and useAuth hook
+  - [ ] Write tests for all components (target 85%+)
+  - [ ] Update documentation
+
+  **Blocking:** Password reset, dashboard, alert system all depend on this
+  **Owner:** Claude Code Agent
+  **Est. Hours:** 3-4
+  **Status:** Not started
+
+- [ ] **Password reset flow**
+  - [ ] Create password_reset_tokens table
+  - [ ] Implement /api/auth/forgot-password endpoint
+  - [ ] Implement /api/auth/reset-password endpoint
+  - [ ] Send reset email (SMTP integration)
+  - [ ] Create reset password form in frontend
+  - [ ] Add token expiration (24-hour window)
+  - [ ] Add rate limiting (1 email per 5 minutes per account)
+  - [ ] Write tests
+
+  **Blocking:** Users need way to recover lost passwords
+  **Owner:** TBD
+  **Est. Hours:** 2-3
+  **Status:** Blocked by user auth system
+
+- [ ] **Email verification on signup**
+  - [ ] Create email_verifications table
+  - [ ] Implement signup endpoint
+  - [ ] Send verification email
+  - [ ] Create verify email page
+  - [ ] Mark users as verified after confirmation
+  - [ ] Handle unverified user login (show banner, allow 3 days)
+  - [ ] Write tests
+
+  **Blocking:** Want verified emails for alerts
+  **Owner:** TBD
+  **Est. Hours:** 2-3
+  **Status:** Blocked by user auth system
+
+## Medium Priority
+
+These are important features but not blocking. Start after high-priority items.
+
+- [ ] **Dashboard CRUD operations**
+  - [ ] Create dashboards table
+  - [ ] Implement GET /api/dashboards (list)
+  - [ ] Implement POST /api/dashboards (create)
+  - [ ] Implement GET /api/dashboards/:id (read)
+  - [ ] Implement PUT /api/dashboards/:id (update)
+  - [ ] Implement DELETE /api/dashboards/:id (delete)
+  - [ ] Add permissions (only owner can modify)
+  - [ ] Create dashboard list page in frontend
+  - [ ] Create dashboard editor in frontend
+  - [ ] Write tests
+
+  **Blocking:** Core feature for product
+  **Owner:** TBD
+  **Est. Hours:** 4-5
+  **Status:** Awaiting database design
+
+- [ ] **Alert rule management**
+  - [ ] Create alert_rules table
+  - [ ] Implement GET /api/alert-rules (list)
+  - [ ] Implement POST /api/alert-rules (create)
+  - [ ] Implement PUT /api/alert-rules/:id (update)
+  - [ ] Implement DELETE /api/alert-rules/:id (delete)
+  - [ ] Create alert rule editor in frontend
+  - [ ] Add rule validation (test condition syntax)
+  - [ ] Write tests
+
+  **Blocking:** Alert service depends on this
+  **Owner:** TBD
+  **Est. Hours:** 3-4
+  **Status:** Awaiting alert evaluation design
+
+- [ ] **Real-time metrics API**
+  - [ ] Create metrics endpoints:
+    - [ ] GET /api/metrics (query time range and tags)
+    - [ ] GET /api/metrics/:name (get specific metric)
+  - [ ] Implement metrics query service
+  - [ ] Set up WebSocket for real-time updates
+  - [ ] Frontend subscription to WebSocket
+  - [ ] Add caching layer for hot data
+  - [ ] Write tests
+
+  **Blocking:** Dashboard display depends on this
+  **Owner:** TBD
+  **Est. Hours:** 4-5
+  **Status:** Awaiting collector integration
+
+- [ ] **Two-factor authentication (2FA)**
+  - [ ] Create totp_secrets table
+  - [ ] Implement TOTP generation (RFC 6238)
+  - [ ] Add /api/auth/2fa/setup endpoint
+  - [ ] Add /api/auth/2fa/verify endpoint
+  - [ ] Create 2FA setup wizard in frontend
+  - [ ] Create 2FA verification page
+  - [ ] Add 2FA enforcement per organization
+  - [ ] Write tests
+
+  **Blocking:** Enterprise customers require 2FA
+  **Owner:** TBD
+  **Est. Hours:** 3-4
+  **Status:** Awaiting auth completion
+
+- [ ] **OAuth2 integration (GitHub, Google)**
+  - [ ] Add oauth_tokens table
+  - [ ] Implement /api/auth/oauth/:provider/callback
+  - [ ] Integrate with GitHub OAuth API
+  - [ ] Integrate with Google OAuth API
+  - [ ] Create OAuth login buttons in frontend
+  - [ ] Handle OAuth state management
+  - [ ] Write tests
+
+  **Blocking:** Many users prefer social login
+  **Owner:** TBD
+  **Est. Hours:** 3-4
+  **Status:** Awaiting auth completion
+
+## Low Priority
+
+These are nice-to-have features. Work on these after high and medium priority.
+
+- [ ] **Session management UI**
+  - [ ] Create sessions table (track active sessions)
+  - [ ] Add /api/auth/sessions endpoint
+  - [ ] Implement device management page
+  - [ ] Allow logout from other devices
+  - [ ] Show login history
+  - [ ] Write tests
+
+  **Nice-to-have:** Users want to see active sessions
+  **Owner:** TBD
+  **Est. Hours:** 2
+  **Status:** Low priority
+
+- [ ] **Rate limiting and abuse prevention**
+  - [ ] Implement login attempt rate limiting (5 attempts per 15 min)
+  - [ ] Implement API rate limiting (100 req/min per user)
+  - [ ] Add CAPTCHA on repeated failed logins
+  - [ ] Log suspicious activity
+  - [ ] Write tests
+
+  **Nice-to-have:** Prevent brute force attacks
+  **Owner:** TBD
+  **Est. Hours:** 3
+  **Status:** Can add later
+
+- [ ] **Remember me functionality**
+  - [ ] Create remember_me_tokens table
+  - [ ] Implement long-lived tokens (30 days)
+  - [ ] Add "remember me" checkbox to login form
+  - [ ] Auto-login from cookie on return visits
+  - [ ] Write tests
+
+  **Nice-to-have:** Improve user experience
+  **Owner:** TBD
+  **Est. Hours:** 1.5
+  **Status:** Can add later
+
+- [ ] **Audit logging**
+  - [ ] Create audit_logs table
+  - [ ] Log all auth events (login, logout, token refresh, failed attempts)
+  - [ ] Create audit log viewer in admin panel
+  - [ ] Add filtering and search
+  - [ ] Write tests
+
+  **Nice-to-have:** Compliance and security monitoring
+  **Owner:** TBD
+  **Est. Hours:** 2
+  **Status:** Can add later
+
+- [ ] **API documentation**
+  - [ ] Generate OpenAPI/Swagger from code
+  - [ ] Write endpoint descriptions
+  - [ ] Add example requests and responses
+  - [ ] Document error codes
+  - [ ] Create postman collection
+
+  **Nice-to-have:** Help frontend devs and API consumers
+  **Owner:** TBD
+  **Est. Hours:** 2
+  **Status:** Can do in parallel
+
+- [ ] **Performance optimization**
+  - [ ] Add caching headers to API responses
+  - [ ] Implement query result caching with Redis
+  - [ ] Optimize database indexes
+  - [ ] Profile frontend bundle size
+  - [ ] Implement code splitting in frontend
+
+  **Nice-to-have:** Improve performance as we get data
+  **Owner:** TBD
+  **Est. Hours:** 3
+  **Status:** Do after feature complete
+
+## Completed
+
+Tasks that are fully finished.
+
+- [x] **Project setup**
+  - [x] Initialize git repository
+  - [x] Create directory structure
+  - [x] Set up shared types library
+  - [x] Create package.json files
+
+  **Completed:** 2024-01-16
+  **Notes:** See memory/progress.md for details
+
+- [x] **Database initialization**
+  - [x] Set up PostgreSQL with docker-compose
+  - [x] Create initial schema
+  - [x] Set up migration system
+  - [x] Create seed data for development
+
+  **Completed:** 2024-01-15
+  **Notes:** See memory/progress.md for details
+
+## Decision Log
+
+When prioritizing new tasks or changing priority, update this section.
+
+### Decision: User Auth Before Dashboard (2024-01-17)
+
+**Rationale:** Password reset and email verification both depend on user auth. Dashboard CRUD can happen in parallel but benefits from having auth working first.
+
+**Alternative Considered:** Do dashboard in parallel. Decided against because dashboard needs auth to show user's dashboards.
+
+---
+
+## How Ralph Uses This File
+
+Ralph (autonomous agent) reads @fix_plan.md to understand what to work on:
+
+1. **At startup:** Ralph reads @fix_plan.md
+2. **Finds next task:** First unchecked task in High Priority section
+3. **Reads PROMPT.md:** Gets detailed instructions for current task
+4. **Works on task:** Implements, tests, commits
+5. **Marks complete:** Checks off tasks as done
+6. **Moves completed:** Transfers to "Completed" section with date
+7. **Updates progress:** Logs in memory/progress.md
+8. **Loops:** Goes back to step 2
+
+## Tips for Updating This File
+
+### When Adding New Task
+
+```markdown
+- [ ] **New feature name**
+  - [ ] Subtask 1
+  - [ ] Subtask 2
+  - [ ] Subtask 3
+
+  **Blocking:** What depends on this?
+  **Owner:** Who should work on it?
+  **Est. Hours:** How long should it take?
+  **Status:** Not started | In progress | Blocked
+```
+
+### When Task Is Complete
+
+1. Check off the task: `- [x]`
+2. Remove from current section
+3. Add to Completed section with date
+4. Note any important follow-up info
+
+Example:
+```markdown
+- [x] **User authentication**
+  **Completed:** 2024-01-17
+  **Hours spent:** 4.5
+  **Notes:** Token refresh needs configuration (see decisions.md)
+```
+
+### When Task Is Blocked
+
+Update status but keep in current section:
+```markdown
+- [ ] **Something blocked**
+  **Status:** Blocked by user auth system
+```
+
+Ralph will see it's blocked and move on to next task.
+
+### Commit Message When Updating
+
+```
+docs(@fix_plan): mark user auth as complete
+
+Moved from High Priority to Completed section.
+Note for next task: token configuration needs review.
+```
+
+## Project Statistics
+
+**Total estimated hours:** ~35-40
+- High priority: ~13 hours
+- Medium priority: ~20 hours
+- Low priority: ~12 hours
+
+**Velocity:** ~3-4 hours per 4-hour work session
+
+**Estimated project timeline:** 10-12 work sessions (2-3 weeks)
+
+## Rollback Procedure
+
+If Ralph (or any agent) encounters issues:
+
+1. Identify incomplete or broken task
+2. Create blocker entry in `memory/blockers.md`
+3. Revert commits: `git reset --soft <last-good-commit>`
+4. Wait for human review
+5. Update @fix_plan.md with new information
+
+Never force-push to main branch. All work stays on feature branches.

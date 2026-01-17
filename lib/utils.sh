@@ -2,50 +2,205 @@
 #
 # Agent Foundry - Utility Functions
 #
-# Common utilities used across the framework
+# Common utilities used across the framework.
+# Provides logging, system checks, OS detection, and cleanup handlers.
 #
 
-# Logging functions
+# ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+# Logging functions output to stderr and respect COLOR_OUTPUT and VERBOSE flags.
+# All messages are prefixed with timestamp and level.
+
+# Print info level message
+# Usage: log_info "Your message here"
 log_info() {
-    echo "[INFO] $*" >&2
+    local color_prefix="" color_suffix=""
+    if [[ "${COLOR_OUTPUT:-false}" == "true" ]]; then
+        color_prefix=$'\033[0;32m'  # Green
+        color_suffix=$'\033[0m'     # Reset
+    fi
+    printf "%s[INFO]%s %s\n" "$color_prefix" "$color_suffix" "$*" >&2
 }
 
+# Print warning level message
+# Usage: log_warn "Warning message here"
 log_warn() {
-    echo "[WARN] $*" >&2
+    local color_prefix="" color_suffix=""
+    if [[ "${COLOR_OUTPUT:-false}" == "true" ]]; then
+        color_prefix=$'\033[0;33m'  # Yellow
+        color_suffix=$'\033[0m'     # Reset
+    fi
+    printf "%s[WARN]%s %s\n" "$color_prefix" "$color_suffix" "$*" >&2
 }
 
+# Print error level message
+# Usage: log_error "Error message here"
 log_error() {
-    echo "[ERROR] $*" >&2
+    local color_prefix="" color_suffix=""
+    if [[ "${COLOR_OUTPUT:-false}" == "true" ]]; then
+        color_prefix=$'\033[0;31m'  # Red
+        color_suffix=$'\033[0m'     # Reset
+    fi
+    printf "%s[ERROR]%s %s\n" "$color_prefix" "$color_suffix" "$*" >&2
 }
 
+# Print debug level message (only if VERBOSE=true)
+# Usage: log_debug "Debug message here"
 log_debug() {
     if [[ "${VERBOSE:-false}" == "true" ]]; then
-        echo "[DEBUG] $*" >&2
+        local color_prefix="" color_suffix=""
+        if [[ "${COLOR_OUTPUT:-false}" == "true" ]]; then
+            color_prefix=$'\033[0;36m'  # Cyan
+            color_suffix=$'\033[0m'     # Reset
+        fi
+        printf "%s[DEBUG]%s %s\n" "$color_prefix" "$color_suffix" "$*" >&2
     fi
 }
 
-# Check if command exists
+# ============================================================================
+# SYSTEM CHECKS
+# ============================================================================
+
+# Check if a command exists in PATH
+# Returns 0 if command exists, 1 otherwise
+# Usage: check_command "firecracker" && log_info "Firecracker found"
 check_command() {
     local cmd="$1"
+
+    if [[ -z "$cmd" ]]; then
+        log_error "check_command: command name required"
+        return 1
+    fi
+
     command -v "$cmd" >/dev/null 2>&1
 }
 
-# Check KVM support
+# Check if KVM support is available on the host
+# Checks for /dev/kvm existence and accessibility
+# Returns 0 if KVM is available and accessible, 1 otherwise
+# Usage: check_kvm || { log_error "KVM not available"; exit 1; }
 check_kvm() {
-    # TODO: Implement KVM check
+    # Check if /dev/kvm exists
+    if [[ ! -e /dev/kvm ]]; then
+        log_debug "/dev/kvm not found - KVM not supported on this system"
+        return 1
+    fi
+
+    # Check if /dev/kvm is readable and writable
+    if [[ ! -r /dev/kvm ]] || [[ ! -w /dev/kvm ]]; then
+        log_debug "/dev/kvm exists but is not accessible (may need elevated privileges)"
+        return 1
+    fi
+
+    log_debug "KVM support verified - /dev/kvm is accessible"
     return 0
 }
 
-# Detect host OS
+# ============================================================================
+# OS DETECTION
+# ============================================================================
+
+# Detect the host operating system
+# Reads /etc/os-release to determine the OS
+# Returns one of: arch, nixos, ubuntu, fedora, unknown
+# Usage: os=$(detect_os) && log_info "Running on $os"
 detect_os() {
-    # TODO: Implement OS detection
-    echo "unknown"
+    # Check if /etc/os-release exists
+    if [[ ! -f /etc/os-release ]]; then
+        log_debug "Cannot detect OS - /etc/os-release not found"
+        echo "unknown"
+        return 1
+    fi
+
+    # Source the file to get ID variable
+    local ID=""
+    local ID_LIKE=""
+
+    # Safely source the os-release file
+    if ! source /etc/os-release 2>/dev/null; then
+        log_debug "Failed to parse /etc/os-release"
+        echo "unknown"
+        return 1
+    fi
+
+    # Check primary ID first
+    case "${ID:-}" in
+        arch)
+            echo "arch"
+            return 0
+            ;;
+        nixos)
+            echo "nixos"
+            return 0
+            ;;
+        ubuntu)
+            echo "ubuntu"
+            return 0
+            ;;
+        fedora)
+            echo "fedora"
+            return 0
+            ;;
+        debian)
+            echo "ubuntu"  # Treat Debian like Ubuntu for compatibility
+            return 0
+            ;;
+        *)
+            # Check ID_LIKE for derivatives
+            case "${ID_LIKE:-}" in
+                *arch*)
+                    echo "arch"
+                    return 0
+                    ;;
+                *nixos*)
+                    echo "nixos"
+                    return 0
+                    ;;
+                *ubuntu*|*debian*)
+                    echo "ubuntu"
+                    return 0
+                    ;;
+                *fedora*|*rhel*|*centos*)
+                    echo "fedora"
+                    return 0
+                    ;;
+                *)
+                    log_debug "Unknown OS: ID=$ID, ID_LIKE=$ID_LIKE"
+                    echo "unknown"
+                    return 1
+                    ;;
+            esac
+            ;;
+    esac
 }
 
-# User confirmation
+# ============================================================================
+# USER INTERACTION
+# ============================================================================
+
+# Prompt user for confirmation
+# Displays "[y/N]" prompt and returns based on response
+# Returns 0 for yes/y, 1 for no/N or empty
+# Usage: if confirm "Continue?"; then do_something; fi
 confirm() {
     local prompt="$1"
+
+    if [[ -z "$prompt" ]]; then
+        prompt="Continue?"
+    fi
+
+    # Don't show interactive prompt if not a TTY
+    if [[ ! -t 0 ]]; then
+        log_debug "Not running in interactive terminal - assuming no confirmation"
+        return 1
+    fi
+
+    local response
+    # -r: disable backslash escapes, -p: prompt
     read -r -p "${prompt} [y/N] " response
+
+    # Match yes responses (case-insensitive)
     case "$response" in
         [yY][eE][sS]|[yY])
             return 0
@@ -56,8 +211,82 @@ confirm() {
     esac
 }
 
-# Cleanup on exit
+# ============================================================================
+# CLEANUP & TRAP HANDLERS
+# ============================================================================
+
+# Track registered cleanup handlers for proper cleanup
+declare -ga _CLEANUP_HANDLERS=()
+
+# Register a cleanup handler to be called on exit
+# Usage: cleanup_on_exit "rm -rf /tmp/tempdir"
+# Multiple handlers can be registered and are called in reverse order
 cleanup_on_exit() {
-    # TODO: Implement cleanup handlers
-    :
+    local handler="$1"
+
+    if [[ -z "$handler" ]]; then
+        log_error "cleanup_on_exit: handler command required"
+        return 1
+    fi
+
+    # Add handler to array
+    _CLEANUP_HANDLERS+=("$handler")
+
+    # Set trap only once (first time this function is called)
+    if [[ ${#_CLEANUP_HANDLERS[@]} -eq 1 ]]; then
+        # Install trap for EXIT, INT, TERM
+        trap '_exit_handler' EXIT INT TERM
+        log_debug "Cleanup handlers registered for EXIT, INT, TERM"
+    fi
 }
+
+# Internal handler called on trap - executes all registered handlers
+# Handlers are executed in reverse order (LIFO - Last In, First Out)
+_exit_handler() {
+    local exit_code=$?
+
+    log_debug "Cleanup handler triggered (exit code: $exit_code)"
+
+    # Execute handlers in reverse order (LIFO)
+    local i
+    for ((i=${#_CLEANUP_HANDLERS[@]}-1; i>=0; i--)); do
+        local handler="${_CLEANUP_HANDLERS[i]}"
+        log_debug "Executing cleanup: $handler"
+
+        # Execute handler - suppress errors to ensure all handlers run
+        eval "$handler" 2>/dev/null || true
+    done
+
+    exit "$exit_code"
+}
+
+# ============================================================================
+# TESTING/EXAMPLES
+# ============================================================================
+#
+# Example usage of utility functions:
+#
+#   # Logging with colors
+#   COLOR_OUTPUT=true VERBOSE=true ./utils.sh
+#   log_info "Setup complete"
+#   log_warn "Running in test mode"
+#   log_error "Something went wrong"
+#   log_debug "Detailed diagnostic info"
+#
+#   # System checks
+#   check_command "firecracker" && echo "Firecracker found"
+#   check_kvm && echo "KVM support verified"
+#   os=$(detect_os) && echo "Running on $os"
+#
+#   # User interaction
+#   if confirm "Continue with operation?"; then
+#       echo "User confirmed"
+#   else
+#       echo "User cancelled"
+#   fi
+#
+#   # Cleanup handlers
+#   cleanup_on_exit "rm -f /tmp/tempfile"
+#   cleanup_on_exit "pkill -f myprocess"
+#   trap - EXIT  # Can be overridden later if needed
+#

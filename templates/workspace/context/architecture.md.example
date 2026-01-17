@@ -1,0 +1,616 @@
+# System Architecture
+
+> **How to use this file:**
+> This is a template showing architectural documentation structure. Customize to match your actual architecture.
+> Rename to `architecture.md` when ready to use.
+
+## Overview
+
+CloudDash is a real-time monitoring dashboard for distributed systems. It consists of three independent services that communicate via REST APIs and message queues.
+
+### High-Level Components
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    CloudDash Frontend                         │
+│              (React 18, TypeScript, WebSockets)              │
+└────────────────────┬────────────────────────────────────────┘
+                     │ HTTPS / WebSocket
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   API Gateway / Load Balancer                 │
+│                    (Nginx / AWS ALB)                          │
+└────┬──────────────┬──────────────┬────────────────────────────┘
+     │              │              │
+     ▼              ▼              ▼
+  API Service   Alerter Service   WebSocket Server
+ (Node.js)     (Node.js)          (Node.js)
+     │              │              │
+     └──────┬───────┴──────┬───────┘
+            ▼              ▼
+         PostgreSQL    Redis Cache
+            │              │
+            └──────┬───────┘
+                   ▼
+              Data Collector
+           (Kafka Consumer)
+                   │
+                   ▼
+              Apache Kafka
+            (Message Queue)
+                   │
+                   ▼
+            Metric Collectors
+          (External Systems)
+```
+
+## Service Architecture
+
+### 1. CloudDash API Service (`repos/backend/api/`)
+
+**Purpose:** REST API for dashboard data, user management, and configuration
+
+**Technology Stack:**
+- Framework: Express.js 4.x
+- Language: TypeScript 5.x with strict mode
+- Database: PostgreSQL 14+
+- Caching: Redis 7+
+- Authentication: JWT tokens (asymmetric keys)
+
+**Key Responsibilities:**
+- User authentication and authorization
+- Dashboard CRUD operations
+- Alert rule management
+- Integration webhook configuration
+- Real-time data queries
+
+**Database Schema (Simplified):**
+```sql
+-- Users table
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  name VARCHAR(255),
+  organization_id UUID NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Dashboards table
+CREATE TABLE dashboards (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL,
+  organization_id UUID NOT NULL,
+  config JSONB,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Alert rules table
+CREATE TABLE alert_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL,
+  organization_id UUID NOT NULL,
+  condition_query TEXT NOT NULL,
+  threshold FLOAT,
+  severity ENUM ('critical', 'warning', 'info'),
+  enabled BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Metric data (time-series)
+CREATE TABLE metrics (
+  time TIMESTAMP,
+  tags JSONB,
+  name VARCHAR(255),
+  value FLOAT,
+  PRIMARY KEY (time, name, tags)
+)
+PARTITION BY RANGE (time);
+```
+
+**API Endpoints:**
+
+```
+Authentication:
+  POST   /api/auth/login          - Login with email/password
+  POST   /api/auth/logout         - Logout current user
+  POST   /api/auth/refresh        - Refresh JWT token
+  GET    /api/auth/user           - Get current user profile
+
+Dashboards:
+  GET    /api/dashboards          - List user's dashboards
+  POST   /api/dashboards          - Create new dashboard
+  GET    /api/dashboards/:id      - Get dashboard details
+  PUT    /api/dashboards/:id      - Update dashboard config
+  DELETE /api/dashboards/:id      - Delete dashboard
+
+Metrics:
+  GET    /api/metrics             - Query metrics (time range, tags)
+  GET    /api/metrics/:name       - Get specific metric data
+
+Alert Rules:
+  GET    /api/alert-rules         - List alert rules
+  POST   /api/alert-rules         - Create alert rule
+  PUT    /api/alert-rules/:id     - Update alert rule
+  DELETE /api/alert-rules/:id     - Delete alert rule
+
+Health & Status:
+  GET    /health                  - Health check
+  GET    /api/status              - Service status details
+```
+
+**Code Structure:**
+```
+src/
+├── controllers/           # Request handlers
+│   ├── authController.ts
+│   ├── dashboardController.ts
+│   └── metricsController.ts
+├── services/              # Business logic
+│   ├── AuthService.ts
+│   ├── DashboardService.ts
+│   └── MetricsService.ts
+├── middleware/            # Express middleware
+│   ├── auth.ts
+│   ├── errorHandler.ts
+│   └── logging.ts
+├── models/                # Data models
+│   ├── User.ts
+│   ├── Dashboard.ts
+│   └── AlertRule.ts
+├── utils/                 # Utility functions
+│   ├── validators.ts
+│   ├── db.ts
+│   └── cache.ts
+├── routes/                # API route definitions
+│   ├── auth.ts
+│   ├── dashboards.ts
+│   └── metrics.ts
+└── index.ts              # Entry point
+```
+
+### 2. Data Collector Service (`repos/backend/collector/`)
+
+**Purpose:** Ingests metrics from external sources, normalizes data, publishes to Kafka
+
+**Technology Stack:**
+- Framework: Node.js with Express for health checks
+- Language: TypeScript
+- Message Queue: Apache Kafka
+- Storage: Redis (temporary buffer)
+
+**Key Responsibilities:**
+- Accept metrics from Prometheus, CloudWatch, Stackdriver, etc.
+- Normalize metric format (unit conversion, tag standardization)
+- Buffer metrics in Redis for reliability
+- Publish to Kafka topics based on metric type
+- Rate limiting and deduplication
+
+**Supported Input Formats:**
+1. **Prometheus** - Remote write protocol
+2. **OpenTelemetry** - OTLP protocol
+3. **CloudWatch** - AWS API integration
+4. **Custom Webhooks** - JSON POST requests
+
+**Processing Pipeline:**
+```
+Incoming Metric
+    ↓
+Parse & Validate
+    ↓
+Normalize (units, tags, timestamps)
+    ↓
+Deduplicate (check Redis)
+    ↓
+Buffer in Redis
+    ↓
+Publish to Kafka Topic
+    ↓
+Confirm & Log
+```
+
+**Code Structure:**
+```
+src/
+├── collectors/            # Input format handlers
+│   ├── PrometheusCollector.ts
+│   ├── OTLPCollector.ts
+│   └── CloudWatchCollector.ts
+├── normalizers/           # Format normalization
+│   ├── MetricNormalizer.ts
+│   └── UnitConverter.ts
+├── publisher/             # Kafka publishing
+│   ├── KafkaProducer.ts
+│   └── TopicRouter.ts
+├── middleware/            # Auth, rate limiting
+│   ├── apiKeyAuth.ts
+│   └── rateLimiter.ts
+└── index.ts              # Entry point
+```
+
+### 3. Alert Service (`repos/backend/alerter/`)
+
+**Purpose:** Evaluates alert rules against incoming metrics, dispatches notifications
+
+**Technology Stack:**
+- Framework: Node.js with consumer pattern
+- Language: TypeScript
+- Message Queue: Kafka (consumer)
+- Cache: Redis (rule cache)
+- Notification: Email, Slack, PagerDuty APIs
+
+**Key Responsibilities:**
+- Consume metric events from Kafka
+- Evaluate against alert rules in real-time
+- Deduplicate alerts (don't spam same alert)
+- Route to appropriate notification channels
+- Log alert audit trail
+
+**Alert Evaluation Logic:**
+```
+1. Read incoming metric from Kafka
+2. Query alert rules from cache (refresh every 5 minutes)
+3. For each rule:
+   - Evaluate condition query against metric
+   - If condition met:
+     - Check deduplication window (last 5 minutes)
+     - If not deduped, create alert
+     - Send notification
+     - Log to database
+4. Commit Kafka offset
+```
+
+**Supported Notification Channels:**
+- Email (SMTP)
+- Slack (WebHooks)
+- PagerDuty (API)
+- Webhooks (customer-defined)
+
+**Code Structure:**
+```
+src/
+├── consumers/             # Kafka consumers
+│   ├── MetricConsumer.ts
+│   └── ConsumerGroup.ts
+├── evaluators/            # Rule evaluation
+│   ├── RuleEvaluator.ts
+│   └── QueryParser.ts
+├── notifiers/             # Notification handlers
+│   ├── EmailNotifier.ts
+│   ├── SlackNotifier.ts
+│   └── PagerDutyNotifier.ts
+├── deduplicator/          # Alert deduplication
+│   ├── Deduplicator.ts
+│   └── RedisStore.ts
+└── index.ts              # Entry point
+```
+
+### 4. Frontend Application (`repos/frontend/`)
+
+**Purpose:** React-based single-page application for viewing dashboards and managing configuration
+
+**Technology Stack:**
+- Framework: React 18
+- Language: TypeScript 5.x
+- Styling: CSS Modules / Tailwind CSS
+- State Management: React Context + Custom Hooks
+- Build Tool: Vite / Create React App
+- Testing: React Testing Library + Jest
+
+**Key Responsibilities:**
+- Render real-time dashboard with multiple metric panels
+- Real-time data updates via WebSocket
+- User authentication (login, logout, token refresh)
+- Dashboard configuration UI
+- Alert rule management UI
+- Organization and settings pages
+
+**Directory Structure:**
+```
+src/
+├── pages/                 # Page components
+│   ├── DashboardPage.tsx
+│   ├── AlertsPage.tsx
+│   └── SettingsPage.tsx
+├── components/            # Reusable components
+│   ├── MetricPanel/
+│   ├── ChartRenderer/
+│   ├── AlertRule/
+│   └── NavBar/
+├── hooks/                 # Custom React hooks
+│   ├── useAuth.ts
+│   ├── useMetrics.ts
+│   └── useWebSocket.ts
+├── services/              # API clients
+│   ├── apiClient.ts
+│   └── metricsService.ts
+├── types/                 # TypeScript types
+│   ├── dashboard.types.ts
+│   └── metrics.types.ts
+├── utils/                 # Utilities
+│   ├── formatters.ts
+│   └── validators.ts
+├── App.tsx               # Root component
+└── index.tsx             # Entry point
+```
+
+**Key Features:**
+1. **Real-time Updates** - WebSocket connection for live metric streaming
+2. **Authentication** - JWT-based login with auto-refresh
+3. **Dashboard Builder** - Drag-and-drop widgets, save configurations
+4. **Responsive Design** - Works on desktop, tablet, mobile
+5. **Dark Mode** - Theme switching support
+
+### 5. Shared Library (`repos/shared/`)
+
+**Purpose:** Shared types, utilities, and constants used across services
+
+**Exports:**
+```typescript
+// Type definitions
+export type { User, Dashboard, AlertRule, Metric };
+
+// Constants
+export const ALERT_SEVERITIES = ['critical', 'warning', 'info'] as const;
+export const METRIC_UNITS = { memory: 'MB', cpu: 'percent', ... };
+
+// Utilities
+export function validateEmail(email: string): boolean;
+export function parseMetricQuery(query: string): ParsedQuery;
+export function formatMetricValue(value: number, unit: string): string;
+
+// Validation schemas (Zod)
+export const UserSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  name: z.string(),
+});
+```
+
+## Data Flow
+
+### Metrics Ingestion Flow
+
+```
+Prometheus/Collector ─→ Data Collector Service ─→ Kafka Topic
+                           ├─ Parse
+                           ├─ Validate
+                           └─ Normalize
+                              │
+                              ▼
+                         Redis Buffer
+                              │
+                              ▼
+                         PostgreSQL
+                         (Time-series)
+```
+
+### Real-time Dashboard Flow
+
+```
+PostgreSQL          Redis Cache
+     │                  │
+     └────────┬─────────┘
+              │
+              ▼
+         API Service
+              │
+              ▼
+    WebSocket Server
+              │
+              ▼
+        Frontend Browser
+              │
+              ▼
+        React Components
+              │
+              ▼
+        Chart/Metric Display
+```
+
+### Alert Evaluation Flow
+
+```
+Kafka Topic (Metrics)
+         │
+         ▼
+   Alert Service
+         │
+    ┌────┴────────┐
+    ▼             ▼
+ Evaluate     Deduplicate
+ Rules        Alerts
+    │             │
+    └────┬────────┘
+         ▼
+    Notification Service
+         │
+    ┌────┼────┬──────┐
+    ▼    ▼    ▼      ▼
+  Email Slack PagerDuty Webhook
+```
+
+## Communication Patterns
+
+### Synchronous (REST APIs)
+- Client ↔ API Service
+- All CRUD operations
+- Request/Response model
+
+### Asynchronous (Kafka)
+- Data Collector → Alert Service
+- High-volume metric streaming
+- Decoupled services
+
+### Real-time (WebSocket)
+- API Service ↔ Frontend
+- Live dashboard updates
+- Bi-directional communication
+
+### External (HTTP Webhooks)
+- Alert Service → Customer Systems
+- Fire-and-forget notifications
+- Retry logic for reliability
+
+## Scaling Considerations
+
+### Horizontal Scaling
+- **API Service:** Stateless, can scale with load balancer
+- **Data Collector:** Partitioned by source, parallel processing
+- **Alert Service:** Kafka consumer group, parallel rule evaluation
+- **Frontend:** Static assets via CDN
+
+### Vertical Scaling
+- **Database:** Connection pooling, query optimization, caching
+- **Cache:** Redis replication for HA
+- **Message Queue:** Kafka partitioning, broker scaling
+
+### Performance Bottlenecks
+1. **Time-series queries** - Mitigated by TimescaleDB, proper indexing
+2. **Alert evaluation** - Mitigated by rule caching, batching
+3. **WebSocket connections** - Mitigated by connection pooling
+4. **API rate limits** - Per-user quotas, queue management
+
+## Deployment Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│          AWS Kubernetes Cluster             │
+│                   (EKS)                     │
+├─────────────────────────────────────────────┤
+│                                             │
+│  ┌──────────────┐  ┌──────────────┐       │
+│  │  API Service │  │  Alerter     │       │
+│  │  (3 replicas)│  │  (2 replicas)│       │
+│  └──────────────┘  └──────────────┘       │
+│                                             │
+│  ┌──────────────┐  ┌──────────────┐       │
+│  │  Collector   │  │  WebSocket   │       │
+│  │  (2 replicas)│  │  (3 replicas)│       │
+│  └──────────────┘  └──────────────┘       │
+│         │                 │                │
+│         └─────────┬───────┘                │
+│                   ▼                        │
+│         ┌──────────────────┐              │
+│         │  PostgreSQL      │              │
+│         │  (Primary/Replica)              │
+│         └──────────────────┘              │
+│                   │                        │
+│         ┌─────────┴─────────┐             │
+│         ▼                   ▼             │
+│      Redis             Kafka (3 Brokers) │
+│      (HA)                                 │
+│                                             │
+└─────────────────────────────────────────────┘
+
+    ┌──────────────────────────────┐
+    │  AWS CloudFront + S3         │
+    │  (Frontend Static Assets)    │
+    └──────────────────────────────┘
+```
+
+## Development Workflow for Agents
+
+### When Adding a New Feature
+
+1. **Update shared types first** (`repos/shared/`)
+   - Define new type interfaces
+   - Add validation schemas
+   - Export for use across services
+
+2. **Update backend API** (`repos/backend/api/`)
+   - Add database migrations if needed
+   - Implement service logic
+   - Create REST endpoints
+   - Add tests
+
+3. **Update collector if needed** (`repos/backend/collector/`)
+   - Support new metric types
+   - Add parsers/normalizers
+
+4. **Update alerter if needed** (`repos/backend/alerter/`)
+   - Handle new metric types
+   - Add notification channels if needed
+
+5. **Update frontend** (`repos/frontend/`)
+   - Create new UI components
+   - Connect to new API endpoints
+   - Add WebSocket subscriptions if real-time
+
+6. **Integration testing**
+   - End-to-end tests across all repos
+   - Load testing for high-volume scenarios
+   - Security scanning
+
+### Running Services Locally
+
+```bash
+# Install shared dependencies
+cd repos/shared && npm install
+
+# Start databases
+docker-compose up -d postgres redis kafka
+
+# Terminal 1: API Service
+cd repos/backend/api && npm install && npm run dev
+
+# Terminal 2: Collector
+cd repos/backend/collector && npm install && npm run dev
+
+# Terminal 3: Alerter
+cd repos/backend/alerter && npm install && npm run dev
+
+# Terminal 4: Frontend
+cd repos/frontend && npm install && npm run dev
+
+# Frontend accessible at http://localhost:3000
+```
+
+## Key Architectural Decisions
+
+### Why Kafka for Metrics?
+- Decouples data collectors from alert evaluation
+- Provides ordering guarantees per partition
+- Enables replay for debugging
+- Scales to millions of events per second
+
+### Why Separate Services?
+- Independent scaling per component
+- Different resource requirements (Collector is I/O bound, Alerter is CPU bound)
+- Team can work independently
+- Easy to replace (e.g., swap Alerter for custom logic)
+
+### Why PostgreSQL for Config + Redis for Metrics?
+- PostgreSQL handles transactional consistency (users, rules, dashboards)
+- Redis handles hot metric cache for fast queries
+- PostgreSQL has time-series extension (TimescaleDB) for historical data
+- Not mixing OLTP + OLAP workloads
+
+### Why WebSockets for Real-time?
+- Lower latency than polling
+- Bidirectional communication capability
+- Reduced bandwidth vs polling
+- Better for connected clients
+
+## Known Limitations & Future Improvements
+
+### Current Limitations
+1. **Single region** - No geo-redundancy yet
+2. **Manual schema migrations** - Need better tooling
+3. **No multi-tenancy** - Single organization per deployment
+4. **Limited alert actions** - Only notifications, no auto-remediation
+
+### Planned Improvements
+- [Q2 2024] Multi-region replication for disaster recovery
+- [Q2 2024] Automated schema migration tool
+- [Q3 2024] Multi-tenancy support with data isolation
+- [Q3 2024] Alert webhook actions for automation
+
+## References
+
+- [Kubernetes Documentation](https://kubernetes.io/docs/)
+- [Apache Kafka Design](https://kafka.apache.org/documentation/#design)
+- [PostgreSQL Time-Series](https://www.timescale.com/)
+- [React Hooks Documentation](https://react.dev/reference/react)
