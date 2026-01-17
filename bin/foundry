@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#
+# Agent Foundry - Main CLI Entry Point
+#
+# Usage: foundry <domain> <action> [arguments] [options]
+#
+
+set -euo pipefail
+
+# Version
+VERSION="0.1.0"
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/../lib"
+
+# Source library modules
+# shellcheck source=../lib/utils.sh
+source "${LIB_DIR}/utils.sh"
+
+# TODO: Source other modules
+# source "${LIB_DIR}/vm.sh"
+# source "${LIB_DIR}/agent.sh"
+# source "${LIB_DIR}/template.sh"
+# source "${LIB_DIR}/config.sh"
+
+# Main function
+main() {
+    # TODO: Implement CLI routing
+    log_error "foundry CLI not yet implemented"
+    log_info "See TODO.md for implementation roadmap"
+    exit 1
+}
+
+# Run main
+main "$@"
