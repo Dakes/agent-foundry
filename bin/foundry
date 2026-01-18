@@ -449,7 +449,7 @@ cmd_host() {
             fi
             echo ""
             echo "Required Commands:"
-            for cmd in jq tmux screen ssh scp ip iptables; do
+            for cmd in jq ssh scp ip iptables; do
                 if check_command "$cmd"; then
                     echo "  $cmd: found"
                 else
