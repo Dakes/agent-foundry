@@ -1,0 +1,20 @@
+# ShellCheck configuration for Agent Foundry
+# https://github.com/koalaman/shellcheck/wiki/Directive
+
+# Don't follow sourced files (we check them separately)
+disable=SC1091
+
+# Can't follow non-constant source (dynamic sourcing is expected)
+disable=SC1090
+
+# Allow unquoted variables for intentional word splitting (e.g., SSH_OPTS)
+disable=SC2086
+
+# Ignore warnings about commands that expand on client side (SSH)
+disable=SC2029
+
+# Allow tilde in quotes when used for pattern matching (not expansion)
+disable=SC2088
+
+# Allow variables that appear unused (may be for future use or external use)
+disable=SC2034

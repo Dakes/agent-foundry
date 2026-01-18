@@ -228,7 +228,7 @@ vm_create() {
         log_error "Failed to create TAP device"
         rm -f "$disk_path"
         return 1
-    fi
+    }
 
     # Register VM
     local created_at
