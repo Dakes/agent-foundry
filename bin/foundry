@@ -1,36 +1,634 @@
 #!/usr/bin/env bash
 #
-# Agent Foundry - Main CLI Entry Point
+# Agent Foundry - Main CLI
 #
-# Usage: foundry <domain> <action> [arguments] [options]
+# Host-based management tool for Firecracker microVMs running AI agents.
+#
+# Usage: foundry <domain> <action> [args...]
+#
+# Domains:
+#   vm        - VM lifecycle management
+#   agent     - AI agent session management
+#   workspace - Workspace management
+#   template  - Template management
+#   host      - Host system setup
+#   config    - Configuration management
+#   network   - Network management
 #
 
 set -euo pipefail
 
-# Version
-VERSION="0.1.0"
+# ============================================================================
+# INITIALIZATION
+# ============================================================================
 
-# Get script directory
+# Determine script location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_DIR="${SCRIPT_DIR}/../lib"
+FOUNDRY_BASE="${SCRIPT_DIR}/.."
 
 # Source library modules
-# shellcheck source=../lib/utils.sh
+LIB_DIR="${FOUNDRY_BASE}/lib"
+
 source "${LIB_DIR}/utils.sh"
+source "${LIB_DIR}/config.sh"
+source "${LIB_DIR}/registry.sh"
+source "${LIB_DIR}/network.sh"
+source "${LIB_DIR}/vm.sh"
+source "${LIB_DIR}/agent.sh"
+source "${LIB_DIR}/workspace.sh"
 
-# TODO: Source other modules
-# source "${LIB_DIR}/vm.sh"
-# source "${LIB_DIR}/agent.sh"
-# source "${LIB_DIR}/template.sh"
-# source "${LIB_DIR}/config.sh"
+# Enable color output by default
+export COLOR_OUTPUT="${COLOR_OUTPUT:-true}"
 
-# Main function
-main() {
-    # TODO: Implement CLI routing
-    log_error "foundry CLI not yet implemented"
-    log_info "See TODO.md for implementation roadmap"
-    exit 1
+# Version
+FOUNDRY_VERSION="0.1.0"
+
+# ============================================================================
+# HELP FUNCTIONS
+# ============================================================================
+
+show_version() {
+    echo "Agent Foundry v${FOUNDRY_VERSION}"
 }
 
-# Run main
+show_help() {
+    cat << 'EOF'
+Agent Foundry - Firecracker microVM management for AI agents
+
+USAGE:
+    foundry <domain> <action> [args...]
+    foundry [--help | --version]
+
+DOMAINS:
+    vm          VM lifecycle management (create, start, stop, destroy, ssh, list)
+    agent       AI agent session management (start, stop, attach, logs)
+    workspace   Workspace management (init, init-ralph, edit, info)
+    template    Template building (build, list)
+    host        Host system setup (setup, status)
+    config      Configuration management (get, set, edit)
+    network     Network management (init, status, cleanup)
+
+GLOBAL OPTIONS:
+    -h, --help      Show this help message
+    -v, --version   Show version
+    --verbose       Enable verbose output
+    --dry-run       Show what would be done without executing
+
+EXAMPLES:
+    # Setup host system
+    sudo foundry host setup
+
+    # Create and start a VM
+    sudo foundry vm create my-project
+    sudo foundry vm start my-project
+
+    # Initialize workspace
+    foundry workspace init my-project config.json
+    foundry workspace init-ralph my-project
+
+    # Start autonomous agent
+    foundry agent start my-project ralph
+
+    # Attach to agent session
+    foundry agent attach my-project
+
+    # View agent logs
+    foundry agent logs my-project --follow
+
+    # List all VMs
+    foundry vm list
+
+For domain-specific help:
+    foundry <domain> help
+
+Documentation:
+    https://github.com/yourusername/agent-foundry
+EOF
+}
+
+show_vm_help() {
+    cat << 'EOF'
+foundry vm - VM lifecycle management
+
+USAGE:
+    foundry vm <action> [args...]
+
+ACTIONS:
+    create <name> [template]    Create new VM from template
+    start <name>               Start a stopped VM
+    stop <name>                Stop a running VM
+    restart <name>             Restart a VM
+    destroy <name>             Destroy VM (stop, delete disk, release network)
+    ssh <name> [command...]    SSH into VM or run command
+    list                       List all VMs
+    status <name>              Show VM details
+    ip <name>                  Get VM IP address
+    copy <source> <dest>       Copy a VM
+    rename <old> <new>         Rename a VM
+    snapshot <name> <snap>     Create snapshot as template
+
+EXAMPLES:
+    foundry vm create my-project
+    foundry vm create my-project arch-agent-golden.ext4
+    foundry vm start my-project
+    foundry vm ssh my-project
+    foundry vm ssh my-project "uname -a"
+    foundry vm list
+    foundry vm copy my-project my-project-backup
+    foundry vm snapshot my-project my-custom-template
+EOF
+}
+
+show_agent_help() {
+    cat << 'EOF'
+foundry agent - AI agent session management
+
+USAGE:
+    foundry agent <action> [args...]
+
+ACTIONS:
+    start <vm> [type]          Start agent (type: ralph, claude, gemini, codex)
+    stop <vm>                  Stop agent
+    restart <vm>               Restart agent
+    attach <vm>                Attach to agent session
+    status <vm>                Show agent status
+    logs <vm> [-f|--follow]    View agent logs
+    enable-autostart <vm>      Enable agent autostart on boot
+    disable-autostart <vm>     Disable agent autostart
+
+AGENT TYPES:
+    ralph   - ralph-claude-code autonomous agent (default, runs in tmux)
+    claude  - Claude Code CLI interactive session (runs in screen)
+    gemini  - Gemini CLI interactive session (runs in screen)
+    codex   - OpenAI Codex CLI interactive session (runs in screen)
+
+EXAMPLES:
+    foundry agent start my-project ralph
+    foundry agent attach my-project
+    foundry agent logs my-project --follow
+    foundry agent stop my-project
+    foundry agent enable-autostart my-project
+EOF
+}
+
+show_workspace_help() {
+    cat << 'EOF'
+foundry workspace - Workspace management
+
+USAGE:
+    foundry workspace <action> [args...]
+
+ACTIONS:
+    init <vm> <config.json>    Initialize workspace from config file
+    init-ralph <vm>            Initialize Ralph structure (PROMPT.md, @fix_plan.md)
+    edit <vm> <file>           Edit workspace file in $EDITOR
+    info <vm>                  Show workspace information
+    template [file]            Create workspace config template
+
+CONFIG FILE FORMAT (JSON):
+    {
+      "name": "project-name",
+      "repositories": [
+        {"name": "backend", "url": "git@github.com:org/backend.git"}
+      ],
+      "agent": {
+        "default_cli": "claude"
+      }
+    }
+
+EXAMPLES:
+    foundry workspace template my-project.json
+    foundry workspace init my-project my-project.json
+    foundry workspace init-ralph my-project
+    foundry workspace edit my-project PROMPT.md
+    foundry workspace info my-project
+EOF
+}
+
+show_host_help() {
+    cat << 'EOF'
+foundry host - Host system setup
+
+USAGE:
+    foundry host <action>
+
+ACTIONS:
+    setup     Setup host system (install dependencies, configure network)
+    status    Show host status (KVM, Firecracker, network)
+
+EXAMPLES:
+    sudo foundry host setup
+    foundry host status
+EOF
+}
+
+show_network_help() {
+    cat << 'EOF'
+foundry network - Network management
+
+USAGE:
+    foundry network <action>
+
+ACTIONS:
+    init      Initialize networking (bridge, NAT, IP forwarding)
+    status    Show network status (TAPs, IPs, NAT rules)
+    cleanup   Remove all Foundry network resources
+
+EXAMPLES:
+    sudo foundry network init
+    foundry network status
+    sudo foundry network cleanup
+EOF
+}
+
+show_config_help() {
+    cat << 'EOF'
+foundry config - Configuration management
+
+USAGE:
+    foundry config <action> [args...]
+
+ACTIONS:
+    get <key>           Get configuration value
+    set <key> <value>   Set configuration value
+    edit                Edit configuration in $EDITOR
+    show                Show all configuration
+
+EXAMPLES:
+    foundry config get default.cpus
+    foundry config set default.memory_mb 16384
+    foundry config edit
+EOF
+}
+
+# ============================================================================
+# COMMAND ROUTING
+# ============================================================================
+
+cmd_vm() {
+    local action="${1:-help}"
+    shift || true
+
+    case "$action" in
+        create)
+            vm_create "$@"
+            ;;
+        start)
+            vm_start "$@"
+            ;;
+        stop)
+            vm_stop "$@"
+            ;;
+        restart)
+            vm_restart "$@"
+            ;;
+        destroy)
+            vm_destroy "$@"
+            ;;
+        ssh)
+            vm_ssh "$@"
+            ;;
+        list|ls)
+            vm_list
+            ;;
+        status|show)
+            vm_status "$@"
+            ;;
+        ip)
+            vm_ip "$@"
+            ;;
+        copy|cp)
+            vm_copy "$@"
+            ;;
+        rename|mv)
+            vm_rename "$@"
+            ;;
+        snapshot|snap)
+            vm_snapshot "$@"
+            ;;
+        help|--help|-h)
+            show_vm_help
+            ;;
+        *)
+            log_error "Unknown vm action: $action"
+            echo "Run 'foundry vm help' for usage"
+            return 1
+            ;;
+    esac
+}
+
+cmd_agent() {
+    local action="${1:-help}"
+    shift || true
+
+    case "$action" in
+        start)
+            agent_start "$@"
+            ;;
+        stop)
+            agent_stop "$@"
+            ;;
+        restart)
+            agent_restart "$@"
+            ;;
+        attach)
+            agent_attach "$@"
+            ;;
+        status|show)
+            agent_status "$@"
+            ;;
+        logs|log)
+            agent_logs "$@"
+            ;;
+        enable-autostart)
+            agent_enable_autostart "$@"
+            ;;
+        disable-autostart)
+            agent_disable_autostart "$@"
+            ;;
+        help|--help|-h)
+            show_agent_help
+            ;;
+        *)
+            log_error "Unknown agent action: $action"
+            echo "Run 'foundry agent help' for usage"
+            return 1
+            ;;
+    esac
+}
+
+cmd_workspace() {
+    local action="${1:-help}"
+    shift || true
+
+    case "$action" in
+        init)
+            workspace_init "$@"
+            ;;
+        init-ralph)
+            workspace_init_ralph "$@"
+            ;;
+        edit)
+            workspace_edit "$@"
+            ;;
+        info|show)
+            workspace_info "$@"
+            ;;
+        template)
+            workspace_template "$@"
+            ;;
+        help|--help|-h)
+            show_workspace_help
+            ;;
+        *)
+            log_error "Unknown workspace action: $action"
+            echo "Run 'foundry workspace help' for usage"
+            return 1
+            ;;
+    esac
+}
+
+cmd_host() {
+    local action="${1:-help}"
+    shift || true
+
+    case "$action" in
+        setup)
+            if [[ -x "${FOUNDRY_BASE}/scripts/setup-host.sh" ]]; then
+                exec "${FOUNDRY_BASE}/scripts/setup-host.sh" "$@"
+            else
+                log_error "setup-host.sh not found or not executable"
+                return 1
+            fi
+            ;;
+        status)
+            echo "=== Host Status ==="
+            echo ""
+            echo "OS: $(detect_os)"
+            echo ""
+            echo "KVM Support:"
+            if check_kvm; then
+                echo "  Available and accessible"
+            else
+                echo "  Not available or not accessible"
+            fi
+            echo ""
+            echo "Firecracker:"
+            if check_command firecracker; then
+                echo "  $(firecracker --version 2>&1 | head -1)"
+            else
+                echo "  Not installed"
+            fi
+            echo ""
+            echo "Required Commands:"
+            for cmd in jq tmux screen ssh scp ip iptables; do
+                if check_command "$cmd"; then
+                    echo "  $cmd: found"
+                else
+                    echo "  $cmd: MISSING"
+                fi
+            done
+            ;;
+        help|--help|-h)
+            show_host_help
+            ;;
+        *)
+            log_error "Unknown host action: $action"
+            echo "Run 'foundry host help' for usage"
+            return 1
+            ;;
+    esac
+}
+
+cmd_network() {
+    local action="${1:-help}"
+    shift || true
+
+    case "$action" in
+        init)
+            network_init "$@"
+            ;;
+        status|show)
+            network_status
+            ;;
+        cleanup)
+            network_cleanup
+            ;;
+        help|--help|-h)
+            show_network_help
+            ;;
+        *)
+            log_error "Unknown network action: $action"
+            echo "Run 'foundry network help' for usage"
+            return 1
+            ;;
+    esac
+}
+
+cmd_config() {
+    local action="${1:-help}"
+    shift || true
+
+    case "$action" in
+        get)
+            config_get "$@"
+            ;;
+        set)
+            config_set "$@"
+            ;;
+        edit)
+            config_edit
+            ;;
+        show|list)
+            config_load
+            echo "=== Configuration ==="
+            if [[ -f "${FOUNDRY_CONFIG_DIR:-$HOME/.config/foundry}/config.conf" ]]; then
+                cat "${FOUNDRY_CONFIG_DIR:-$HOME/.config/foundry}/config.conf"
+            else
+                echo "No user configuration (using defaults)"
+            fi
+            ;;
+        help|--help|-h)
+            show_config_help
+            ;;
+        *)
+            log_error "Unknown config action: $action"
+            echo "Run 'foundry config help' for usage"
+            return 1
+            ;;
+    esac
+}
+
+cmd_template() {
+    local action="${1:-help}"
+    shift || true
+
+    case "$action" in
+        list|ls)
+            echo "=== Available Templates ==="
+            local templates_dir="${FOUNDRY_DATA_DIR:-$HOME/.local/share/foundry}/vms/templates"
+            if [[ -d "$templates_dir" ]]; then
+                ls -lh "$templates_dir"/*.ext4 2>/dev/null || echo "No templates found"
+            else
+                echo "Templates directory not found: $templates_dir"
+                echo "Run 'foundry host setup' first"
+            fi
+            ;;
+        build)
+            local template_type="${1:-help}"
+            case "$template_type" in
+                base)
+                    if [[ -x "${FOUNDRY_BASE}/scripts/build-arch-base.sh" ]]; then
+                        exec "${FOUNDRY_BASE}/scripts/build-arch-base.sh" "${@:2}"
+                    else
+                        log_error "build-arch-base.sh not found"
+                        return 1
+                    fi
+                    ;;
+                golden)
+                    if [[ -x "${FOUNDRY_BASE}/scripts/build-golden.sh" ]]; then
+                        exec "${FOUNDRY_BASE}/scripts/build-golden.sh" "${@:2}"
+                    else
+                        log_error "build-golden.sh not found"
+                        return 1
+                    fi
+                    ;;
+                *)
+                    echo "Usage: foundry template build <base|golden>"
+                    ;;
+            esac
+            ;;
+        help|--help|-h)
+            echo "foundry template - Template management"
+            echo ""
+            echo "ACTIONS:"
+            echo "    list              List available templates"
+            echo "    build base        Build base Arch Linux template"
+            echo "    build golden      Build golden template with AI tools"
+            ;;
+        *)
+            log_error "Unknown template action: $action"
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+main() {
+    # Parse global options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -v|--version)
+                show_version
+                exit 0
+                ;;
+            --verbose)
+                export VERBOSE=true
+                shift
+                ;;
+            --dry-run)
+                export DRY_RUN=true
+                shift
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                echo "Run 'foundry --help' for usage"
+                exit 1
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    # Get domain
+    local domain="${1:-help}"
+    shift || true
+
+    # Route to domain handler
+    case "$domain" in
+        vm)
+            cmd_vm "$@"
+            ;;
+        agent)
+            cmd_agent "$@"
+            ;;
+        workspace|ws)
+            cmd_workspace "$@"
+            ;;
+        template|tpl)
+            cmd_template "$@"
+            ;;
+        host)
+            cmd_host "$@"
+            ;;
+        network|net)
+            cmd_network "$@"
+            ;;
+        config|cfg)
+            cmd_config "$@"
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        version|--version|-v)
+            show_version
+            ;;
+        *)
+            log_error "Unknown domain: $domain"
+            echo ""
+            echo "Available domains: vm, agent, workspace, template, host, network, config"
+            echo "Run 'foundry --help' for usage"
+            exit 1
+            ;;
+    esac
+}
+
 main "$@"
