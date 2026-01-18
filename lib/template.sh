@@ -18,7 +18,7 @@ fi
 # CONFIGURATION
 # ============================================================================
 
-FOUNDRY_BASE="${FOUNDRY_BASE:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+FOUNDRY_BASE="${FOUNDRY_BASE_DIR:-${FOUNDRY_BASE:-$(cd "${SCRIPT_DIR}/.." && pwd)}}"
 FOUNDRY_DATA_DIR="${FOUNDRY_DATA_DIR:-${HOME}/.local/share/foundry}"
 FOUNDRY_VMS_DIR="${FOUNDRY_DATA_DIR}/vms"
 FOUNDRY_TEMPLATES_DIR="${FOUNDRY_VMS_DIR}/templates"

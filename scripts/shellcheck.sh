@@ -34,7 +34,8 @@ fi
 mapfile -t scripts < <(find . -type f \( -name "*.sh" -o -path "*/bin/*" \) \
     ! -path "*/.*" \
     ! -path "*/node_modules/*" \
-    ! -path "*/vendor/*")
+    ! -path "*/vendor/*" \
+    ! -name "*-release")
 
 if [[ ${#scripts[@]} -eq 0 ]]; then
     echo -e "${YELLOW}Warning: No shell scripts found${NC}"

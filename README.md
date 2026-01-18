@@ -18,10 +18,10 @@ Agent Foundry is a framework for managing Firecracker microVMs where AI coding a
 ## Quick Start
 
 ```bash
-# Install
+# Clone and install (automatically builds release bundle)
 git clone https://github.com/user/agent-foundry.git
 cd agent-foundry
-./install.sh
+./install.sh --prefix ~/.local
 
 # Setup host
 foundry host setup
@@ -112,9 +112,11 @@ Create company base template with standards. Everyone starts from same foundatio
 - QEMU utilities (`qemu-img`)
 - iproute2 (`ip` command)
 - iptables or nftables
-- tmux, screen, jq
+- jq
 - SSH client
 - Git
+
+*Note: tmux and screen are only needed inside VMs for agent management, not on the host*
 
 For NixOS hosts, use included `shell.nix`.
 
@@ -203,9 +205,11 @@ nix-shell
 # Run tests
 ./tests/run-all.sh
 
-# Build templates
+# Build templates (from repo)
 ./scripts/build-arch-base.sh
 ```
+
+**Note**: The release bundle is built automatically by `install.sh` if needed.
 
 ## Project Status
 

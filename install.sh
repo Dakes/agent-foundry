@@ -2,12 +2,12 @@
 #
 # Agent Foundry - Installation Script
 #
-# Installs Agent Foundry framework to the system.
+# Builds and installs Agent Foundry as a self-contained bundle.
 #
 # Usage:
 #   ./install.sh                    # Interactive installation
 #   ./install.sh --prefix /usr/local # Custom install location
-#   ./install.sh --no-setup         # Skip host setup
+#   ./install.sh --no-setup         # Skip host setup after installation
 #   ./install.sh --uninstall        # Remove installation
 #
 
@@ -29,7 +29,6 @@ COLOR_OUTPUT="${COLOR_OUTPUT:-true}"
 # Default installation prefix
 INSTALL_PREFIX="${INSTALL_PREFIX:-}"
 BIN_DIR=""
-LIB_DIR=""
 CONFIG_DIR="${HOME}/.config/foundry"
 DATA_DIR="${HOME}/.local/share/foundry"
 
@@ -117,11 +116,11 @@ Options:
   -h, --help          Show this help and exit
 
 Examples:
-  # System-wide installation (requires sudo)
-  sudo ./install.sh --prefix /usr/local
-
   # User-local installation (no sudo)
   ./install.sh --prefix ~/.local
+
+  # System-wide installation (requires sudo)
+  sudo ./install.sh --prefix /usr/local
 
   # Install without running host setup
   ./install.sh --no-setup
@@ -182,7 +181,6 @@ detect_install_prefix() {
         # User specified prefix
         INSTALL_PREFIX=$(realpath -m "$INSTALL_PREFIX")
         BIN_DIR="${INSTALL_PREFIX}/bin"
-        LIB_DIR="${INSTALL_PREFIX}/lib/foundry"
         return 0
     fi
 
@@ -191,12 +189,10 @@ detect_install_prefix() {
         # Running as root - install system-wide
         INSTALL_PREFIX="/usr/local"
         BIN_DIR="/usr/local/bin"
-        LIB_DIR="/usr/local/lib/foundry"
     else
         # Not root - install to user directory
         INSTALL_PREFIX="${HOME}/.local"
         BIN_DIR="${HOME}/.local/bin"
-        LIB_DIR="${HOME}/.local/lib/foundry"
     fi
 }
 
@@ -213,8 +209,8 @@ check_dependencies() {
         missing+=("bash")
     fi
 
-    if ! check_command git; then
-        missing+=("git")
+    if ! check_command tar; then
+        missing+=("tar")
     fi
 
     if ! check_command ssh; then
@@ -232,32 +228,50 @@ check_dependencies() {
 }
 
 # ============================================================================
+# BUNDLE BUILDING
+# ============================================================================
+
+build_bundle() {
+    if [[ ! -f "${PROJECT_ROOT}/scripts/build-release.sh" ]]; then
+        log_error "Build script not found: scripts/build-release.sh"
+        return 1
+    fi
+
+    log_info "Building release bundle..."
+    if ! "${PROJECT_ROOT}/scripts/build-release.sh"; then
+        log_error "Failed to build release bundle"
+        return 1
+    fi
+}
+
+# ============================================================================
 # INSTALLATION
 # ============================================================================
 
 install_foundry() {
+    local bundle_file="${PROJECT_ROOT}/bin/foundry-release"
+
+    if [[ ! -f "$bundle_file" ]]; then
+        log_error "Release bundle not found: $bundle_file"
+        return 1
+    fi
+
     log_info "Installing Agent Foundry to: $INSTALL_PREFIX"
     echo ""
 
     # Create directories
     log_info "Creating directories..."
     mkdir -p "$BIN_DIR"
-    mkdir -p "$LIB_DIR"
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$DATA_DIR/vms/templates"
     mkdir -p "$DATA_DIR/vms/instances"
     mkdir -p "$DATA_DIR/vms/kernels"
     mkdir -p "$DATA_DIR/logs"
 
-    # Copy main binary
+    # Install binary from bundle
     log_info "Installing foundry binary..."
-    cp -f "${PROJECT_ROOT}/bin/foundry" "$BIN_DIR/foundry"
+    cp -f "$bundle_file" "$BIN_DIR/foundry"
     chmod +x "$BIN_DIR/foundry"
-
-    # Copy library modules
-    log_info "Installing library modules..."
-    mkdir -p "$LIB_DIR"
-    cp -f "${PROJECT_ROOT}"/lib/*.sh "$LIB_DIR/"
 
     # Copy configuration files (only if they don't exist)
     log_info "Installing default configuration..."
@@ -286,11 +300,6 @@ install_foundry() {
         echo '{"vms":{}}' > "${CONFIG_DIR}/vms.json"
     fi
 
-    # Update foundry binary to use correct lib path
-    if [[ "$LIB_DIR" != */lib/foundry ]]; then
-        sed -i "s|FOUNDRY_LIB_DIR=.*|FOUNDRY_LIB_DIR=\"$LIB_DIR\"|" "$BIN_DIR/foundry" 2>/dev/null || true
-    fi
-
     log_info "Installation complete!"
     echo ""
 }
@@ -302,52 +311,26 @@ install_foundry() {
 uninstall_foundry() {
     log_info "Uninstalling Agent Foundry..."
 
-    detect_install_prefix
-
-    if [[ ! -f "$BIN_DIR/foundry" ]]; then
-        log_warn "foundry binary not found at: $BIN_DIR/foundry"
-        log_warn "Already uninstalled or never installed?"
-        return 0
+    # Remove binary
+    if [[ -f "$BIN_DIR/foundry" ]]; then
+        rm -f "$BIN_DIR/foundry"
+        log_info "Removed binary: $BIN_DIR/foundry"
     fi
 
-    if ! confirm "Remove Agent Foundry installation from $INSTALL_PREFIX?"; then
-        log_info "Uninstall cancelled"
-        return 0
-    fi
+    # Keep config and data directories (user may want to preserve data)
+    log_info "Configuration and data preserved in:"
+    log_info "  $CONFIG_DIR"
+    log_info "  $DATA_DIR"
+    log_info "Remove these directories manually if desired"
 
-    # Remove binary and lib
-    log_info "Removing foundry binary..."
-    rm -f "$BIN_DIR/foundry"
-
-    if [[ -d "$LIB_DIR" ]]; then
-        log_info "Removing library modules..."
-        rm -rf "$LIB_DIR"
-    fi
-
-    log_info "Agent Foundry uninstalled"
-    log_warn "Configuration and data preserved at:"
-    log_warn "  Config: $CONFIG_DIR"
-    log_warn "  Data:   $DATA_DIR"
-    echo ""
-
-    if confirm "Remove configuration and data as well?"; then
-        rm -rf "$CONFIG_DIR"
-        rm -rf "$DATA_DIR"
-        log_info "Configuration and data removed"
-    fi
-
-    log_info "Uninstall complete"
-    return 0
+    log_info "Uninstallation complete"
 }
 
 # ============================================================================
-# POST-INSTALLATION
+# VERIFICATION
 # ============================================================================
 
 verify_installation() {
-    log_info "Verifying installation..."
-
-    # Check if foundry is in PATH
     if ! command -v foundry &>/dev/null; then
         local shell_rc shell_name
         shell_rc="$(detect_shell_rc_file)"
@@ -366,27 +349,20 @@ verify_installation() {
         return 1
     fi
 
-    # Try running foundry --version
-    if foundry --version &>/dev/null; then
-        log_info "Installation verified successfully!"
-        echo ""
-        foundry --version
-        return 0
-    else
-        log_error "Installation verification failed"
-        return 1
-    fi
+    return 0
 }
 
+# ============================================================================
+# NEXT STEPS
+# ============================================================================
+
 show_next_steps() {
-    echo ""
     log_info "==================================================================="
     log_info "Agent Foundry Installation Complete!"
     log_info "==================================================================="
     echo ""
     log_info "Installation Details:"
     log_info "  Binary:  $BIN_DIR/foundry"
-    log_info "  Libs:    $LIB_DIR"
     log_info "  Config:  $CONFIG_DIR"
     log_info "  Data:    $DATA_DIR"
     echo ""
@@ -446,12 +422,17 @@ main() {
     # Check dependencies
     check_dependencies || exit 1
 
+    # Build release bundle if needed
+    if [[ ! -f "${PROJECT_ROOT}/bin/foundry-release" ]]; then
+        echo ""
+        build_bundle || exit 1
+    fi
+
     # Confirm installation
     echo ""
     log_info "Installation Configuration:"
     log_info "  Prefix:  $INSTALL_PREFIX"
     log_info "  Binary:  $BIN_DIR"
-    log_info "  Libs:    $LIB_DIR"
     log_info "  Config:  $CONFIG_DIR"
     log_info "  Data:    $DATA_DIR"
     echo ""
@@ -477,7 +458,7 @@ main() {
     if $RUN_SETUP; then
         echo ""
         if confirm "Run host setup now? (Recommended)"; then
-            if [[ -f "${PROJECT_ROOT}/scripts/setup-host.sh" ]]; then
+            if [[ -x "${PROJECT_ROOT}/scripts/setup-host.sh" ]]; then
                 exec "${PROJECT_ROOT}/scripts/setup-host.sh"
             else
                 log_warn "Host setup script not found"

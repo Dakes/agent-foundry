@@ -24,7 +24,8 @@ set -euo pipefail
 
 # Determine script location and install prefix
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FOUNDRY_BASE="$(realpath "${SCRIPT_DIR}/..")"
+# Allow override via FOUNDRY_BASE_DIR (set by release bundles)
+FOUNDRY_BASE="${FOUNDRY_BASE_DIR:-$(realpath "${SCRIPT_DIR}/..")}"
 FOUNDRY_LIB_DIR="${FOUNDRY_LIB_DIR:-}"
 
 resolve_lib_dir() {
@@ -68,8 +69,12 @@ source "${LIB_DIR}/workspace.sh"
 # Enable color output by default
 export COLOR_OUTPUT="${COLOR_OUTPUT:-true}"
 
-# Version
-FOUNDRY_VERSION="0.1.0"
+# Version (read from VERSION file, fallback to 0.1.0)
+if [[ -f "${FOUNDRY_BASE}/VERSION" ]]; then
+    FOUNDRY_VERSION=$(cat "${FOUNDRY_BASE}/VERSION" | tr -d '[:space:]')
+else
+    FOUNDRY_VERSION="0.1.0"
+fi
 
 # ============================================================================
 # HELP FUNCTIONS

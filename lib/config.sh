@@ -29,7 +29,8 @@ USER_CONFIG="${USER_CONFIG_DIR}/config.conf"
 DATA_DIR="${FOUNDRY_DATA_DIR:-${HOME}/.local/share/foundry}"
 
 # Default config location (relative to project root)
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Allow override via FOUNDRY_BASE_DIR (set by release bundles)
+PROJECT_ROOT="${FOUNDRY_BASE_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 DEFAULT_CONFIG="${PROJECT_ROOT}/config/default.conf"
 
 # ============================================================================
