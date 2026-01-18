@@ -22,12 +22,40 @@ set -euo pipefail
 # INITIALIZATION
 # ============================================================================
 
-# Determine script location
+# Determine script location and install prefix
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FOUNDRY_BASE="${SCRIPT_DIR}/.."
+FOUNDRY_BASE="$(realpath "${SCRIPT_DIR}/..")"
+FOUNDRY_LIB_DIR="${FOUNDRY_LIB_DIR:-}"
 
-# Source library modules
-LIB_DIR="${FOUNDRY_BASE}/lib"
+resolve_lib_dir() {
+    local lib_candidate
+    for lib_candidate in "$@"; do
+        if [[ -z "$lib_candidate" ]]; then
+            continue
+        fi
+        local resolved
+        if resolved=$(realpath -m "$lib_candidate" 2>/dev/null); then
+            lib_candidate="$resolved"
+        fi
+        if [[ -d "$lib_candidate" ]]; then
+            echo "$lib_candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Source library modules (search both repo and install locations)
+LIB_DIR=$(resolve_lib_dir \
+    "$FOUNDRY_LIB_DIR" \
+    "${FOUNDRY_BASE}/lib/foundry" \
+    "${FOUNDRY_BASE}/lib" \
+    "${SCRIPT_DIR}/../lib")
+
+if [[ -z "$LIB_DIR" ]]; then
+    echo "Unable to locate Agent Foundry libraries" >&2
+    exit 1
+fi
 
 source "${LIB_DIR}/utils.sh"
 source "${LIB_DIR}/config.sh"

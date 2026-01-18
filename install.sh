@@ -38,6 +38,69 @@ RUN_SETUP=true
 UNINSTALL=false
 
 # ============================================================================
+# SHELL HELPERS
+# ============================================================================
+
+expand_user_path() {
+    local path="$1"
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+    if [[ "$path" == "~" ]]; then
+        printf '%s\n' "$HOME"
+        return 0
+    fi
+    if [[ "$path" == "~/"* ]]; then
+        printf '%s\n' "$HOME/${path:2}"
+        return 0
+    fi
+    printf '%s\n' "$path"
+}
+
+detect_user_shell() {
+    local shell_path="${SHELL:-}"
+    if [[ -z "$shell_path" ]]; then
+        shell_path="$(ps -p $$ -o comm= 2>/dev/null || true)"
+    fi
+    shell_path="${shell_path##*/}"
+    shell_path="${shell_path#-}"
+    printf '%s\n' "${shell_path:-sh}"
+}
+
+detect_shell_rc_file() {
+    local shell_name rc_candidates=()
+    shell_name="$(detect_user_shell)"
+    case "$shell_name" in
+        bash)
+            rc_candidates=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
+            ;;
+        zsh)
+            rc_candidates=("$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.profile")
+            ;;
+        fish)
+            rc_candidates=("$HOME/.config/fish/config.fish")
+            ;;
+        *)
+            rc_candidates=("$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.config/fish/config.fish")
+            ;;
+    esac
+
+    local rc_file
+    for rc_file in "${rc_candidates[@]}"; do
+        local resolved
+        resolved="$(expand_user_path "$rc_file")"
+        if [[ -f "$resolved" ]]; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    done
+
+    rc_file="${rc_candidates[0]:-${HOME}/.profile}"
+    printf '%s\n' "$(expand_user_path "$rc_file")"
+    return 0
+}
+
+# ============================================================================
 # USAGE
 # ============================================================================
 
@@ -286,12 +349,20 @@ verify_installation() {
 
     # Check if foundry is in PATH
     if ! command -v foundry &>/dev/null; then
+        local shell_rc shell_name
+        shell_rc="$(detect_shell_rc_file)"
+        shell_name="$(detect_user_shell)"
+
         log_warn "foundry command not found in PATH"
-        log_warn "Add $BIN_DIR to your PATH:"
+        log_warn "Detected shell: $shell_name"
+        log_warn "Add $BIN_DIR to your PATH in $shell_rc:"
         echo ""
         echo "  export PATH=\"\$PATH:$BIN_DIR\""
         echo ""
-        log_warn "Add this to your ~/.bashrc or ~/.zshrc to make it permanent"
+        echo "  source \"$shell_rc\""
+        if [[ ! -f "$shell_rc" ]]; then
+            log_warn "Create $shell_rc before sourcing it if it does not exist"
+        fi
         return 1
     fi
 
@@ -321,8 +392,15 @@ show_next_steps() {
     echo ""
     log_info "Next Steps:"
     echo ""
+    local shell_rc
+    shell_rc="$(detect_shell_rc_file)"
     echo "  1. Add to PATH (if not already in PATH):"
     echo "     export PATH=\"\$PATH:$BIN_DIR\""
+    echo ""
+    echo "     source \"$shell_rc\""
+    if [[ ! -f "$shell_rc" ]]; then
+        echo "     # Create $shell_rc if it does not exist yet"
+    fi
     echo ""
     echo "  2. Set up your host system:"
     echo "     sudo foundry host setup"
