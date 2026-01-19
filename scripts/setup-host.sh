@@ -318,8 +318,9 @@ check_dependencies() {
     log_info "Checking required dependencies..."
 
     # Dependencies to check
-    local required_cmds=(firecracker qemu-img jq tmux screen)
-    local optional_cmds=(iproute2 iptables)
+    # Note: tmux and screen are VM-only, not host dependencies
+    local required_cmds=(firecracker qemu-img jq iptables)
+    local optional_cmds=(iproute2)
 
     local missing_packages=()
     local all_missing_packages=()
