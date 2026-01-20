@@ -64,6 +64,7 @@ log_debug() {
 
 # Check if a command exists in PATH
 # Returns 0 if command exists, 1 otherwise
+# Handles NixOS per-user profiles when running with elevated privileges
 # Usage: check_command "firecracker" && log_info "Firecracker found"
 check_command() {
     local cmd="$1"
@@ -73,7 +74,49 @@ check_command() {
         return 1
     fi
 
-    command -v "$cmd" >/dev/null 2>&1
+    # First try standard PATH lookup
+    if command -v "$cmd" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # On NixOS, also check per-user profile when running as root/elevated
+    # This handles the case where doas/sudo can't see user nix profile paths
+    if [[ -n "${SUDO_USER:-}" ]] || [[ -n "${DOAS_USER:-}" ]]; then
+        local user="${SUDO_USER:-${DOAS_USER:-}}"
+        if [[ -x "/etc/profiles/per-user/$user/bin/$cmd" ]]; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Resolve full path of a command (handles NixOS under sudo/doas)
+# Usage: path=$(get_command_path "firecracker") || exit 1
+get_command_path() {
+    local cmd="$1"
+    
+    if [[ -z "$cmd" ]]; then
+        return 1
+    fi
+
+    # First try standard PATH lookup
+    if command -v "$cmd" >/dev/null 2>&1; then
+        command -v "$cmd"
+        return 0
+    fi
+
+    # On NixOS, also check per-user profile when running as root/elevated
+    if [[ -n "${SUDO_USER:-}" ]] || [[ -n "${DOAS_USER:-}" ]]; then
+        local user="${SUDO_USER:-${DOAS_USER:-}}"
+        local user_path="/etc/profiles/per-user/$user/bin/$cmd"
+        if [[ -x "$user_path" ]]; then
+            echo "$user_path"
+            return 0
+        fi
+    fi
+
+    return 1
 }
 
 # Check if KVM support is available on the host
@@ -176,6 +219,36 @@ detect_os() {
 }
 
 # ============================================================================
+# USER & PATH UTILITIES
+# ============================================================================
+
+# Resolve the home directory of the host user (handling sudo/doas)
+# Returns the absolute path to the user's home directory.
+# Defaults to $HOME if not running under sudo/doas.
+resolve_host_home() {
+    local user=""
+    
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        user="${SUDO_USER}"
+    elif [[ -n "${DOAS_USER:-}" ]]; then
+        user="${DOAS_USER}"
+    else
+        user="${USER:-$(id -un)}"
+    fi
+
+    local home=""
+    if [[ -n "$user" ]] && command -v getent >/dev/null; then
+        home="$(getent passwd "$user" | cut -d: -f6 || true)"
+    fi
+
+    if [[ -z "$home" ]]; then
+        home="${HOME:-/root}"
+    fi
+    log_debug "resolve_host_home returned: $home"
+    echo "$home"
+}
+
+# ============================================================================
 # USER INTERACTION
 # ============================================================================
 
@@ -188,6 +261,12 @@ confirm() {
 
     if [[ -z "$prompt" ]]; then
         prompt="Continue?"
+    fi
+
+    # Support auto-accept via global variable
+    if [[ "${AUTO_ACCEPT:-false}" == "true" ]]; then
+        log_debug "Auto-accepting prompt: $prompt"
+        return 0
     fi
 
     # Don't show interactive prompt if not a TTY

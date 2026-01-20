@@ -99,7 +99,8 @@ install_packages() {
     fi
 
     log_info "Installing packages: ${packages[*]}"
-    arch-chroot "$chroot_dir" pacman -Sy --noconfirm --needed "${packages[@]}"
+    chroot "$chroot_dir" apt-get update
+    DEBIAN_FRONTEND=noninteractive chroot "$chroot_dir" apt-get install -y "${packages[@]}"
 }
 
 install_python_cli_pkg() {
@@ -107,7 +108,7 @@ install_python_cli_pkg() {
     local package="$2"
 
     log_info "Installing ${description}"
-    if arch-chroot "$MOUNT_DIR" python -m pip install --upgrade "$package"; then
+    if chroot "$MOUNT_DIR" python3 -m pip install --upgrade "$package"; then
         log_info "${description} installed"
     else
         log_warn "Failed to install ${description} (package: $package)"
@@ -221,7 +222,7 @@ main() {
     FOUND_HOST_HOME="$(HOST_HOME "$FOUND_HOST_USER")"
 
     local template_dir="${TEMPLATE_DIR:-${HOME}/.local/share/foundry/vms/templates}"
-    local base_template="${template_dir}/arch-base.ext4"
+    local base_template="${template_dir}/ubuntu-base.ext4"
     local golden_template="${template_dir}/golden.ext4"
 
     mkdir -p "$template_dir"
@@ -288,18 +289,18 @@ main() {
 
     copy_ssh_keys "$mount_dir/root/.ssh" "$ssh_source"
 
-    local core_packages=(git nodejs npm python python-pip docker docker-buildx)
+    local core_packages=(git nodejs npm python3 python3-pip docker.io)
     local all_packages=("${core_packages[@]}" "${custom_packages[@]}")
     install_packages "$mount_dir" "${all_packages[@]}"
 
     log_info "Installing Claude Code CLI"
-    arch-chroot "$mount_dir" npm install -g @anthropic-ai/claude-code
+    chroot "$mount_dir" npm install -g @anthropic-ai/claude-code
 
     install_python_cli_pkg "Gemini CLI" "gemini-cli"
     install_python_cli_pkg "OpenAI CLI" "openai"
 
     log_info "Setting up ralph-claude-code"
-    arch-chroot "$mount_dir" /bin/bash -c '
+    chroot "$mount_dir" /bin/bash -c '
 set -euo pipefail
 install -d /opt
 rm -rf /opt/ralph
@@ -309,15 +310,15 @@ cd /opt/ralph
 '
 
     log_info "Creating /work directory"
-    arch-chroot "$mount_dir" mkdir -p /work
+    chroot "$mount_dir" mkdir -p /work
 
     local host_git_config="${FOUND_HOST_HOME}/.gitconfig"
     if [[ -f "$host_git_config" ]]; then
         local git_name git_email
         git_name="$(git config --file "$host_git_config" --get user.name 2>/dev/null || true)"
         git_email="$(git config --file "$host_git_config" --get user.email 2>/dev/null || true)"
-        [[ -n "$git_name" ]] && arch-chroot "$mount_dir" git config --global user.name "$git_name"
-        [[ -n "$git_email" ]] && arch-chroot "$mount_dir" git config --global user.email "$git_email"
+        [[ -n "$git_name" ]] && chroot "$mount_dir" git config --global user.name "$git_name"
+        [[ -n "$git_email" ]] && chroot "$mount_dir" git config --global user.email "$git_email"
     fi
 
     log_info "Syncing filesystem"

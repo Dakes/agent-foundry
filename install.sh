@@ -35,6 +35,7 @@ DATA_DIR="${HOME}/.local/share/foundry"
 # Options
 RUN_SETUP=true
 UNINSTALL=false
+AUTO_ACCEPT=false
 
 # ============================================================================
 # SHELL HELPERS
@@ -113,6 +114,7 @@ Options:
   --prefix <path>     Installation prefix (default: /usr/local or ~/.local)
   --no-setup          Skip host setup after installation
   --uninstall         Remove Agent Foundry installation
+  -y, --yes           Auto-accept all prompts
   -h, --help          Show this help and exit
 
 Examples:
@@ -157,6 +159,10 @@ parse_args() {
                 ;;
             --uninstall)
                 UNINSTALL=true
+                shift
+                ;;
+            -y|--yes)
+                AUTO_ACCEPT=true
                 shift
                 ;;
             -h|--help)
@@ -422,11 +428,9 @@ main() {
     # Check dependencies
     check_dependencies || exit 1
 
-    # Build release bundle if needed
-    if [[ ! -f "${PROJECT_ROOT}/bin/foundry-release" ]]; then
-        echo ""
-        build_bundle || exit 1
-    fi
+    # Always build release bundle before installation
+    echo ""
+    build_bundle || exit 1
 
     # Confirm installation
     echo ""

@@ -19,7 +19,8 @@ fi
 # ============================================================================
 
 FOUNDRY_BASE="${FOUNDRY_BASE_DIR:-${FOUNDRY_BASE:-$(cd "${SCRIPT_DIR}/.." && pwd)}}"
-FOUNDRY_DATA_DIR="${FOUNDRY_DATA_DIR:-${HOME}/.local/share/foundry}"
+FOUNDRY_HOST_HOME="$(resolve_host_home)"
+FOUNDRY_DATA_DIR="${FOUNDRY_DATA_DIR:-${FOUNDRY_HOST_HOME}/.local/share/foundry}"
 FOUNDRY_VMS_DIR="${FOUNDRY_DATA_DIR}/vms"
 FOUNDRY_TEMPLATES_DIR="${FOUNDRY_VMS_DIR}/templates"
 
@@ -105,7 +106,7 @@ template_build() {
     local script_path=""
     case "$template_type" in
         base)
-            script_path="${FOUNDRY_BASE}/scripts/build-arch-base.sh"
+            script_path="${FOUNDRY_BASE}/scripts/build-ubuntu-base.sh"
             ;;
         golden)
             script_path="${FOUNDRY_BASE}/scripts/build-golden.sh"

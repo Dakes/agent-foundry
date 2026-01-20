@@ -15,12 +15,12 @@ Agent Foundry is a framework for managing isolated Firecracker microVMs that run
 ## Three-Layer Architecture
 
 ### Layer 1: Host System
-- Arch Linux server (primary) or any Linux with Firecracker
+- Any Linux with KVM/Firecracker support (NixOS, Ubuntu, Arch, etc.)
 - Provides: Firecracker, networking (TAP devices), VM storage
 - Framework CLI (`foundry`) manages everything from host
 
 ### Layer 2: VM Templates
-- **Base template**: Minimal Arch Linux + essentials
+- **Base template**: Official Firecracker Ubuntu 22.04 rootfs + kernel
 - **Golden template**: Base + AI tools + authentication
 - **Custom snapshots**: User-customized for specific needs
 
@@ -31,20 +31,19 @@ Agent Foundry is a framework for managing isolated Firecracker microVMs that run
 
 ## Template System
 
-### Base Template (`arch-agent-base.ext4`)
-- Created from scratch via automated script
-- Minimal Arch Linux with essential packages
-- Networking pre-configured (static IP via systemd-networkd)
+### Base Template (`ubuntu-base.ext4`)
+- Downloaded from official Firecracker resource bucket
+- Ubuntu 22.04 with essential cloud-init and networking
 - SSH enabled with key-based auth
 - No AI tools yet - pure OS foundation
 - Built once, rarely updated
 
-### Golden Template (`arch-agent-golden.ext4`)
+### Golden Template (`golden.ext4`)
 - Base template + AI development stack
 - Pre-installed: Claude Code CLI, Gemini CLI, OpenAI CLI
 - ralph-claude-code system-wide installation in `/opt/ralph`
 - User's SSH keys for git authentication
-- Docker, Node.js, Python, development tools
+- Docker, Node.js, Python 3, development tools
 - This is what users actually clone
 
 ### User Snapshots

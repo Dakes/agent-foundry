@@ -356,6 +356,17 @@ check_dependencies() {
             return 1
         fi
 
+        if [[ "$PKG_MANAGER" == "nix" ]]; then
+            log_error "On NixOS, add these dependencies to your system configuration:"
+            log_error "  environment.systemPackages = with pkgs; ["
+            for pkg in "${all_missing_packages[@]}"; do
+                log_error "    $pkg"
+            done
+            log_error "  ];"
+            log_error "Then run: sudo nixos-rebuild switch"
+            return 1
+        fi
+
         if ! confirm "Install missing dependencies with $PKG_MANAGER?"; then
             log_error "Cannot proceed without required dependencies"
             return 1
@@ -621,7 +632,7 @@ main() {
     log_info ""
     log_info "Next steps:"
     log_info "1. Review configuration: cat ${FOUNDRY_CONFIG_DIR:-~/.config/foundry}/config.conf"
-    log_info "2. Build VM templates: ./scripts/build-arch-base.sh"
+    log_info "2. Build VM templates: ./scripts/build-ubuntu-base.sh"
     log_info "3. Create your first VM: foundry vm create <project-name>"
     log_info ""
 

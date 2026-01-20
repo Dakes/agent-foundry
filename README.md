@@ -185,8 +185,8 @@ foundry agent attach <vm>
 foundry agent status --all
 
 # Templates
-foundry template build base
-foundry template build golden --ssh-key <path>
+foundry template build base      # Downloads Ubuntu 22.04 base
+foundry template build golden    # Configures AI tools (apt based)
 
 # Host setup
 foundry host setup

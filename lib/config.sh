@@ -21,12 +21,15 @@ source "${SCRIPT_DIR}/utils.sh"
 # System config location
 SYSTEM_CONFIG="/etc/foundry/config.conf"
 
+# Resolve real user home
+HOST_HOME="$(resolve_host_home)"
+
 # User config directory
-USER_CONFIG_DIR="${FOUNDRY_CONFIG_DIR:-${HOME}/.config/foundry}"
+USER_CONFIG_DIR="${FOUNDRY_CONFIG_DIR:-${HOST_HOME}/.config/foundry}"
 USER_CONFIG="${USER_CONFIG_DIR}/config.conf"
 
 # Data directory
-DATA_DIR="${FOUNDRY_DATA_DIR:-${HOME}/.local/share/foundry}"
+DATA_DIR="${FOUNDRY_DATA_DIR:-${HOST_HOME}/.local/share/foundry}"
 
 # Default config location (relative to project root)
 # Allow override via FOUNDRY_BASE_DIR (set by release bundles)

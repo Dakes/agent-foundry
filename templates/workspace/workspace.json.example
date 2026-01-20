@@ -80,8 +80,7 @@
   },
 
   "vm": {
-    "os": "arch",
-    "cpus": null,
+          "os": "ubuntu",    "cpus": null,
     "memory_mb": 8192,
     "disk_gb": 20,
     "networking": "nat"

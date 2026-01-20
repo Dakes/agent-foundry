@@ -551,10 +551,10 @@ cmd_template() {
             local template_type="${1:-help}"
             case "$template_type" in
                 base)
-                    if [[ -x "${FOUNDRY_BASE}/scripts/build-arch-base.sh" ]]; then
-                        exec "${FOUNDRY_BASE}/scripts/build-arch-base.sh" "${@:2}"
+                    if [[ -x "${FOUNDRY_BASE}/scripts/build-ubuntu-base.sh" ]]; then
+                        exec "${FOUNDRY_BASE}/scripts/build-ubuntu-base.sh" "${@:2}"
                     else
-                        log_error "build-arch-base.sh not found"
+                        log_error "build-ubuntu-base.sh not found"
                         return 1
                     fi
                     ;;
@@ -576,7 +576,7 @@ cmd_template() {
             echo ""
             echo "ACTIONS:"
             echo "    list              List available templates"
-            echo "    build base        Build base Arch Linux template"
+            echo "    build base        Build base Ubuntu template"
             echo "    build golden      Build golden template with AI tools"
             ;;
         *)

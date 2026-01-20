@@ -44,9 +44,11 @@ fi
 # CONFIGURATION
 # ============================================================================
 
+FOUNDRY_HOST_HOME="$(resolve_host_home)"
+
 # Registry file path
-REGISTRY_FILE="${FOUNDRY_CONFIG_DIR:-${HOME}/.config/foundry}/vms.json"
-REGISTRY_LOCK="${FOUNDRY_CONFIG_DIR:-${HOME}/.config/foundry}/registry.lock"
+REGISTRY_FILE="${FOUNDRY_CONFIG_DIR:-${FOUNDRY_HOST_HOME}/.config/foundry}/vms.json"
+REGISTRY_LOCK="${FOUNDRY_CONFIG_DIR:-${FOUNDRY_HOST_HOME}/.config/foundry}/registry.lock"
 
 # Lock file descriptor - used for flock
 REGISTRY_LOCK_FD=200
@@ -261,6 +263,11 @@ registry_update() {
     local field="$2"
     local value="$3"
 
+    # Strip leading dot if present
+    if [[ "${field:0:1}" == "." ]]; then
+        field="${field:1}"
+    fi
+
     if [[ -z "$vm_name" ]]; then
         log_error "registry_update: VM name required"
         return 1
@@ -422,6 +429,11 @@ registry_get() {
     local vm_name="$1"
     local field="${2:-}"
 
+    # Strip leading dot if present
+    if [[ "${field:0:1}" == "." ]]; then
+        field="${field:1}"
+    fi
+
     if [[ -z "$vm_name" ]]; then
         log_error "registry_get: VM name required"
         return 1
@@ -429,15 +441,15 @@ registry_get() {
 
     # Ensure registry exists
     if [[ ! -f "$REGISTRY_FILE" ]]; then
-        log_error "Registry does not exist"
+        log_error "Registry does not exist at $REGISTRY_FILE"
         return 1
     fi
 
-    log_debug "Getting info for VM '$vm_name'"
+    log_debug "Getting info for VM '$vm_name' from $REGISTRY_FILE"
 
     # Check if VM exists
     if ! jq -e ".vms[\"$vm_name\"]" "$REGISTRY_FILE" >/dev/null 2>&1; then
-        log_error "VM '$vm_name' not found in registry"
+        log_debug "VM '$vm_name' not found in registry at $REGISTRY_FILE"
         return 1
     fi
 

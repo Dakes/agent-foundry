@@ -31,7 +31,8 @@ fi
 # CONFIGURATION
 # ============================================================================
 
-FOUNDRY_DATA_DIR="${FOUNDRY_DATA_DIR:-${HOME}/.local/share/foundry}"
+FOUNDRY_HOST_HOME="$(resolve_host_home)"
+FOUNDRY_DATA_DIR="${FOUNDRY_DATA_DIR:-${FOUNDRY_HOST_HOME}/.local/share/foundry}"
 FOUNDRY_VMS_DIR="${FOUNDRY_DATA_DIR}/vms"
 FOUNDRY_TEMPLATES_DIR="${FOUNDRY_VMS_DIR}/templates"
 FOUNDRY_INSTANCES_DIR="${FOUNDRY_VMS_DIR}/instances"
@@ -43,7 +44,7 @@ FOUNDRY_LOGS_DIR="${FOUNDRY_DATA_DIR}/logs"
 FOUNDRY_DEFAULT_CPUS="${FOUNDRY_DEFAULT_CPUS:-4}"
 FOUNDRY_DEFAULT_MEMORY_MB="${FOUNDRY_DEFAULT_MEMORY_MB:-8192}"
 FOUNDRY_DEFAULT_KERNEL="${FOUNDRY_DEFAULT_KERNEL:-vmlinux}"
-FOUNDRY_DEFAULT_TEMPLATE="${FOUNDRY_DEFAULT_TEMPLATE:-arch-agent-golden.ext4}"
+FOUNDRY_DEFAULT_TEMPLATE="${FOUNDRY_DEFAULT_TEMPLATE:-golden.ext4}"
 
 # SSH settings
 FOUNDRY_SSH_USER="${FOUNDRY_SSH_USER:-root}"
@@ -63,7 +64,7 @@ _require_root() {
 
 _vm_exists() {
     local name="$1"
-    registry_get "$name" ".status" >/dev/null 2>&1
+    registry_get "$name" ".status" >/dev/null
 }
 
 _validate_vm_name() {
@@ -316,8 +317,15 @@ vm_start() {
         log_debug "Recreating TAP device $tap_name..."
         ip tuntap add dev "$tap_name" mode tap || return 1
         ip link set "$tap_name" up || return 1
+    fi
+    
+    # Always ensure TAP is attached to bridge and UP
+    if ! bridge link show dev "$tap_name" >/dev/null 2>&1; then
+        log_debug "Attaching $tap_name to $FOUNDRY_BRIDGE..."
         ip link set "$tap_name" master "$FOUNDRY_BRIDGE" || return 1
     fi
+    ip link set "$tap_name" up || return 1
+    ip link set "$FOUNDRY_BRIDGE" up || return 1
 
     # Generate config
     local fc_config
@@ -330,10 +338,18 @@ vm_start() {
     # Remove stale socket
     rm -f "$socket_path"
 
-    # Start Firecracker
-    log_debug "Starting Firecracker..."
+    # Resolve firecracker binary (handle NixOS path issues)
+    local fc_bin
+    fc_bin=$(get_command_path "firecracker") || {
+        log_error "Firecracker binary not found. Ensure it is installed and in PATH."
+        return 1
+    }
 
-    firecracker --api-sock "$socket_path" --config-file /dev/stdin \
+    # Start Firecracker
+    log_debug "Starting Firecracker ($fc_bin)..."
+    log_debug "Command: $fc_bin --api-sock $socket_path --config-file /dev/stdin"
+
+    "$fc_bin" --api-sock "$socket_path" --config-file /dev/stdin \
         > "$log_path" 2>&1 <<< "$fc_config" &
 
     local fc_pid=$!
@@ -805,7 +821,7 @@ vm_snapshot() {
 # Example workflow:
 #
 #   # Create VM from golden template
-#   sudo vm_create my-project arch-agent-golden.ext4
+#   sudo vm_create my-project golden.ext4
 #
 #   # Start the VM
 #   sudo vm_start my-project

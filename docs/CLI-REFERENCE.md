@@ -217,7 +217,7 @@ Examples:
 foundry template build <type> [options]
 
 Types:
-  base               Build base Arch Linux template
+  base               Build base Ubuntu template
   golden             Build golden template (base + AI tools)
 
 Options:
