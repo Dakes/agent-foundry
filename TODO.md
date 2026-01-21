@@ -64,11 +64,11 @@
 ## Phase 3: VM Template Building
 
 ### Base Template Builder
-- [ ] `scripts/build-arch-base.sh`
+- [ ] `scripts/build-ubuntu-base.sh`
   - [ ] Create disk image with qemu-img
   - [ ] Format as ext4
   - [ ] Mount loopback
-  - [ ] Run pacstrap with base packages
+  - [ ] Download Ubuntu rootfs from Firecracker S3
   - [ ] Configure systemd-networkd
   - [ ] Enable sshd
   - [ ] Configure SSH authorized_keys

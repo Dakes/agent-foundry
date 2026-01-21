@@ -7,7 +7,7 @@ Create a reproducible, system-agnostic framework for building and managing Firec
 - [ ] Phase 1: Clarify requirements and design architecture
 - [ ] Phase 2: Set up project structure and git repository
 - [ ] Phase 3: Create host-agnostic tooling (with nix-shell for NixOS)
-- [ ] Phase 4: Implement Arch Linux VM image builder
+- [ ] Phase 4: Implement Ubuntu Linux VM image builder
 - [ ] Phase 5: Implement VM lifecycle management (create, run, stop, destroy)
 - [ ] Phase 6: Add AI agent tooling integration (Amp, Ralph, etc.)
 - [ ] Phase 7: Create documentation and examples
@@ -27,8 +27,8 @@ Create a reproducible, system-agnostic framework for building and managing Firec
 
 ## Decisions Made
 - **Host compatibility**: System-agnostic shell scripts, with nix-shell support for NixOS hosts
-- **Primary guest OS**: Arch Linux (Ubuntu/Fedora support designed for but implemented later)
-- **Target server**: Arch Linux production server
+- **Primary guest OS**: Ubuntu Linux 22.04 (other distros planned for later)
+- **Target server**: Any Linux production server
 - **Development environment**: NixOS (need nix-shell for dev tools)
 - **Autonomous agent**: ralph-claude-code (frankbria/ralph-claude-code)
 - **Agent types as names**: ralph-claude-code, gemini-cli, openai-codex (not --provider)

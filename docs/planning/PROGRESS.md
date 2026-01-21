@@ -76,7 +76,7 @@
 - [ ] Test host setup workflow
 
 #### Phase 6: VM Template Builders
-- [ ] scripts/build-arch-base.sh - Base Arch template
+- [ ] scripts/build-ubuntu-base.sh - Base Ubuntu template
 - [ ] scripts/prepare-kernel.sh - Kernel preparation
 - [ ] scripts/build-golden.sh - Golden template with AI tools
 

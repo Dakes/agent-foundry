@@ -206,7 +206,7 @@ nix-shell
 ./tests/run-all.sh
 
 # Build templates (from repo)
-./scripts/build-arch-base.sh
+./scripts/build-ubuntu-base.sh
 ```
 
 **Note**: The release bundle is built automatically by `install.sh` if needed.

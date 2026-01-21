@@ -30,6 +30,8 @@ EOF
 HOST_USER() {
     if [[ -n "${SUDO_USER:-}" ]]; then
         echo "${SUDO_USER}"
+    elif [[ -n "${DOAS_USER:-}" ]]; then
+        echo "${DOAS_USER}"
     elif [[ -n "${USER:-}" ]]; then
         echo "${USER}"
     else
@@ -99,8 +101,34 @@ install_packages() {
     fi
 
     log_info "Installing packages: ${packages[*]}"
+
+    # Initialize dpkg and apt if needed
+    if [[ ! -f "$chroot_dir/var/lib/dpkg/status" ]]; then
+        log_info "Initializing dpkg and apt directories"
+        mkdir -p "$chroot_dir/var/lib/dpkg"
+        touch "$chroot_dir/var/lib/dpkg/status"
+        mkdir -p "$chroot_dir/var/lib/dpkg/updates"
+        mkdir -p "$chroot_dir/var/lib/dpkg/info"
+        mkdir -p "$chroot_dir/var/cache/apt/archives/partial"
+        mkdir -p "$chroot_dir/var/lib/apt/lists/partial"
+        mkdir -p "$chroot_dir/var/log/apt"
+    fi
+
+    # Prevent services from starting in chroot
+    cat > "$chroot_dir/usr/sbin/policy-rc.d" <<'EOF'
+#!/bin/sh
+exit 101
+EOF
+    chmod +x "$chroot_dir/usr/sbin/policy-rc.d"
+
     chroot "$chroot_dir" apt-get update
-    DEBIAN_FRONTEND=noninteractive chroot "$chroot_dir" apt-get install -y "${packages[@]}"
+    DEBIAN_FRONTEND=noninteractive chroot "$chroot_dir" apt-get install -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        "${packages[@]}"
+
+    # Remove policy-rc.d so services can start normally when VM boots
+    rm -f "$chroot_dir/usr/sbin/policy-rc.d"
 }
 
 install_python_cli_pkg() {
@@ -161,6 +189,7 @@ teardown_chroot() {
         "${MOUNT_DIR}/proc"
         "${MOUNT_DIR}/sys"
         "${MOUNT_DIR}/run"
+        "${MOUNT_DIR}/tmp"
         "${MOUNT_DIR}"
     )
 
@@ -172,6 +201,7 @@ teardown_chroot() {
 }
 
 main() {
+    log_info "=== BUILD-GOLDEN.SH STARTING (with resolve_host_home fix) ==="
     local packages_arg=""
     local ssh_key_arg=""
 
@@ -208,8 +238,8 @@ main() {
         exit 1
     fi
 
-    if ! check_command arch-chroot || ! check_command pacman || ! check_command git || ! check_command mount || ! check_command umount; then
-        log_error "Required commands missing (arch-chroot, pacman, git, mount, umount)"
+    if ! check_command chroot || ! check_command git || ! check_command mount || ! check_command umount; then
+        log_error "Required commands missing (chroot, git, mount, umount)"
         exit 1
     fi
 
@@ -218,10 +248,16 @@ main() {
         exit 1
     fi
 
+    log_debug "Environment check: SUDO_USER='${SUDO_USER:-}' DOAS_USER='${DOAS_USER:-}' USER='${USER:-}'"
+
     FOUND_HOST_USER="$(HOST_USER)"
     FOUND_HOST_HOME="$(HOST_HOME "$FOUND_HOST_USER")"
 
-    local template_dir="${TEMPLATE_DIR:-${HOME}/.local/share/foundry/vms/templates}"
+    local host_home
+    host_home="$(resolve_host_home)"
+    log_debug "Resolved host home: $host_home"
+    log_debug "SUDO_USER=${SUDO_USER:-not set}, DOAS_USER=${DOAS_USER:-not set}, USER=${USER:-not set}"
+    local template_dir="${TEMPLATE_DIR:-${host_home}/.local/share/foundry/vms/templates}"
     local base_template="${template_dir}/ubuntu-base.ext4"
     local golden_template="${template_dir}/golden.ext4"
 
@@ -229,7 +265,7 @@ main() {
 
     if [[ ! -f "$base_template" ]]; then
         log_error "Base template missing: $base_template"
-        log_error "Run scripts/build-arch-base.sh first"
+        log_error "Run 'foundry template build base' first"
         exit 1
     fi
 
@@ -274,10 +310,16 @@ main() {
     log_info "Mounting temporary image"
     mount -o loop "$temp_image" "$mount_dir"
 
-    for target in dev dev/pts proc sys run; do
+    for target in dev dev/pts proc sys run tmp; do
         mkdir -p "$mount_dir/$target"
         mount --bind "/$target" "$mount_dir/$target"
     done
+
+    log_info "Configuring DNS in chroot"
+    cat > "$mount_dir/etc/resolv.conf" <<EOF
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
 
     log_info "Copying SSH credentials"
     local ssh_source=""

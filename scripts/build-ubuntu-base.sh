@@ -230,6 +230,17 @@ inject_ssh_key() {
     log_info "SSH key injected successfully"
 }
 
+inject_dns_config() {
+    log_info "Configuring DNS in guest..."
+    # Ensure /etc/resolv.conf has a nameserver
+    # We use 1.1.1.1 as primary and 8.8.8.8 as secondary
+    cat > "$MOUNT_DIR/etc/resolv.conf" <<EOF
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+    log_info "DNS configuration injected"
+}
+
 main() {
     parse_args "$@"
     if [[ $EUID -ne 0 ]]; then
@@ -252,6 +263,7 @@ main() {
     download_resources
     resize_image
     inject_ssh_key
+    inject_dns_config
 
     BUILD_SUCCESS="true"
     log_info "Ubuntu base template ready at $OUTPUT_IMAGE"

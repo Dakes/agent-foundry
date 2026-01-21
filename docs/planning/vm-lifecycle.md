@@ -231,8 +231,8 @@ All VM disks stored in configured directory:
 ```
 ~/.local/share/foundry/vms/
 ├── templates/
-│   ├── arch-agent-base.ext4       # Base template
-│   ├── arch-agent-golden.ext4     # Golden template (with tools)
+│   ├── ubuntu-base.ext4           # Base template
+│   ├── golden.ext4                # Golden template (with tools)
 │   └── company-base-v1.ext4       # User snapshots
 ├── instances/
 │   ├── my-project.ext4

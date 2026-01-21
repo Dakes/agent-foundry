@@ -1,13 +1,13 @@
 # Agent Foundry - Default Package List for VM Templates
 #
-# This file lists packages to install in Arch Linux VMs beyond the base set.
+# This file lists packages to install in Ubuntu Linux VMs beyond the base set.
 # Add one package per line. Lines starting with # are comments.
 #
 # Users can customize by creating ~/.config/foundry/packages.txt
 #
 # Base packages (always installed):
-#   base, base-devel, linux, linux-firmware, git, openssh, vim, nano,
-#   bash, tmux, screen, jq, curl, wget, nodejs, npm, python, python-pip, docker
+#   git, openssh-server, vim, nano, bash, tmux, screen, jq, curl, wget,
+#   nodejs, npm, python3, python3-pip, docker.io, build-essential
 #
 # Add your custom packages below:
 

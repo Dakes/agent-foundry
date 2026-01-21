@@ -5,14 +5,13 @@
 The base VM template includes essential tools for AI agent development:
 
 ### Core System
-- `base` - Arch Linux base system
-- `linux` - Kernel
-- `linux-firmware` - Hardware support
+- Ubuntu 22.04 base system
+- Linux kernel (from Firecracker)
 
 ### Development Essentials
-- `base-devel` - Build tools (gcc, make, etc.)
+- `build-essential` - Build tools (gcc, make, etc.)
 - `git` - Version control
-- `openssh` - SSH server/client
+- `openssh-server` - SSH server
 - `vim` - Text editor
 - `nano` - Simple editor
 
@@ -26,12 +25,11 @@ The base VM template includes essential tools for AI agent development:
 
 ### Language Runtimes
 - `nodejs` - Node.js + npm
-- `python` - Python 3
-- `python-pip` - Python package manager
+- `python3` - Python 3
+- `python3-pip` - Python package manager
 
 ### Container & Virtualization
-- `docker` - Container runtime
-- `docker-buildx` - Docker build plugin
+- `docker.io` - Container runtime
 
 ### AI Development Tools
 *Installed via npm/pip during template customization:*
@@ -92,7 +90,7 @@ ncdu
 
 **Option 1: Build template with custom packages**
 ```bash
-foundry template build arch-custom --packages ~/.config/foundry/packages.txt
+foundry template build golden --packages ~/.config/foundry/packages.txt
 ```
 
 **Option 2: Install into existing VM**
@@ -106,9 +104,9 @@ Place `packages.txt` in `~/.config/foundry/` and it's automatically used for all
 ## Template Build Process
 
 1. Create base image (default packages)
-2. Bootstrap Arch with `pacstrap`
+2. Download Ubuntu rootfs from Firecracker S3
 3. Read `packages.txt` if exists
-4. Install additional packages via `arch-chroot pacman -S`
+4. Install additional packages via `chroot` with `apt-get`
 5. Configure networking, SSH, etc.
 6. Install AI CLIs (npm/pip)
 7. Clone ralph-claude-code

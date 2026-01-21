@@ -155,13 +155,13 @@ A successful Agent Foundry:
 ## Future Vision
 
 ### Phase 1 (MVP)
-- Arch Linux VMs only
+- Ubuntu Linux VMs (22.04)
 - ralph-claude-code as primary agent
 - Basic CLI (create, start, stop, destroy)
 - Manual template building
 
 ### Phase 2
-- Additional guest OS support (Ubuntu, Fedora)
+- Additional guest OS support (Fedora, Alpine)
 - More agent integrations
 - Advanced CLI features (copy, rename, snapshot)
 - Automated template building

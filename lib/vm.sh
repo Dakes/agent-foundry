@@ -118,7 +118,7 @@ _generate_fc_config() {
 {
   "boot-source": {
     "kernel_image_path": "$kernel_path",
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off ip=${vm_ip}::${FOUNDRY_GATEWAY}:255.255.255.0::eth0:off"
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off ip=${vm_ip}::${FOUNDRY_GATEWAY}:255.255.255.0::eth0:off:1.1.1.1"
   },
   "drives": [
     {
@@ -153,7 +153,7 @@ _wait_for_ssh() {
     log_debug "Waiting for SSH on $ip (timeout: ${timeout}s)..."
 
     while [[ $elapsed -lt $timeout ]]; do
-        if ssh $FOUNDRY_SSH_OPTS -o ConnectTimeout=2 "${FOUNDRY_SSH_USER}@${ip}" "true" 2>/dev/null; then
+        if ssh $FOUNDRY_SSH_OPTS -o BatchMode=yes -o ConnectTimeout=2 "${FOUNDRY_SSH_USER}@${ip}" "true" 2>/dev/null; then
             log_debug "SSH available on $ip after ${elapsed}s"
             return 0
         fi
@@ -310,6 +310,12 @@ vm_start() {
     if [[ ! -f "$kernel_path" ]]; then
         log_error "Kernel not found: $kernel_path"
         return 1
+    fi
+
+    # Ensure network bridge exists
+    if ! ip link show "$FOUNDRY_BRIDGE" >/dev/null 2>&1; then
+        log_warn "Bridge '$FOUNDRY_BRIDGE' not found. Initializing network..."
+        network_init || return 1
     fi
 
     # Ensure TAP device exists
