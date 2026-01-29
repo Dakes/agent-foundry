@@ -327,6 +327,9 @@ EOF
     log_info "Enabling systemd-resolved for boot"
     chroot "$mount_dir" systemctl enable systemd-resolved 2>/dev/null || true
 
+    # STAGE 3: Configure IPv4 preference (VMs don't have IPv6 routing)
+    log_info "Configuring IPv4 preference in gai.conf"
+    echo "precedence ::ffff:0:0/96  100" >> "$mount_dir/etc/gai.conf"
 
     local core_packages=(
         # Base

@@ -154,6 +154,16 @@ _generate_vm_ssh_key() {
         return 1
     fi
 
+    # Chown SSH directory to real user if running with sudo/doas
+    if [[ -n "${SUDO_USER:-}" ]] || [[ -n "${DOAS_USER:-}" ]]; then
+        local real_user
+        real_user=$(resolve_host_user)
+        log_debug "Changing ownership of SSH directory to user: $real_user"
+        if ! chown -R "$real_user:$real_user" "$ssh_dir"; then
+            log_warn "Failed to change ownership of SSH directory to $real_user"
+        fi
+    fi
+
     echo "$private_key"
     return 0
 }

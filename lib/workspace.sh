@@ -184,8 +184,12 @@ _setup_ssh_keys() {
         i=$((i + 1))
     done
 
-    # Write SSH config to VM
-    _ssh_cmd "$vm_name" "cat > /root/.ssh/config" <<< "$(echo -e "$ssh_config_content")"
+    # Write SSH config to VM (use temp file instead of heredoc since _ssh_cmd uses -n flag)
+    local temp_config
+    temp_config=$(mktemp)
+    echo -e "$ssh_config_content" > "$temp_config"
+    _scp_to_vm "$vm_ip" "$ssh_key_path" "$temp_config" "/root/.ssh/config"
+    rm -f "$temp_config"
     _ssh_cmd "$vm_name" "chmod 600 /root/.ssh/config"
 
     log_info "SSH keys configured for $repos_count repositories"

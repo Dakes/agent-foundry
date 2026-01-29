@@ -111,6 +111,38 @@ _ssh_cmd() {
     return $rc
 }
 
+# SSH command with TTY allocation (for tmux/screen)
+_ssh_cmd_tty() {
+    local vm_name="$1"
+    shift
+
+    local vm_ip ssh_key
+    vm_ip=$(registry_get "$vm_name" ".ip")
+    ssh_key=$(registry_get "$vm_name" ".ssh_key")
+
+    # Remove quotes if present (jq output)
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
+
+    # Use same quoting as vm_ssh for consistency
+    local quoted_cmd
+    printf -v quoted_cmd '%q ' "$@"
+
+    log_debug "_ssh_cmd_tty executing: $*"
+
+    # Use -t to force PTY allocation (needed for tmux/screen)
+    # Still use -n to prevent stdin blocking
+    if [[ -z "$ssh_key" || "$ssh_key" == "null" ]]; then
+        ssh -t -n $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
+    else
+        ssh -t -n -i "$ssh_key" $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
+    fi
+    local rc=$?
+
+    log_debug "_ssh_cmd_tty exit code: $rc"
+    return $rc
+}
+
 _check_vm_running() {
     local vm_name="$1"
     local status
@@ -229,20 +261,43 @@ _start_ralph() {
     log_debug "Ralph workspace directory found"
 
     # Kill existing session if any
-    _ssh_cmd "$vm_name" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
+    _ssh_cmd_tty "$vm_name" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
+
+    # Create logs directory if it doesn't exist
+    _ssh_cmd "$vm_name" "mkdir -p $workspace_path/logs"
 
     # Start Ralph in new tmux session
-    # Ralph runs with --yes to auto-confirm and --no-input for non-interactive
-    _ssh_cmd "$vm_name" "tmux new-session -d -s $AGENT_TMUX_SESSION -c '$workspace_path' \
-        'ralph --yes 2>&1 | tee -a logs/ralph.log'"
+    # Create a start script to avoid complex quoting issues with multi-layer shell escaping
+    _ssh_cmd "$vm_name" "echo '#!/bin/bash' > /tmp/start-ralph.sh"
+    _ssh_cmd "$vm_name" "echo 'cd $workspace_path' >> /tmp/start-ralph.sh"
+    _ssh_cmd "$vm_name" "echo '# Reset circuit breaker if it exists (from previous runs)' >> /tmp/start-ralph.sh"
+    _ssh_cmd "$vm_name" "echo 'if [[ -f .ralph/.circuit_breaker_state ]]; then' >> /tmp/start-ralph.sh"
+    _ssh_cmd "$vm_name" "echo '    ralph --reset-circuit >/dev/null 2>&1 || true' >> /tmp/start-ralph.sh"
+    _ssh_cmd "$vm_name" "echo 'fi' >> /tmp/start-ralph.sh"
+    _ssh_cmd "$vm_name" "echo 'exec ralph 2>&1 | tee -a logs/ralph.log' >> /tmp/start-ralph.sh"
+    _ssh_cmd "$vm_name" "chmod +x /tmp/start-ralph.sh"
+
+    # Try to start tmux session (use _ssh_cmd_tty for PTY allocation)
+    local tmux_output tmux_rc
+    tmux_output=$(_ssh_cmd_tty "$vm_name" "tmux new-session -d -s $AGENT_TMUX_SESSION /tmp/start-ralph.sh 2>&1")
+    tmux_rc=$?
+    if [[ $tmux_rc -ne 0 ]]; then
+        log_error "Tmux command failed (exit code: $tmux_rc)"
+        log_error "Tmux output: $tmux_output"
+    fi
 
     # Verify session started
     sleep 1
-    if _ssh_cmd "$vm_name" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
+    if _ssh_cmd_tty "$vm_name" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
         log_debug "Ralph tmux session started"
         return 0
     else
         log_error "Failed to start Ralph tmux session"
+        # Try to get error details
+        log_debug "Checking for tmux server..."
+        _ssh_cmd_tty "$vm_name" "tmux list-sessions 2>&1" || log_debug "No tmux sessions found"
+        log_debug "Checking Ralph process..."
+        _ssh_cmd "$vm_name" "pgrep -a ralph" || log_debug "No ralph process found"
         return 1
     fi
 }
@@ -262,14 +317,14 @@ _start_interactive() {
     fi
 
     # Kill existing session if any
-    _ssh_cmd "$vm_name" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
+    _ssh_cmd_tty "$vm_name" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
 
     # Start CLI in screen session
-    _ssh_cmd "$vm_name" "cd '$workspace_path' && screen -dmS $AGENT_SCREEN_SESSION $cli_name"
+    _ssh_cmd_tty "$vm_name" "cd '$workspace_path' && screen -dmS $AGENT_SCREEN_SESSION $cli_name"
 
     # Verify session started
     sleep 1
-    if _ssh_cmd "$vm_name" "screen -list | grep -q $AGENT_SCREEN_SESSION"; then
+    if _ssh_cmd_tty "$vm_name" "screen -list | grep -q $AGENT_SCREEN_SESSION"; then
         log_debug "$cli_name screen session started"
         return 0
     else
@@ -306,10 +361,10 @@ agent_stop() {
     log_info "Stopping $agent_type agent in VM '$vm_name'..."
 
     # Kill tmux session (for Ralph)
-    _ssh_cmd "$vm_name" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
+    _ssh_cmd_tty "$vm_name" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
 
     # Kill screen session (for interactive agents)
-    _ssh_cmd "$vm_name" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
+    _ssh_cmd_tty "$vm_name" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
 
     # Update registry
     registry_update "$vm_name" ".agent.status" "\"stopped\""
@@ -440,16 +495,16 @@ agent_status() {
         echo "Session Status (live check):"
 
         # Check tmux
-        if _ssh_cmd "$vm_name" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
+        if _ssh_cmd_tty "$vm_name" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
             echo "  tmux ($AGENT_TMUX_SESSION): running"
-            _ssh_cmd "$vm_name" "tmux list-windows -t $AGENT_TMUX_SESSION 2>/dev/null" | \
+            _ssh_cmd_tty "$vm_name" "tmux list-windows -t $AGENT_TMUX_SESSION 2>/dev/null" | \
                 sed 's/^/    /'
         else
             echo "  tmux ($AGENT_TMUX_SESSION): not running"
         fi
 
         # Check screen
-        if _ssh_cmd "$vm_name" "screen -list | grep -q $AGENT_SCREEN_SESSION 2>/dev/null"; then
+        if _ssh_cmd_tty "$vm_name" "screen -list | grep -q $AGENT_SCREEN_SESSION 2>/dev/null"; then
             echo "  screen ($AGENT_SCREEN_SESSION): running"
         else
             echo "  screen ($AGENT_SCREEN_SESSION): not running"
@@ -567,7 +622,7 @@ After=network.target
 Type=forking
 User=root
 WorkingDirectory=$workspace_path
-ExecStart=/usr/bin/tmux new-session -d -s $AGENT_TMUX_SESSION -c $workspace_path 'ralph --yes 2>&1 | tee -a logs/ralph.log'
+ExecStart=/usr/bin/tmux new-session -d -s $AGENT_TMUX_SESSION /tmp/start-ralph.sh
 ExecStop=/usr/bin/tmux kill-session -t $AGENT_TMUX_SESSION
 RemainAfterExit=yes
 

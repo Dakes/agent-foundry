@@ -244,8 +244,8 @@ registry_add() {
         return 1
     fi
 
-    # Atomic move
-    mv "$temp_file" "$REGISTRY_FILE" || {
+    # Atomic move (use 'command' to bypass mv alias like mv -i)
+    command mv "$temp_file" "$REGISTRY_FILE" || {
         log_error "Failed to write updated registry"
         rm -f "$temp_file"
         return 1
@@ -350,8 +350,8 @@ registry_update() {
         return 1
     fi
 
-    # Atomic move
-    mv "$temp_file" "$REGISTRY_FILE" || {
+    # Atomic move (use 'command' to bypass mv alias like mv -i)
+    command mv "$temp_file" "$REGISTRY_FILE" || {
         log_error "Failed to write updated registry"
         rm -f "$temp_file"
         return 1
@@ -410,8 +410,8 @@ registry_remove() {
         return 1
     fi
 
-    # Atomic move
-    mv "$temp_file" "$REGISTRY_FILE" || {
+    # Atomic move (use 'command' to bypass mv alias like mv -i)
+    command mv "$temp_file" "$REGISTRY_FILE" || {
         log_error "Failed to write updated registry"
         rm -f "$temp_file"
         return 1

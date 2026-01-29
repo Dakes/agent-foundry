@@ -225,9 +225,24 @@ detect_os() {
 # Resolve the home directory of the host user (handling sudo/doas)
 # Returns the absolute path to the user's home directory.
 # Defaults to $HOME if not running under sudo/doas.
+resolve_host_user() {
+    local user=""
+
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        user="${SUDO_USER}"
+    elif [[ -n "${DOAS_USER:-}" ]]; then
+        user="${DOAS_USER}"
+    else
+        user="${USER:-$(id -un)}"
+    fi
+
+    log_debug "resolve_host_user returned: $user"
+    echo "$user"
+}
+
 resolve_host_home() {
     local user=""
-    
+
     if [[ -n "${SUDO_USER:-}" ]]; then
         user="${SUDO_USER}"
     elif [[ -n "${DOAS_USER:-}" ]]; then
