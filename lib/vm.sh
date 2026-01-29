@@ -48,7 +48,7 @@ FOUNDRY_DEFAULT_TEMPLATE="${FOUNDRY_DEFAULT_TEMPLATE:-golden.ext4}"
 
 # SSH settings
 FOUNDRY_SSH_USER="${FOUNDRY_SSH_USER:-root}"
-FOUNDRY_SSH_OPTS="${FOUNDRY_SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR}"
+FOUNDRY_SSH_OPTS="${FOUNDRY_SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -o PasswordAuthentication=no}"
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -100,6 +100,64 @@ _get_log_path() {
     echo "${FOUNDRY_LOGS_DIR}/${name}-firecracker.log"
 }
 
+_generate_vm_ssh_key() {
+    local name="$1"
+
+    _validate_vm_name "$name" || return 1
+
+    local ssh_keygen
+    ssh_keygen=$(get_command_path "ssh-keygen") || {
+        log_error "ssh-keygen not found. Please install OpenSSH client tools."
+        return 1
+    }
+
+    local ssh_dir private_key public_key
+    ssh_dir="${FOUNDRY_VMS_DIR}/${name}/ssh"
+    private_key="${ssh_dir}/id_ed25519"
+    public_key="${private_key}.pub"
+
+    if [[ -e "$private_key" || -e "$public_key" ]]; then
+        log_warn "SSH key already exists for VM '$name' at $ssh_dir; removing stale keys"
+        if ! rm -rf "$ssh_dir"; then
+            log_error "Failed to remove existing SSH directory: $ssh_dir"
+            return 1
+        fi
+    fi
+
+    if ! mkdir -p "$ssh_dir"; then
+        log_error "Failed to create SSH directory: $ssh_dir"
+        return 1
+    fi
+
+    if ! chmod 700 "$ssh_dir"; then
+        log_error "Failed to set permissions on SSH directory: $ssh_dir"
+        return 1
+    fi
+
+    if ! "$ssh_keygen" -t ed25519 -N "" -f "$private_key" -q; then
+        log_error "Failed to generate SSH key for VM '$name'"
+        return 1
+    fi
+
+    if [[ ! -f "$private_key" || ! -f "$public_key" ]]; then
+        log_error "SSH key generation incomplete for VM '$name'"
+        return 1
+    fi
+
+    if ! chmod 600 "$private_key"; then
+        log_error "Failed to set permissions on private key: $private_key"
+        return 1
+    fi
+
+    if ! chmod 644 "$public_key"; then
+        log_error "Failed to set permissions on public key: $public_key"
+        return 1
+    fi
+
+    echo "$private_key"
+    return 0
+}
+
 # Generate Firecracker config from template
 _generate_fc_config() {
     local name="$1"
@@ -147,13 +205,14 @@ EOF
 # Wait for VM to be reachable via SSH
 _wait_for_ssh() {
     local ip="$1"
-    local timeout="${2:-60}"
+    local ssh_key_path="$2"
+    local timeout="${3:-60}"
     local elapsed=0
 
     log_debug "Waiting for SSH on $ip (timeout: ${timeout}s)..."
 
     while [[ $elapsed -lt $timeout ]]; do
-        if ssh $FOUNDRY_SSH_OPTS -o BatchMode=yes -o ConnectTimeout=2 "${FOUNDRY_SSH_USER}@${ip}" "true" 2>/dev/null; then
+        if ssh ${ssh_key_path:+-i "$ssh_key_path"} $FOUNDRY_SSH_OPTS -o BatchMode=yes -o ConnectTimeout=2 "${FOUNDRY_SSH_USER}@${ip}" "true" 2>/dev/null; then
             log_debug "SSH available on $ip after ${elapsed}s"
             return 0
         fi
@@ -170,10 +229,46 @@ _wait_for_ssh() {
 # ============================================================================
 
 # Create a new VM from template
-# Usage: vm_create <name> [template]
+# Usage: vm_create <name> [-y|--yes] [--ssh-key <path>] [template]
 vm_create() {
     local name="$1"
-    local template="${2:-$FOUNDRY_DEFAULT_TEMPLATE}"
+    shift || true
+
+    local ssh_key_arg=""
+    local template="$FOUNDRY_DEFAULT_TEMPLATE"
+    local auto_yes=false
+
+    # Parse flags
+    while [[ $# -gt 0 ]]; do
+        case "${1:-}" in
+            -y|--yes)
+                auto_yes=true
+                shift
+                ;;
+            --ssh-key)
+                ssh_key_arg="${2:-}"
+                if [[ -z "$ssh_key_arg" ]]; then
+                    log_error "--ssh-key requires a key path"
+                    return 1
+                fi
+                shift 2
+                ;;
+            *)
+                # First non-flag argument is template
+                if [[ -n "${1:-}" ]]; then
+                    template="$1"
+                    shift
+                fi
+                break
+                ;;
+        esac
+    done
+
+    if [[ -n "${1:-}" ]]; then
+        log_error "Unexpected argument: $1"
+        log_error "Usage: vm_create <name> [-y|--yes] [--ssh-key <path>] [template]"
+        return 1
+    fi
 
     _validate_vm_name "$name" || return 1
     _require_root || return 1
@@ -181,8 +276,15 @@ vm_create() {
 
     # Check if VM already exists
     if _vm_exists "$name"; then
-        log_error "VM '$name' already exists"
-        return 1
+        if [[ "$auto_yes" == true ]]; then
+            log_info "Overwriting existing VM '$name'..."
+            vm_destroy "$name" || return 1
+        elif confirm "VM already exists. Overwrite?"; then
+            vm_destroy "$name" || return 1
+        else
+            log_error "VM '$name' already exists"
+            return 1
+        fi
     fi
 
     # Verify template exists
@@ -205,29 +307,133 @@ vm_create() {
 
     # Copy template disk using COW if available
     local disk_path
+    local ssh_key_path=""
+    local ssh_public_key=""
+    local generated_ssh_key="false"
+    local mount_dir=""
+    local mount_active="false"
+    local tap_name=""
+    local vm_ip=""
+
+    _vm_create_cleanup_mount() {
+        if [[ "$mount_active" == "true" ]]; then
+            umount "$mount_dir" 2>/dev/null || true
+            mount_active="false"
+        fi
+        if [[ -n "$mount_dir" ]]; then
+            rmdir "$mount_dir" 2>/dev/null || true
+        fi
+    }
+
+    _vm_create_cleanup_ssh_key() {
+        if [[ "$generated_ssh_key" == "true" && -n "$ssh_key_path" ]]; then
+            rm -f "$ssh_key_path" "${ssh_key_path}.pub"
+            rmdir "${FOUNDRY_VMS_DIR}/${name}/ssh" 2>/dev/null || true
+        fi
+    }
+
+    _vm_create_cleanup_tap() {
+        if [[ -n "$tap_name" ]]; then
+            if ip link show "$tap_name" >/dev/null 2>&1; then
+                ip link set "$tap_name" down 2>/dev/null || true
+                ip link delete "$tap_name" 2>/dev/null || true
+            fi
+        fi
+    }
+
+    _vm_create_fail() {
+        local message="${1:-}"
+        if [[ -n "$message" ]]; then
+            log_error "$message"
+        fi
+        _vm_create_cleanup_mount
+        _vm_create_cleanup_tap
+        _vm_create_cleanup_ssh_key
+        if [[ -n "$disk_path" ]]; then
+            rm -f "$disk_path"
+        fi
+        return 1
+    }
+
     disk_path=$(_get_disk_path "$name")
     log_debug "Copying template to $disk_path..."
 
     if cp --reflink=auto "$template_path" "$disk_path"; then
         log_debug "Disk copied (COW if supported)"
     else
-        log_error "Failed to copy template disk"
+        _vm_create_fail "Failed to copy template disk"
         return 1
     fi
 
+    if [[ -n "$ssh_key_arg" ]]; then
+        ssh_key_path="${ssh_key_arg/#\~/$FOUNDRY_HOST_HOME}"
+        if [[ ! -f "$ssh_key_path" ]]; then
+            _vm_create_fail "SSH key not found: $ssh_key_path"
+            return 1
+        fi
+        if [[ "$ssh_key_path" == *.pub ]]; then
+            ssh_public_key="$ssh_key_path"
+        else
+            ssh_public_key="${ssh_key_path}.pub"
+        fi
+        if [[ ! -f "$ssh_public_key" ]]; then
+            _vm_create_fail "SSH public key not found: $ssh_public_key"
+            return 1
+        fi
+    else
+        ssh_key_path=$(_generate_vm_ssh_key "$name") || {
+            _vm_create_fail "Failed to generate SSH key"
+            return 1
+        }
+        generated_ssh_key="true"
+        ssh_public_key="${ssh_key_path}.pub"
+    fi
+
+    log_debug "Injecting SSH key into VM disk..."
+    mount_dir=$(mktemp -d -t "foundry-vm-${name}-XXXX") || {
+        _vm_create_fail "Failed to create mount directory"
+        return 1
+    }
+    if ! mount -o loop "$disk_path" "$mount_dir"; then
+        _vm_create_fail "Failed to mount VM disk"
+        return 1
+    fi
+    mount_active="true"
+
+    if ! mkdir -p "$mount_dir/root/.ssh"; then
+        _vm_create_fail "Failed to create /root/.ssh in VM disk"
+        return 1
+    fi
+    if ! chmod 700 "$mount_dir/root/.ssh"; then
+        _vm_create_fail "Failed to set permissions on /root/.ssh"
+        return 1
+    fi
+    if ! cat "$ssh_public_key" > "$mount_dir/root/.ssh/authorized_keys"; then
+        _vm_create_fail "Failed to write authorized_keys to VM disk"
+        return 1
+    fi
+    if ! chmod 600 "$mount_dir/root/.ssh/authorized_keys"; then
+        _vm_create_fail "Failed to set permissions on authorized_keys"
+        return 1
+    fi
+
+    if ! umount "$mount_dir"; then
+        _vm_create_fail "Failed to unmount VM disk"
+        return 1
+    fi
+    mount_active="false"
+    rmdir "$mount_dir" 2>/dev/null || true
+    mount_dir=""
+
     # Allocate IP address
-    local vm_ip
     vm_ip=$(network_allocate_ip "$name") || {
-        log_error "Failed to allocate IP"
-        rm -f "$disk_path"
+        _vm_create_fail "Failed to allocate IP"
         return 1
     }
 
     # Create TAP device
-    local tap_name
     tap_name=$(network_create_tap "$name") || {
-        log_error "Failed to create TAP device"
-        rm -f "$disk_path"
+        _vm_create_fail "Failed to create TAP device"
         return 1
     }
 
@@ -240,6 +446,7 @@ vm_create() {
         \"tap\": \"$tap_name\",
         \"disk\": \"$disk_path\",
         \"kernel\": \"$kernel_path\",
+        \"ssh_key\": \"$ssh_key_path\",
         \"status\": \"stopped\",
         \"pid\": null,
         \"cpus\": $FOUNDRY_DEFAULT_CPUS,
@@ -252,9 +459,7 @@ vm_create() {
             \"session\": null
         }
     }" || {
-        log_error "Failed to register VM"
-        rm -f "$disk_path"
-        network_destroy_tap "$name"
+        _vm_create_fail "Failed to register VM"
         return 1
     }
 
@@ -294,13 +499,14 @@ vm_start() {
     log_info "Starting VM '$name'..."
 
     # Get VM configuration
-    local disk_path kernel_path tap_name vm_ip cpus memory_mb
+    local disk_path kernel_path tap_name vm_ip cpus memory_mb ssh_key
     disk_path=$(registry_get "$name" ".disk")
     kernel_path=$(registry_get "$name" ".kernel")
     tap_name=$(registry_get "$name" ".tap")
     vm_ip=$(registry_get "$name" ".ip")
     cpus=$(registry_get "$name" ".cpus")
     memory_mb=$(registry_get "$name" ".memory_mb")
+    ssh_key=$(registry_get "$name" ".ssh_key")
 
     # Verify files exist
     if [[ ! -f "$disk_path" ]]; then
@@ -374,7 +580,7 @@ vm_start() {
     log_info "VM '$name' started (PID: $fc_pid)"
 
     # Wait for SSH (optional, non-blocking info)
-    if _wait_for_ssh "$vm_ip" 30; then
+    if _wait_for_ssh "$vm_ip" "$ssh_key" 30; then
         log_info "VM '$name' is ready: ssh ${FOUNDRY_SSH_USER}@${vm_ip}"
     else
         log_warn "VM started but SSH not yet available at $vm_ip"
@@ -405,14 +611,18 @@ vm_stop() {
 
     log_info "Stopping VM '$name'..."
 
-    local pid vm_ip
+    local pid vm_ip ssh_key
     pid=$(registry_get "$name" ".pid")
     vm_ip=$(registry_get "$name" ".ip")
+    ssh_key=$(registry_get "$name" ".ssh_key")
+    if [[ "$ssh_key" == "null" ]]; then
+        ssh_key=""
+    fi
 
     # Try graceful shutdown via SSH first
     if [[ -n "$vm_ip" ]]; then
         log_debug "Attempting graceful shutdown..."
-        ssh $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "poweroff" 2>/dev/null || true
+        ssh ${ssh_key:+-i "$ssh_key"} $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "poweroff" 2>/dev/null || true
         sleep 3
     fi
 
@@ -478,9 +688,10 @@ vm_destroy() {
     fi
 
     # Get paths before removing from registry
-    local disk_path tap_name
+    local disk_path tap_name ssh_key_path
     disk_path=$(registry_get "$name" ".disk")
     tap_name=$(registry_get "$name" ".tap")
+    ssh_key_path=$(registry_get "$name" ".ssh_key")
 
     # Destroy TAP device
     network_destroy_tap "$name" || true
@@ -492,6 +703,15 @@ vm_destroy() {
     if [[ -n "$disk_path" && -f "$disk_path" ]]; then
         log_debug "Removing disk: $disk_path"
         rm -f "$disk_path"
+    fi
+
+    if [[ -n "$ssh_key_path" ]]; then
+        local ssh_dir
+        ssh_dir=$(dirname "$ssh_key_path")
+        if [[ -d "$ssh_dir" && "$ssh_dir" == "${FOUNDRY_VMS_DIR}/${name}/ssh"* ]]; then
+            log_debug "Removing SSH keys: $ssh_dir"
+            rm -rf "$ssh_dir"
+        fi
     fi
 
     # Remove socket and log
@@ -523,21 +743,28 @@ vm_ssh() {
         return 1
     fi
 
-    local status vm_ip
+    local status vm_ip ssh_key
     status=$(registry_get "$name" ".status")
     vm_ip=$(registry_get "$name" ".ip")
+    ssh_key=$(registry_get "$name" ".ssh_key")
 
     if [[ "$status" != "running" ]]; then
         log_error "VM '$name' is not running"
         return 1
     fi
+    if [[ -z "$ssh_key" || "$ssh_key" == "null" ]]; then
+        log_error "SSH key not found in registry for VM '$name'"
+        return 1
+    fi
 
     if [[ ${#cmd[@]} -eq 0 ]]; then
         # Interactive SSH
-        exec ssh $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}"
+        exec ssh -i "$ssh_key" $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}"
     else
-        # Run command
-        ssh $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "${cmd[@]}"
+        # Run command in login shell to source profile files (ensures PATH is set correctly)
+        local quoted_cmd
+        printf -v quoted_cmd '%q ' "${cmd[@]}"
+        ssh -i "$ssh_key" $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
     fi
 }
 
@@ -671,6 +898,32 @@ vm_copy() {
         return 1
     }
 
+    local ssh_key_path=""
+    local ssh_public_key=""
+    local mount_dir=""
+    local mount_active="false"
+
+    _vm_copy_cleanup() {
+        if [[ "$mount_active" == "true" ]]; then
+            umount "$mount_dir" 2>/dev/null || true
+            mount_active="false"
+        fi
+        if [[ -n "$mount_dir" ]]; then
+            rmdir "$mount_dir" 2>/dev/null || true
+        fi
+        if [[ -n "$ssh_key_path" ]]; then
+            rm -f "$ssh_key_path" "${ssh_key_path}.pub"
+            rmdir "${FOUNDRY_VMS_DIR}/${dest}/ssh" 2>/dev/null || true
+            rmdir "${FOUNDRY_VMS_DIR}/${dest}" 2>/dev/null || true
+        fi
+    }
+    _vm_copy_fail() {
+        log_error "$1"
+        _vm_copy_cleanup
+        rm -f "$dest_disk"
+        return 1
+    }
+
     # Allocate new network resources
     local vm_ip tap_name
     vm_ip=$(network_allocate_ip "$dest") || {
@@ -681,6 +934,41 @@ vm_copy() {
         rm -f "$dest_disk"
         return 1
     }
+
+    # Generate new SSH key pair for the copied VM
+    ssh_key_path=$(_generate_vm_ssh_key "$dest") || { _vm_copy_fail "Failed to generate SSH key for VM '$dest'"; return 1; }
+    ssh_public_key="${ssh_key_path}.pub"
+
+    # Update authorized_keys on the copied disk to use the new key
+    mount_dir=$(mktemp -d -t "foundry-vm-${dest}-XXXX") || { _vm_copy_fail "Failed to create mount directory"; return 1; }
+    if ! mount -o loop "$dest_disk" "$mount_dir"; then
+        _vm_copy_fail "Failed to mount copied VM disk"
+        return 1
+    fi
+    mount_active="true"
+    if ! mkdir -p "$mount_dir/root/.ssh"; then
+        _vm_copy_fail "Failed to create /root/.ssh in copied VM disk"
+        return 1
+    fi
+    if ! chmod 700 "$mount_dir/root/.ssh"; then
+        _vm_copy_fail "Failed to set permissions on /root/.ssh"
+        return 1
+    fi
+    if ! cat "$ssh_public_key" > "$mount_dir/root/.ssh/authorized_keys"; then
+        _vm_copy_fail "Failed to write authorized_keys to copied VM disk"
+        return 1
+    fi
+    if ! chmod 600 "$mount_dir/root/.ssh/authorized_keys"; then
+        _vm_copy_fail "Failed to set permissions on authorized_keys"
+        return 1
+    fi
+    if ! umount "$mount_dir"; then
+        _vm_copy_fail "Failed to unmount copied VM disk"
+        return 1
+    fi
+    mount_active="false"
+    rmdir "$mount_dir" 2>/dev/null || true
+    mount_dir=""
 
     # Get source config
     local kernel_path cpus memory_mb template
@@ -698,6 +986,7 @@ vm_copy() {
         \"tap\": \"$tap_name\",
         \"disk\": \"$dest_disk\",
         \"kernel\": \"$kernel_path\",
+        \"ssh_key\": \"$ssh_key_path\",
         \"status\": \"stopped\",
         \"pid\": null,
         \"cpus\": $cpus,
@@ -758,6 +1047,28 @@ vm_rename() {
         return 1
     }
 
+    # Update SSH key path if it lives under the VM directory
+    local old_ssh_key new_ssh_key old_ssh_dir new_ssh_dir
+    old_ssh_key=$(registry_get "$old_name" ".ssh_key")
+    if [[ -n "$old_ssh_key" && "$old_ssh_key" != "null" ]]; then
+        old_ssh_dir="${FOUNDRY_VMS_DIR}/${old_name}/ssh"
+        new_ssh_dir="${FOUNDRY_VMS_DIR}/${new_name}/ssh"
+        if [[ "$old_ssh_key" == "$old_ssh_dir/"* ]]; then
+            mkdir -p "${FOUNDRY_VMS_DIR}/${new_name}" || {
+                log_error "Failed to create VM directory for SSH keys"
+                return 1
+            }
+            if [[ -d "$old_ssh_dir" ]]; then
+                mv "$old_ssh_dir" "$new_ssh_dir" || {
+                    log_error "Failed to move SSH keys to new VM directory"
+                    return 1
+                }
+            fi
+            new_ssh_key="${old_ssh_key/$old_ssh_dir/$new_ssh_dir}"
+            rmdir "${FOUNDRY_VMS_DIR}/${old_name}" 2>/dev/null || true
+        fi
+    fi
+
     # Get current data and update
     local vm_data
     vm_data=$(registry_get "$old_name" ".")
@@ -765,12 +1076,12 @@ vm_rename() {
     # Remove old entry
     registry_remove "$old_name"
 
-    # Add with new name and updated disk path
-    echo "$vm_data" | jq --arg disk "$new_disk" '.disk = $disk' | \
-        xargs -0 -I {} registry_add "$new_name" "{}"
-
-    # Manual approach since jq output is tricky
-    registry_add "$new_name" "$(echo "$vm_data" | jq --arg disk "$new_disk" '.disk = $disk')"
+    # Add with new name and updated paths
+    if [[ -n "$new_ssh_key" ]]; then
+        registry_add "$new_name" "$(echo "$vm_data" | jq --arg disk "$new_disk" --arg ssh_key "$new_ssh_key" '.disk = $disk | .ssh_key = $ssh_key')"
+    else
+        registry_add "$new_name" "$(echo "$vm_data" | jq --arg disk "$new_disk" '.disk = $disk')"
+    fi
 
     log_info "VM renamed: '$old_name' -> '$new_name'"
 

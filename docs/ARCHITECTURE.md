@@ -42,7 +42,7 @@ Agent Foundry is a framework for managing isolated Firecracker microVMs that run
 - Base template + AI development stack
 - Pre-installed: Claude Code CLI, Gemini CLI, OpenAI CLI
 - ralph-claude-code system-wide installation in `/opt/ralph`
-- User's SSH keys for git authentication
+- Per-VM SSH keys for git authentication (generated at VM create time)
 - Docker, Node.js, Python 3, development tools
 - This is what users actually clone
 
@@ -166,7 +166,7 @@ foundry agent attach <vm-name>
 
 # Templates
 foundry template build base
-foundry template build golden --ssh-key <path>
+foundry template build golden
 ```
 
 ## Resource Configuration
@@ -176,7 +176,7 @@ foundry template build golden --ssh-key <path>
 - **RAM**: 8GB
 - **Disk**: 20GB (expandable)
 
-All configurable per-VM via `workspace.json` or CLI flags.
+All configurable per-VM via `projects/<name>/` folder or CLI flags.
 
 ## Data Storage
 
@@ -209,10 +209,12 @@ All configurable per-VM via `workspace.json` or CLI flags.
 ## Security Considerations
 
 - SSH key-based authentication only (no passwords)
+- Per-VM SSH key isolation with auto-generated keys in `~/.local/share/foundry/vms/<name>/ssh/`
+- Foundry never reads `~/.ssh/` unless you explicitly pass `--ssh-key <path>`
 - Isolated VM network namespaces
 - NAT firewall for outbound traffic
 - No inbound connections to VMs from internet
-- Git authentication via dedicated SSH keys
+- Git authentication via dedicated per-VM SSH keys
 - User-controlled VM lifecycle
 
 ## Extensibility

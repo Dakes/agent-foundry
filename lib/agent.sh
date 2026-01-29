@@ -39,11 +39,11 @@ AGENT_SCREEN_SESSION="foundry-agent"
 
 # Agent paths in VM
 RALPH_PATH="/opt/ralph/ralph"
-WORKSPACE_BASE="/work"
+WORKSPACE_BASE="/root"
 
 # SSH settings (inherit from vm.sh)
 FOUNDRY_SSH_USER="${FOUNDRY_SSH_USER:-root}"
-FOUNDRY_SSH_OPTS="${FOUNDRY_SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR}"
+FOUNDRY_SSH_OPTS="${FOUNDRY_SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -o PasswordAuthentication=no}"
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -80,9 +80,35 @@ _get_workspace_name() {
 }
 
 _ssh_cmd() {
-    local vm_ip="$1"
+    local vm_name="$1"
     shift
-    ssh $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "$@"
+
+    local vm_ip ssh_key
+    vm_ip=$(registry_get "$vm_name" ".ip")
+    ssh_key=$(registry_get "$vm_name" ".ssh_key")
+
+    # Remove quotes if present (jq output)
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
+
+    # Run command in login shell to source profile files (ensures PATH is set correctly)
+    # Use same quoting as vm_ssh for consistency (shell-escape arguments)
+    local quoted_cmd
+    printf -v quoted_cmd '%q ' "$@"
+
+    log_debug "_ssh_cmd executing: $*"
+
+    # Use -n flag to prevent SSH from reading stdin (avoids password prompts and I/O deadlocks)
+    # BatchMode=yes in FOUNDRY_SSH_OPTS ensures no interactive prompts
+    if [[ -z "$ssh_key" || "$ssh_key" == "null" ]]; then
+        ssh -n $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
+    else
+        ssh -n -i "$ssh_key" $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
+    fi
+    local rc=$?
+
+    log_debug "_ssh_cmd exit code: $rc"
+    return $rc
 }
 
 _check_vm_running() {
@@ -128,22 +154,20 @@ agent_start() {
 
     log_info "Starting $agent_type agent in VM '$vm_name'..."
 
-    local workspace_name
-    workspace_name=$(_get_workspace_name "$vm_name")
-    local workspace_path="${WORKSPACE_BASE}/${workspace_name}"
+    local workspace_path="${WORKSPACE_BASE}"
 
     case "$agent_type" in
         ralph)
-            _start_ralph "$vm_ip" "$workspace_path"
+            _start_ralph "$vm_name" "$workspace_path"
             ;;
         claude)
-            _start_interactive "$vm_ip" "$workspace_path" "claude"
+            _start_interactive "$vm_name" "$workspace_path" "claude"
             ;;
         gemini)
-            _start_interactive "$vm_ip" "$workspace_path" "gemini"
+            _start_interactive "$vm_name" "$workspace_path" "gemini"
             ;;
         codex)
-            _start_interactive "$vm_ip" "$workspace_path" "codex"
+            _start_interactive "$vm_name" "$workspace_path" "codex"
             ;;
     esac
 
@@ -164,36 +188,57 @@ agent_start() {
 
 # Start Ralph autonomous agent in tmux
 _start_ralph() {
-    local vm_ip="$1"
+    local vm_name="$1"
     local workspace_path="$2"
 
     log_debug "Starting Ralph in tmux session..."
 
-    # Check if workspace exists
-    if ! _ssh_cmd "$vm_ip" "test -d '$workspace_path'"; then
-        log_error "Workspace not found: $workspace_path"
+    # Test SSH connectivity first
+    log_debug "Testing SSH connectivity to VM..."
+    local ssh_test_output
+    if ! ssh_test_output=$(_ssh_cmd "$vm_name" "echo 'SSH OK'" 2>&1); then
+        log_error "Failed to connect to VM via SSH"
+        log_error "SSH error: $ssh_test_output"
+        log_info "Ensure VM is running: foundry vm start $vm_name"
+        return 1
+    fi
+    log_debug "SSH connectivity confirmed: $ssh_test_output"
+
+    # Check if Ralph is installed (checking for binary in PATH)
+    log_debug "Checking for ralph binary in VM..."
+    local ralph_check_output ralph_check_rc
+    ralph_check_output=$(_ssh_cmd "$vm_name" "command -v ralph")
+    ralph_check_rc=$?
+    log_debug "Ralph check output: $ralph_check_output (exit code: $ralph_check_rc)"
+
+    if [[ $ralph_check_rc -ne 0 ]]; then
+        log_error "Ralph binary not found in VM PATH"
+        log_error "Command output: $ralph_check_output"
+        log_info "Ensure Ralph is installed in the VM image"
+        return 1
+    fi
+    log_debug "Ralph found at: $ralph_check_output"
+
+    # Check if Ralph workspace is initialized (checking for .ralph directory)
+    log_debug "Checking for .ralph directory at: $workspace_path/.ralph"
+    if ! _ssh_cmd "$vm_name" "test -d '$workspace_path/.ralph'"; then
+        log_error "Ralph configuration directory not found: $workspace_path/.ralph"
         log_info "Initialize workspace first with: foundry workspace init $vm_name"
         return 1
     fi
-
-    # Check if Ralph is installed
-    if ! _ssh_cmd "$vm_ip" "command -v ralph >/dev/null 2>&1"; then
-        log_error "Ralph not installed in VM"
-        log_info "Initialize Ralph with: foundry workspace init-ralph $vm_name"
-        return 1
-    fi
+    log_debug "Ralph workspace directory found"
 
     # Kill existing session if any
-    _ssh_cmd "$vm_ip" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
+    _ssh_cmd "$vm_name" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
 
     # Start Ralph in new tmux session
     # Ralph runs with --yes to auto-confirm and --no-input for non-interactive
-    _ssh_cmd "$vm_ip" "tmux new-session -d -s $AGENT_TMUX_SESSION -c '$workspace_path' \
+    _ssh_cmd "$vm_name" "tmux new-session -d -s $AGENT_TMUX_SESSION -c '$workspace_path' \
         'ralph --yes 2>&1 | tee -a logs/ralph.log'"
 
     # Verify session started
     sleep 1
-    if _ssh_cmd "$vm_ip" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
+    if _ssh_cmd "$vm_name" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
         log_debug "Ralph tmux session started"
         return 0
     else
@@ -204,27 +249,27 @@ _start_ralph() {
 
 # Start interactive agent in screen session
 _start_interactive() {
-    local vm_ip="$1"
+    local vm_name="$1"
     local workspace_path="$2"
     local cli_name="$3"
 
     log_debug "Starting $cli_name in screen session..."
 
     # Check if workspace exists
-    if ! _ssh_cmd "$vm_ip" "test -d '$workspace_path'"; then
+    if ! _ssh_cmd "$vm_name" "test -d '$workspace_path'"; then
         log_warn "Workspace not found, using home directory"
         workspace_path="/root"
     fi
 
     # Kill existing session if any
-    _ssh_cmd "$vm_ip" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
+    _ssh_cmd "$vm_name" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
 
     # Start CLI in screen session
-    _ssh_cmd "$vm_ip" "cd '$workspace_path' && screen -dmS $AGENT_SCREEN_SESSION $cli_name"
+    _ssh_cmd "$vm_name" "cd '$workspace_path' && screen -dmS $AGENT_SCREEN_SESSION $cli_name"
 
     # Verify session started
     sleep 1
-    if _ssh_cmd "$vm_ip" "screen -list | grep -q $AGENT_SCREEN_SESSION"; then
+    if _ssh_cmd "$vm_name" "screen -list | grep -q $AGENT_SCREEN_SESSION"; then
         log_debug "$cli_name screen session started"
         return 0
     else
@@ -261,10 +306,10 @@ agent_stop() {
     log_info "Stopping $agent_type agent in VM '$vm_name'..."
 
     # Kill tmux session (for Ralph)
-    _ssh_cmd "$vm_ip" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
+    _ssh_cmd "$vm_name" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
 
     # Kill screen session (for interactive agents)
-    _ssh_cmd "$vm_ip" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
+    _ssh_cmd "$vm_name" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
 
     # Update registry
     registry_update "$vm_name" ".agent.status" "\"stopped\""
@@ -319,15 +364,23 @@ agent_attach() {
 
     _check_vm_running "$vm_name" || return 1
 
-    local vm_ip agent_type agent_status
+    local vm_ip agent_type agent_status ssh_key
     vm_ip=$(_get_vm_ip "$vm_name")
     agent_type=$(registry_get "$vm_name" ".agent.type" 2>/dev/null)
     agent_status=$(registry_get "$vm_name" ".agent.status" 2>/dev/null)
+    ssh_key=$(registry_get "$vm_name" ".ssh_key" 2>/dev/null)
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
 
     if [[ "$agent_status" != "running" ]]; then
         log_error "Agent not running in VM '$vm_name'"
         log_info "Start with: foundry agent start $vm_name"
         return 1
+    fi
+
+    local ssh_key_opt=""
+    if [[ -n "$ssh_key" && "$ssh_key" != "null" ]]; then
+        ssh_key_opt="-i $ssh_key"
     fi
 
     log_info "Attaching to $agent_type session in VM '$vm_name'..."
@@ -336,12 +389,12 @@ agent_attach() {
     case "$agent_type" in
         ralph)
             # Attach to tmux
-            exec ssh -t $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" \
+            exec ssh -t $ssh_key_opt $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" \
                 "tmux attach-session -t $AGENT_TMUX_SESSION"
             ;;
         claude|gemini|codex)
             # Attach to screen
-            exec ssh -t $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" \
+            exec ssh -t $ssh_key_opt $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" \
                 "screen -r $AGENT_SCREEN_SESSION"
             ;;
         *)
@@ -387,16 +440,16 @@ agent_status() {
         echo "Session Status (live check):"
 
         # Check tmux
-        if _ssh_cmd "$vm_ip" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
+        if _ssh_cmd "$vm_name" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
             echo "  tmux ($AGENT_TMUX_SESSION): running"
-            _ssh_cmd "$vm_ip" "tmux list-windows -t $AGENT_TMUX_SESSION 2>/dev/null" | \
+            _ssh_cmd "$vm_name" "tmux list-windows -t $AGENT_TMUX_SESSION 2>/dev/null" | \
                 sed 's/^/    /'
         else
             echo "  tmux ($AGENT_TMUX_SESSION): not running"
         fi
 
         # Check screen
-        if _ssh_cmd "$vm_ip" "screen -list | grep -q $AGENT_SCREEN_SESSION 2>/dev/null"; then
+        if _ssh_cmd "$vm_name" "screen -list | grep -q $AGENT_SCREEN_SESSION 2>/dev/null"; then
             echo "  screen ($AGENT_SCREEN_SESSION): running"
         else
             echo "  screen ($AGENT_SCREEN_SESSION): not running"
@@ -439,9 +492,7 @@ agent_logs() {
     local vm_ip
     vm_ip=$(_get_vm_ip "$vm_name")
 
-    local workspace_name
-    workspace_name=$(_get_workspace_name "$vm_name")
-    local log_path="${WORKSPACE_BASE}/${workspace_name}/logs/ralph.log"
+    local log_path="${WORKSPACE_BASE}/logs/ralph.log"
 
     log_info "Viewing agent logs from $log_path"
     if [[ -n "$follow" ]]; then
@@ -449,22 +500,30 @@ agent_logs() {
     fi
 
     # Check if log file exists
-    if ! _ssh_cmd "$vm_ip" "test -f '$log_path'"; then
+    if ! _ssh_cmd "$vm_name" "test -f '$log_path'"; then
         log_warn "Log file not found: $log_path"
         log_info "Agent may not have started or no logs generated yet"
 
         # Try alternative log locations
         echo ""
         echo "Checking alternative log locations..."
-        _ssh_cmd "$vm_ip" "ls -la ${WORKSPACE_BASE}/${workspace_name}/logs/ 2>/dev/null || echo 'No logs directory'"
+        _ssh_cmd "$vm_name" "ls -la ${WORKSPACE_BASE}/logs/ 2>/dev/null || echo 'No logs directory'"
         return 0
     fi
 
     # View or follow logs
     if [[ -n "$follow" ]]; then
-        exec ssh $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "tail -f '$log_path'"
+        local ssh_key
+        ssh_key=$(registry_get "$vm_name" ".ssh_key" 2>/dev/null)
+        ssh_key="${ssh_key%\"}"
+        ssh_key="${ssh_key#\"}"
+        local ssh_key_opt=""
+        if [[ -n "$ssh_key" && "$ssh_key" != "null" ]]; then
+            ssh_key_opt="-i $ssh_key"
+        fi
+        exec ssh $ssh_key_opt $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "tail -f '$log_path'"
     else
-        _ssh_cmd "$vm_ip" "tail -100 '$log_path'"
+        _ssh_cmd "$vm_name" "tail -100 '$log_path'"
     fi
 }
 
@@ -495,9 +554,7 @@ agent_enable_autostart() {
 
     log_info "Enabling autostart for $agent_type in VM '$vm_name'..."
 
-    local workspace_name
-    workspace_name=$(_get_workspace_name "$vm_name")
-    local workspace_path="${WORKSPACE_BASE}/${workspace_name}"
+    local workspace_path="${WORKSPACE_BASE}"
 
     # Create systemd service
     local service_content
@@ -520,13 +577,11 @@ EOF
 )
 
     # Install service
-    _ssh_cmd "$vm_ip" "cat > /etc/systemd/system/foundry-agent.service << 'EOFSERVICE'
-$service_content
-EOFSERVICE"
+    echo "$service_content" | _ssh_cmd "$vm_name" "cat > /etc/systemd/system/foundry-agent.service"
 
     # Enable and start
-    _ssh_cmd "$vm_ip" "systemctl daemon-reload"
-    _ssh_cmd "$vm_ip" "systemctl enable foundry-agent.service"
+    _ssh_cmd "$vm_name" "systemctl daemon-reload"
+    _ssh_cmd "$vm_name" "systemctl enable foundry-agent.service"
 
     log_info "Autostart enabled. Agent will start on VM boot"
     return 0
@@ -549,9 +604,9 @@ agent_disable_autostart() {
 
     log_info "Disabling autostart in VM '$vm_name'..."
 
-    _ssh_cmd "$vm_ip" "systemctl disable foundry-agent.service 2>/dev/null || true"
-    _ssh_cmd "$vm_ip" "rm -f /etc/systemd/system/foundry-agent.service"
-    _ssh_cmd "$vm_ip" "systemctl daemon-reload"
+    _ssh_cmd "$vm_name" "systemctl disable foundry-agent.service 2>/dev/null || true"
+    _ssh_cmd "$vm_name" "rm -f /etc/systemd/system/foundry-agent.service"
+    _ssh_cmd "$vm_name" "systemctl daemon-reload"
 
     log_info "Autostart disabled"
     return 0

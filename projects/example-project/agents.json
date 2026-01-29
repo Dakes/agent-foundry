@@ -1,0 +1,8 @@
+{
+  "agents": [
+    "frankbria/ralph-claude-code",
+    "@anthropic-ai/claude-code",
+    "@openai/codex",
+    "@google/gemini-cli"
+  ]
+}

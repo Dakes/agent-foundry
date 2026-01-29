@@ -163,6 +163,7 @@ ACTIONS:
 EXAMPLES:
     foundry vm create my-project
     foundry vm create my-project arch-agent-golden.ext4
+    foundry vm create my-project --ssh-key ~/.ssh/deploy_key
     foundry vm start my-project
     foundry vm ssh my-project
     foundry vm ssh my-project "uname -a"
@@ -304,7 +305,7 @@ cmd_vm() {
 
     case "$action" in
         create)
-            vm_create "$@"
+            vm_create_cmd "$@"
             ;;
         start)
             vm_start "$@"
@@ -348,6 +349,119 @@ cmd_vm() {
             return 1
             ;;
     esac
+}
+
+vm_create_cmd() {
+    local VM_NAME="${1:-}"
+    if [[ -z "$VM_NAME" ]]; then
+        log_error "VM name required"
+        echo "Usage: foundry vm create <name> [template] [-y|--yes] [--ssh-key <path>] [--project <name|path>]"
+        return 1
+    fi
+    shift || true
+
+    local TEMPLATE=""
+    local SSH_KEY_PATH=""
+    local PROJECT_NAME=""
+    local PROJECT_DIR=""
+    local AUTO_YES=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -y|--yes)
+                AUTO_YES="-y"
+                shift
+                ;;
+            --project)
+                PROJECT_NAME="${2:-}"
+                if [[ -z "$PROJECT_NAME" ]]; then
+                    log_error "--project requires a project name or path"
+                    return 1
+                fi
+                shift 2
+                ;;
+            --ssh-key)
+                SSH_KEY_PATH="${2:-}"
+                if [[ -z "$SSH_KEY_PATH" ]]; then
+                    log_error "--ssh-key requires a key path"
+                    return 1
+                fi
+                shift 2
+                ;;
+            --config)
+                log_error "--config is no longer supported"
+                return 1
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                if [[ -n "$TEMPLATE" ]]; then
+                    log_error "Unexpected argument: $1"
+                    return 1
+                fi
+                TEMPLATE="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -n "$PROJECT_NAME" ]]; then
+        # Use actual user's home, not root's home when running with doas/sudo
+        local HOST_HOME
+        HOST_HOME="$(resolve_host_home)"
+        local CONFIG_DIR="${XDG_CONFIG_HOME:-${HOST_HOME}/.config}/foundry/projects"
+
+        # Auto-detect if it's a path (contains /)
+        if [[ "$PROJECT_NAME" == */* ]]; then
+            # Treat as path
+            PROJECT_DIR="$PROJECT_NAME"
+        else
+            # Search for project in order: XDG config dir, then bundled
+            if [[ -d "$CONFIG_DIR/$PROJECT_NAME" ]]; then
+                PROJECT_DIR="$CONFIG_DIR/$PROJECT_NAME"
+            elif [[ -d "${FOUNDRY_BASE}/projects/${PROJECT_NAME}" ]]; then
+                PROJECT_DIR="${FOUNDRY_BASE}/projects/${PROJECT_NAME}"
+            fi
+        fi
+
+        if [[ -z "$PROJECT_DIR" ]] || [[ ! -d "$PROJECT_DIR" ]]; then
+            log_error "Project not found: $PROJECT_NAME"
+            log_error "Searched in: $CONFIG_DIR and ${FOUNDRY_BASE}/projects"
+            return 1
+        fi
+        if [[ ! -f "$PROJECT_DIR/git-config.json" ]]; then
+            log_error "Project missing git-config.json: $PROJECT_DIR"
+            return 1
+        fi
+    fi
+
+    if [[ -n "$TEMPLATE" ]]; then
+        if [[ -n "$SSH_KEY_PATH" ]]; then
+            vm_create "$VM_NAME" $AUTO_YES --ssh-key "$SSH_KEY_PATH" "$TEMPLATE" || return 1
+        else
+            vm_create "$VM_NAME" $AUTO_YES "$TEMPLATE" || return 1
+        fi
+    else
+        if [[ -n "$SSH_KEY_PATH" ]]; then
+            vm_create "$VM_NAME" $AUTO_YES --ssh-key "$SSH_KEY_PATH" || return 1
+        else
+            vm_create "$VM_NAME" $AUTO_YES || return 1
+        fi
+    fi
+
+    if [[ -n "$PROJECT_DIR" ]]; then
+        # Start VM before workspace init (workspace_init requires running VM)
+        log_info "Starting VM '$VM_NAME' for workspace initialization..."
+        vm_start "$VM_NAME" || {
+            log_error "Failed to start VM"
+            return 1
+        }
+
+        # workspace_init expects path to git-config.json
+        workspace_init "$VM_NAME" "$PROJECT_DIR/git-config.json"
+    fi
 }
 
 cmd_agent() {

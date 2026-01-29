@@ -28,10 +28,10 @@ foundry host setup
 
 # Build templates
 foundry template build base
-foundry template build golden --ssh-key ~/.ssh/id_agent
+foundry template build golden
 
 # Create VM
-foundry vm create my-project --config workspace.json
+foundry vm create my-project --project example-project
 
 # Start autonomous agent
 foundry agent start my-project ralph-claude-code
@@ -129,8 +129,11 @@ For NixOS hosts, use included `shell.nix`.
 
 Configurable via:
 - Global: `~/.config/foundry/config.conf`
-- Per-VM: `workspace.json`
+- Per-Project: `git-config.json` in projects/ folder
 - CLI flags: `--cpus 8 --memory 16384`
+
+### SSH Keys
+Foundry generates a per-VM SSH keypair under `~/.local/share/foundry/vms/<name>/ssh/` by default and uses it for VM access and git authentication. Foundry never reads `~/.ssh/` unless you explicitly pass `--ssh-key <path>` when creating a VM.
 
 ### Custom Packages
 Add packages to `~/.config/foundry/packages.txt`:

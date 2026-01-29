@@ -1,0 +1,17 @@
+# Agent Instructions
+
+## Project Context
+- See files in `context/` for project overview, architecture, standards
+
+## Working Memory
+- `memory/decisions.md` - Track architectural decisions
+- `memory/progress.md` - Track implementation progress
+- `memory/learnings.md` - Document patterns learned
+
+## Repositories
+- Source code is in `repos/`
+- See git-config.json for repository details
+
+## Agent-Specific Config
+- Ralph users: See `.ralph/` folder
+- Other agents: Create your own workflow files

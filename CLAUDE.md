@@ -18,6 +18,10 @@ This ensures:
 
 Do NOT manually copy the binary with `cp` as it bypasses these setup steps.
 
+## Home Directory with doas/sudo
+
+When running with doas/sudo, `$HOME` becomes `/root`. Always use `resolve_host_home()` from `lib/utils.sh` to get the actual user's home directory.
+
 ## Commit Messages
 
 Keep commit messages compact:

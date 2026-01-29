@@ -50,7 +50,7 @@ Leverage best tools for each task:
 ### 5. Simple, Powerful UX
 Host-based CLI abstracts VM complexity:
 ```bash
-foundry vm create my-project --config project.json
+foundry vm create my-project --project acme-company
 foundry agent start my-project ralph-claude-code
 foundry agent logs my-project --follow
 ```

@@ -15,19 +15,25 @@ foundry <domain> <action> [arguments] [options]
 foundry vm create <name> [options]
 
 Options:
-  --config <file>      Create from workspace config JSON
+  --project <name>    Create from project folder in projects/
   --from <snapshot>    Create from existing snapshot
   --wizard            Interactive setup wizard
   --cpus <N>          Override default CPU count
   --memory <MB>       Override default memory
   --disk <GB>         Override default disk size
+  --ssh-key <path>    Use a specific SSH key (optional)
 
 Examples:
   foundry vm create test-project
-  foundry vm create my-app --config workspace.json
+  foundry vm create my-app --project example-project
   foundry vm create new-feature --from company-base-v1
   foundry vm create experiment --cpus 4 --memory 4096
+  foundry vm create secure-vm --ssh-key /path/to/deploy-key
 ```
+
+Notes:
+- If `--ssh-key` is omitted, Foundry auto-generates a per-VM keypair under `~/.local/share/foundry/vms/<name>/ssh/`.
+- Foundry never reads `~/.ssh/` unless you explicitly pass `--ssh-key <path>`.
 
 ### List VMs
 ```bash
@@ -222,12 +228,11 @@ Types:
 
 Options:
   --packages <file>  Custom packages.txt file
-  --ssh-key <path>   SSH key for git auth (golden only)
 
 Examples:
   foundry template build base
   foundry template build base --packages custom-packages.txt
-  foundry template build golden --ssh-key ~/.ssh/id_agent
+  foundry template build golden
 ```
 
 ### List Templates
@@ -295,7 +300,7 @@ gateway_ip             Host gateway IP (default: 172.16.0.1)
 template_dir           Template storage location
 instance_dir           Instance storage location
 log_dir                Log file location
-ssh_key                Default SSH key for git auth
+ssh_key                Default SSH key for git auth (optional)
 ```
 
 ## Global Options
@@ -314,7 +319,7 @@ Available for all commands:
 ```bash
 FOUNDRY_CONFIG_DIR    Override config directory (default: ~/.config/foundry)
 FOUNDRY_DATA_DIR      Override data directory (default: ~/.local/share/foundry)
-FOUNDRY_SSH_KEY       Override default SSH key
+FOUNDRY_SSH_KEY       Override default SSH key (optional)
 EDITOR                Editor for workspace edit command
 ```
 

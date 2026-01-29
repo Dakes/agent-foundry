@@ -1,0 +1,17 @@
+{
+  "name": "example-project",
+  "repositories": [
+    {
+      "name": "github-api",
+      "url": "git@github.com:example-org/api.git",
+      "branch": "main",
+      "ssh_key": "deploy-key-example"
+    },
+    {
+      "name": "gitlab-ui",
+      "url": "git@gitlab.com:example-org/ui.git",
+      "branch": "develop",
+      "ssh_key": "deploy-key-example"
+    }
+  ]
+}
