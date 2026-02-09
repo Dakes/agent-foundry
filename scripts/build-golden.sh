@@ -431,6 +431,9 @@ cd /opt/ralph
     log_info "Creating /work directory"
     chroot "$mount_dir" mkdir -p /work
 
+    log_info "Installing update-ai-deps.sh script"
+    install -m 755 "${ROOT_DIR}/templates/update-ai-deps.sh" "$mount_dir/usr/local/bin/update-ai-deps"
+
     local host_git_config="${FOUND_HOST_HOME}/.gitconfig"
     if [[ -f "$host_git_config" ]]; then
         local git_name git_email

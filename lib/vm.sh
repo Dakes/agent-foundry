@@ -1141,6 +1141,47 @@ vm_snapshot() {
     return 0
 }
 
+# Update AI dependencies in VM
+# Usage: vm_update <name>
+vm_update() {
+    local name="$1"
+
+    _validate_vm_name "$name" || return 1
+
+    if ! _vm_exists "$name"; then
+        log_error "VM '$name' does not exist"
+        return 1
+    fi
+
+    # Must be running
+    local status
+    status=$(registry_get "$name" ".status")
+    if [[ "$status" != "running" ]]; then
+        log_error "VM '$name' is not running (status: $status)"
+        log_error "Start the VM first with: foundry vm start $name"
+        return 1
+    fi
+
+    log_info "Updating AI dependencies in VM '$name'..."
+
+    # Run update script in VM
+    local vm_ip ssh_key
+    vm_ip=$(registry_get "$name" ".ip")
+    ssh_key=$(registry_get "$name" ".ssh_key")
+
+    # Remove quotes if present (jq output)
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
+
+    if ! ssh ${FOUNDRY_SSH_OPTS} -i "$ssh_key" "${FOUNDRY_SSH_USER}@${vm_ip}" "update-ai-deps"; then
+        log_error "Failed to update AI dependencies"
+        return 1
+    fi
+
+    log_info "AI dependencies updated successfully"
+    return 0
+}
+
 # ============================================================================
 # TESTING/EXAMPLES
 # ============================================================================
