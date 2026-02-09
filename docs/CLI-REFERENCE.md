@@ -202,7 +202,7 @@ foundry workspace init-ralph <vm-name>
 
 Example:
   foundry workspace init-ralph my-project
-  # Creates PROMPT.md, @fix_plan.md, specs/, logs/ in workspace
+  # Creates PROMPT.md, fix_plan.md, specs/, logs/ in workspace
 ```
 
 ### Edit Workspace Files

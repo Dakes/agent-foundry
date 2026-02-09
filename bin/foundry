@@ -214,7 +214,7 @@ USAGE:
 
 ACTIONS:
     init <vm> <config.json>    Initialize workspace from config file
-    init-ralph <vm>            Initialize Ralph structure (PROMPT.md, @fix_plan.md)
+    init-ralph <vm>            Initialize Ralph structure (PROMPT.md, fix_plan.md, AGENT.md)
     edit <vm> <file>           Edit workspace file in $EDITOR
     info <vm>                  Show workspace information
     template [file]            Create workspace config template

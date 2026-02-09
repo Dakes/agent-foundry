@@ -8,7 +8,7 @@
 # Workspace structure:
 # /work/<project-name>/
 # ├── PROMPT.md              # Ralph instructions
-# ├── @fix_plan.md           # Task list
+# ├── fix_plan.md            # Task list
 # ├── workspace.json         # Configuration
 # ├── README.md              # Project overview
 # ├── repos/                 # Git repositories

@@ -69,7 +69,7 @@ After VM creation, Ralph structures can be initialized:
 ```bash
 cd /work/my-project
 ralph-setup
-# Creates: PROMPT.md, @fix_plan.md, specs/, src/, logs/
+# Creates: PROMPT.md, fix_plan.md, specs/, src/, logs/
 ```
 
 **Option 2: Existing Project**
@@ -88,7 +88,7 @@ Ralph operates at `/work/<project-name>/` level, orchestrating across all reposi
 ```
 /work/my-project/               # Ralph runs here
 ├── PROMPT.md                   # Main instructions
-├── @fix_plan.md               # Task prioritization
+├── fix_plan.md               # Task prioritization
 ├── specs/                      # Requirements
 ├── logs/                       # Ralph execution logs
 │
@@ -238,7 +238,7 @@ Ralph reads configuration from workspace:
 [Background information, links to context/ files]
 
 ## Current Task
-[Specific task from @fix_plan.md]
+[Specific task from fix_plan.md]
 
 ## Implementation Details
 [Specific requirements, files to modify, approach]
@@ -250,7 +250,7 @@ Ralph reads configuration from workspace:
 [Coding standards, testing requirements, commit style]
 ```
 
-### @fix_plan.md Structure
+### fix_plan.md Structure
 ```markdown
 # Fix Plan
 
@@ -313,7 +313,7 @@ Framework adds:
 2. **Reference context** - Point to architecture.md, coding-standards.md
 3. **Define success** - Clear, testable completion criteria
 4. **Guide approach** - Suggest file locations, patterns to use
-5. **Break down complexity** - Large tasks → smaller subtasks in @fix_plan.md
+5. **Break down complexity** - Large tasks → smaller subtasks in fix_plan.md
 
 ### Managing Long-Running Agents
 1. **Start small** - Test with simple task first

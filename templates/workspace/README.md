@@ -24,7 +24,7 @@ The AI agent (powered by Claude Code) uses everything here to understand your pr
 
 2. **Define the work:**
    - Edit `PROMPT.md` with the current task description
-   - Update `@fix_plan.md` with prioritized tasks
+   - Update `fix_plan.md` with prioritized tasks
    - Agent will read these files to understand what to build
 
 3. **Monitor progress:**
@@ -58,7 +58,7 @@ The AI agent (powered by Claude Code) uses everything here to understand your pr
 
 2. **Get task instructions:**
    - Read `PROMPT.md` - What should you work on?
-   - Read `@fix_plan.md` - What's the priority?
+   - Read `fix_plan.md` - What's the priority?
    - Check `memory/decisions.md` - What patterns to follow?
 
 3. **Understand history:**
@@ -75,7 +75,7 @@ The AI agent (powered by Claude Code) uses everything here to understand your pr
 5. **Commit frequently:**
    - Use conventional commits: `feat(scope): description`
    - Small, logical commits are better than big ones
-   - Include references to PROMPT.md or @fix_plan.md
+   - Include references to PROMPT.md or fix_plan.md
 
 6. **Update memory:**
    - After each session, update `memory/progress.md`
@@ -89,7 +89,7 @@ The AI agent (powered by Claude Code) uses everything here to understand your pr
 /work/<workspace-name>/
 ├── README.md                      # This file - workspace overview
 ├── PROMPT.md                      # Current task for agent (see .example)
-├── @fix_plan.md                   # Prioritized task list (see .example)
+├── fix_plan.md                   # Prioritized task list (see .example)
 ├── workspace.json                 # Workspace configuration (see .example)
 │
 ├── context/                       # Project knowledge (read-only)
@@ -147,9 +147,9 @@ These track work and learning:
 ### Task Files
 
 - **PROMPT.md** - Main instructions for current task (what to build, success criteria)
-- **@fix_plan.md** - Prioritized list of all work (agents read to find next task)
+- **fix_plan.md** - Prioritized list of all work (agents read to find next task)
 
-**How agents use them:** PROMPT.md is detailed, @fix_plan.md shows overall roadmap.
+**How agents use them:** PROMPT.md is detailed, fix_plan.md shows overall roadmap.
 
 ## Getting Started with Custom Workspace
 
@@ -166,7 +166,7 @@ mv architecture.md.example architecture.md
 
 cd ../
 mv PROMPT.md.example PROMPT.md
-mv @fix_plan.md.example @fix_plan.md
+mv fix_plan.md.example fix_plan.md
 mv workspace.json.example workspace.json
 ```
 
@@ -237,7 +237,7 @@ Edit PROMPT.md:
 - Guidelines to follow
 - Implementation details
 
-Edit @fix_plan.md:
+Edit fix_plan.md:
 - List high-priority tasks
 - Add medium and low priority items
 - Include subtasks
@@ -347,7 +347,7 @@ When building cross-service features:
 ## Typical Agent Workflow
 
 1. **Session Start (30 min)**
-   - Read PROMPT.md and @fix_plan.md
+   - Read PROMPT.md and fix_plan.md
    - Review memory files for context
    - Check environment setup
 
@@ -465,7 +465,7 @@ A: Check memory/blockers.md for details, then either resolve blocker or manually
 1. Rename `.example` files to remove suffix
 2. Customize context files with your actual information
 3. Update PROMPT.md with your first task
-4. Update @fix_plan.md with your roadmap
+4. Update fix_plan.md with your roadmap
 5. Configure workspace.json with your repositories
 6. Start the agent and monitor progress
 7. Review completed work and merge when ready

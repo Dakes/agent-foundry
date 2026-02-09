@@ -29,7 +29,7 @@ cd ralph
 # Initialize Ralph in a project
 cd /work/my-project/repos/backend
 ralph-setup
-# Creates: PROMPT.md, @fix_plan.md, specs/, src/, logs/
+# Creates: PROMPT.md, fix_plan.md, specs/, src/, logs/
 
 # OR import into existing project
 ralph-import
@@ -107,7 +107,7 @@ Ralph expects specific files in project:
 ```
 /work/my-project/repos/backend/
 ├── PROMPT.md           # Main instructions for Claude
-├── @fix_plan.md        # Task prioritization
+├── fix_plan.md        # Task prioritization
 ├── specs/              # Requirements
 ├── src/                # Implementation
 └── logs/               # Ralph execution logs
@@ -124,7 +124,7 @@ See /work/my-project/context/company.md for company overview
 See /work/my-project/context/architecture.md for system design
 
 ## Current Task
-[specific task from @fix_plan.md]
+[specific task from fix_plan.md]
 
 ## Guidelines
 Follow coding standards in /work/my-project/context/coding-standards.md

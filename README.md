@@ -150,7 +150,7 @@ rustup
 ```
 /work/<project-name>/
 ├── PROMPT.md                   # Ralph instructions
-├── @fix_plan.md               # Task list
+├── fix_plan.md               # Task list
 ├── repos/                      # Git repositories
 │   ├── backend/
 │   ├── frontend/
@@ -164,6 +164,56 @@ rustup
 │   └── decisions.md
 └── workspace.json              # Configuration
 ```
+
+## Ralph File Structure (ralph-claude-code)
+
+When using [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) for autonomous development, Agent Foundry creates a `.ralph/` directory with specific files:
+
+```
+project/
+├── .ralph/                     # Ralph configuration (hidden folder)
+│   ├── PROMPT.md              # What to do - Ralph's mission and workflow
+│   ├── fix_plan.md           # Task list - Specific bugs/features to complete
+│   ├── AGENT.md              # How to run - Build/test/deploy commands
+│   ├── specs/                 # Detailed requirements (optional)
+│   ├── logs/                  # Ralph execution logs
+│   └── .circuit_breaker_state # Ralph's safety state
+├── .ralphrc                    # Ralph configuration (tool permissions, settings)
+└── repos/                      # Your actual code
+```
+
+### File Relationships
+
+**PROMPT.md** = **What to do** (High-level mission)
+- Tells Ralph the overall goal and approach
+- How to prioritize tasks from fix_plan.md
+- Where code lives and what tools to use
+- Guidelines for making changes
+- **You write this** - defines project goals
+
+**fix_plan.md** = **Task list** (Specific work items)
+- Concrete tasks with file locations and line numbers
+- Checkbox format: `- [ ] Fix error handling in main.py:170`
+- Ralph checks these off as it completes them
+- **You write this** - what needs to be done
+
+**AGENT.md** = **How to run** (Build/test reference)
+- Technical commands: `npm test`, `uv run pytest`, etc.
+- Project structure and dependencies
+- Deployment and troubleshooting steps
+- **Auto-maintained by Ralph** - updated as it learns
+
+**The workflow:**
+```
+1. Ralph reads PROMPT.md     → "Work through fix_plan.md tasks, one at a time"
+2. Ralph reads fix_plan.md   → "Task 1: Fix error in api/client.ts:45"
+3. Ralph reads AGENT.md      → "To test: npm test"
+4. Claude makes the change   → Edits the file, runs tests
+5. Ralph checks it off       → Updates fix_plan.md: - [x] Task 1
+6. Repeat until all done     → EXIT_SIGNAL when complete
+```
+
+See `projects/example-project/.ralph/` for a complete working example.
 
 ## CLI Commands
 

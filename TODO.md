@@ -282,7 +282,7 @@
     - [ ] SSH into VM
     - [ ] Run ralph-setup in workspace
     - [ ] Create PROMPT.md template
-    - [ ] Create @fix_plan.md template
+    - [ ] Create fix_plan.md template
     - [ ] Create specs/ and logs/
 
   - [ ] `workspace_edit()` - Edit workspace file
@@ -398,7 +398,7 @@
 - [ ] `templates/workspace/memory/blockers.md`
 - [ ] `templates/workspace/memory/learnings.md`
 - [ ] `templates/workspace/PROMPT.md.example`
-- [ ] `templates/workspace/@fix_plan.md.example`
+- [ ] `templates/workspace/fix_plan.md.example`
 - [ ] `templates/workspace/workspace.json.example`
 - [ ] `templates/workspace/README.md`
 

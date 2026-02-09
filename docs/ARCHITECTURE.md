@@ -94,7 +94,7 @@ Workspaces live in `/work/<project-name>/` inside VMs:
 ```
 /work/<project-name>/
 ├── PROMPT.md                   # Ralph instructions
-├── @fix_plan.md               # Task list
+├── fix_plan.md               # Task list
 ├── specs/                      # Requirements
 ├── logs/                       # Ralph logs
 │

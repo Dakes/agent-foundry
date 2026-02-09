@@ -45,7 +45,7 @@
 - [x] **12 template files** created (164 KB total):
   - context/: company.md, instructions.md, coding-standards.md, architecture.md
   - memory/: decisions.md, progress.md, blockers.md, learnings.md
-  - PROMPT.md, @fix_plan.md, workspace.json, README.md
+  - PROMPT.md, fix_plan.md, workspace.json, README.md
   - All with realistic examples and detailed documentation
 
 #### Phase 4: Configuration

@@ -68,7 +68,7 @@
   - Rate limiting (100 calls/hour, configurable)
   - tmux-based monitoring
 - **Dependencies**: Bash 4.0+, Claude Code CLI (npm), tmux, jq, git
-- **Project structure**: PROMPT.md, @fix_plan.md, specs/, src/, logs/
+- **Project structure**: PROMPT.md, fix_plan.md, specs/, src/, logs/
 
 ### Skills System
 - Skills folder in repo (not tracked)
