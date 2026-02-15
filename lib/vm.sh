@@ -528,9 +528,11 @@ vm_start() {
         return 1
     fi
 
-    # Ensure network bridge exists
-    if ! ip link show "$FOUNDRY_BRIDGE" >/dev/null 2>&1; then
-        log_warn "Bridge '$FOUNDRY_BRIDGE' not found. Initializing network..."
+    # Ensure bridge and gateway IP are present.
+    # Bridge can exist without the expected gateway address after host/network resets.
+    if ! ip link show "$FOUNDRY_BRIDGE" >/dev/null 2>&1 || \
+       ! ip -o -4 addr show dev "$FOUNDRY_BRIDGE" | grep -q "${FOUNDRY_GATEWAY}/"; then
+        log_warn "Network bridge state incomplete. Re-initializing network..."
         network_init || return 1
     fi
 
@@ -540,12 +542,9 @@ vm_start() {
         ip tuntap add dev "$tap_name" mode tap || return 1
         ip link set "$tap_name" up || return 1
     fi
-    
-    # Always ensure TAP is attached to bridge and UP
-    if ! bridge link show dev "$tap_name" >/dev/null 2>&1; then
-        log_debug "Attaching $tap_name to $FOUNDRY_BRIDGE..."
-        ip link set "$tap_name" master "$FOUNDRY_BRIDGE" || return 1
-    fi
+
+    # Always attach TAP to the bridge; this is idempotent and fixes stale/missing master assignment.
+    ip link set "$tap_name" master "$FOUNDRY_BRIDGE" || return 1
     ip link set "$tap_name" up || return 1
     ip link set "$FOUNDRY_BRIDGE" up || return 1
 
