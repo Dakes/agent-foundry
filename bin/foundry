@@ -215,6 +215,7 @@ USAGE:
 
 ACTIONS:
     init <vm> <config.json>    Initialize workspace from config file
+    sync <vm> [project]        Sync latest project files (.ralph/.claude/*.md) into VM (ignores editor swap files)
     init-ralph <vm>            Initialize Ralph structure (PROMPT.md, fix_plan.md, AGENT.md)
     edit <vm> <file>           Edit workspace file in $EDITOR
     info <vm>                  Show workspace information
@@ -234,6 +235,8 @@ CONFIG FILE FORMAT (JSON):
 EXAMPLES:
     foundry workspace template my-project.json
     foundry workspace init my-project my-project.json
+    foundry workspace sync my-project
+    foundry workspace sync my-project reowls
     foundry workspace init-ralph my-project
     foundry workspace edit my-project PROMPT.md
     foundry workspace info my-project
@@ -465,6 +468,10 @@ vm_create_cmd() {
 
         # workspace_init expects path to git-config.json
         workspace_init "$VM_NAME" "$PROJECT_DIR/git-config.json"
+
+        # Persist project metadata for future workspace sync operations.
+        registry_update "$VM_NAME" ".project_dir" "\"$PROJECT_DIR\""
+        registry_update "$VM_NAME" ".project_name" "\"$(basename "$PROJECT_DIR")\""
     fi
 }
 
@@ -515,6 +522,9 @@ cmd_workspace() {
     case "$action" in
         init)
             workspace_init "$@"
+            ;;
+        sync)
+            workspace_sync "$@"
             ;;
         init-ralph)
             workspace_init_ralph "$@"

@@ -237,6 +237,9 @@ foundry agent logs <vm> --follow
 foundry agent attach <vm>
 foundry agent status --all
 
+# Workspace sync
+foundry workspace sync <vm>
+
 # Templates
 foundry template build base      # Downloads Ubuntu 22.04 base
 foundry template build golden    # Configures AI tools (apt based)

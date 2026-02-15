@@ -196,6 +196,17 @@ Examples:
 
 ## Workspace Management
 
+### Sync Workspace Files to VM
+```bash
+foundry workspace sync <vm-name> [project]
+
+Examples:
+  foundry workspace sync my-project
+  foundry workspace sync my-project reowls
+  foundry workspace sync my-project ~/.config/foundry/projects/reowls
+  # Updates .ralph/.claude/.codex/.gemini, .ralphrc, and top-level *.md files in /root/
+```
+
 ### Initialize Ralph Structure
 ```bash
 foundry workspace init-ralph <vm-name>

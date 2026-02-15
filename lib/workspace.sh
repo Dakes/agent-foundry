@@ -276,6 +276,85 @@ _validate_config_file() {
 # WORKSPACE INITIALIZATION
 # ============================================================================
 
+_resolve_project_dir() {
+    local vm_name="$1"
+    local project_ref="${2:-}"
+
+    # Use actual user's home, not root's home when running with doas/sudo.
+    local host_home
+    host_home="$(resolve_host_home)"
+    local config_projects_dir="${XDG_CONFIG_HOME:-${host_home}/.config}/foundry/projects"
+    local bundled_projects_dir="${FOUNDRY_BASE_DIR}/projects"
+
+    local project_dir=""
+
+    # 1) Explicit reference from CLI.
+    if [[ -n "$project_ref" ]]; then
+        if [[ -f "$project_ref" ]]; then
+            # Support passing git-config.json path directly.
+            project_dir="$(dirname "$project_ref")"
+        elif [[ -d "$project_ref" ]]; then
+            # Support passing absolute/relative project directory.
+            project_dir="$project_ref"
+        elif [[ -d "$config_projects_dir/$project_ref" ]]; then
+            # Support passing project name.
+            project_dir="$config_projects_dir/$project_ref"
+        elif [[ -d "$bundled_projects_dir/$project_ref" ]]; then
+            project_dir="$bundled_projects_dir/$project_ref"
+        fi
+    fi
+
+    # 2) Persisted project directory in VM registry metadata.
+    if [[ -z "$project_dir" ]]; then
+        local stored_project_dir
+        stored_project_dir=$(registry_get "$vm_name" ".project_dir" 2>/dev/null || true)
+        if [[ -n "$stored_project_dir" && "$stored_project_dir" != "null" && -d "$stored_project_dir" ]]; then
+            project_dir="$stored_project_dir"
+        fi
+    fi
+
+    # 3) Persisted project name in VM registry metadata.
+    if [[ -z "$project_dir" ]]; then
+        local stored_project_name
+        stored_project_name=$(registry_get "$vm_name" ".project_name" 2>/dev/null || true)
+        if [[ -n "$stored_project_name" && "$stored_project_name" != "null" ]]; then
+            if [[ -d "$config_projects_dir/$stored_project_name" ]]; then
+                project_dir="$config_projects_dir/$stored_project_name"
+            elif [[ -d "$bundled_projects_dir/$stored_project_name" ]]; then
+                project_dir="$bundled_projects_dir/$stored_project_name"
+            fi
+        fi
+    fi
+
+    # 4) Fallback: infer from VM name.
+    if [[ -z "$project_dir" ]]; then
+        if [[ -d "$config_projects_dir/$vm_name" ]]; then
+            project_dir="$config_projects_dir/$vm_name"
+        elif [[ -d "$bundled_projects_dir/$vm_name" ]]; then
+            project_dir="$bundled_projects_dir/$vm_name"
+        fi
+    fi
+
+    if [[ -z "$project_dir" ]]; then
+        log_error "Could not resolve project directory."
+        log_error "Tried explicit input, VM metadata, and name-based lookup."
+        log_error "Provide a project path/name explicitly: foundry workspace sync <vm> <project|path>"
+        return 1
+    fi
+
+    if [[ ! -f "$project_dir/git-config.json" ]]; then
+        log_error "Project missing git-config.json: $project_dir"
+        return 1
+    fi
+
+    if [[ ! -f "$project_dir/agents.json" ]]; then
+        log_error "Project missing agents.json: $project_dir"
+        return 1
+    fi
+
+    echo "$project_dir"
+}
+
 # Initialize workspace in VM from config file
 # Usage: workspace_init <vm_name> <config_file>
 #
@@ -416,6 +495,86 @@ workspace_init() {
     log_info "Next steps:"
     log_info "  1. Start coding in /root/repos/"
     log_info "  2. Edit PROMPT.md or other context files as needed"
+
+    return 0
+}
+
+# Sync project configuration and agent dotfiles into an existing VM workspace.
+# This updates mutable workspace files without recloning repositories.
+# Usage: workspace_sync <vm_name> [project_name|project_dir|git-config.json]
+workspace_sync() {
+    local vm_name="${1:-}"
+    local project_ref="${2:-}"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        log_error "Usage: foundry workspace sync <vm> [project|path]"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    local project_dir
+    project_dir=$(_resolve_project_dir "$vm_name" "$project_ref") || return 1
+
+    local vm_ip ssh_key_path
+    vm_ip=$(_get_vm_ip "$vm_name")
+    ssh_key_path=$(_get_vm_ssh_key "$vm_name")
+
+    local workspace_path="$WORKSPACE_BASE"
+
+    log_info "Syncing workspace files to VM '$vm_name' from: $project_dir"
+
+    # Ensure workspace exists before syncing.
+    if ! _ssh_cmd "$vm_name" "test -d '$workspace_path'"; then
+        log_error "Workspace path does not exist in VM: $workspace_path"
+        log_error "Initialize first: foundry workspace init $vm_name $project_dir/git-config.json"
+        return 1
+    fi
+
+    # Sync agent dotfolders for known agent integrations.
+    local -a dotfolders=(".ralph" ".claude" ".codex" ".gemini")
+    local dotfolder
+    for dotfolder in "${dotfolders[@]}"; do
+        if [[ -d "$project_dir/$dotfolder" ]]; then
+            log_info "Syncing $dotfolder/"
+            _ssh_cmd "$vm_name" "mkdir -p '$workspace_path/$dotfolder'"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$dotfolder/." "$workspace_path/$dotfolder/"
+            # Remove editor temp/swap files after sync.
+            _ssh_cmd "$vm_name" "find '$workspace_path/$dotfolder' -type f \
+                \\( -name '*.swp' -o -name '*.swo' -o -name '*.swn' -o -name '*.kate-swp' -o -name '*~' -o -name '.#*' -o -name '#*#' \\) \
+                -delete"
+        fi
+    done
+
+    # Sync common agent config files when present.
+    local -a config_files=(".ralphrc")
+    local config_file
+    for config_file in "${config_files[@]}"; do
+        if [[ -f "$project_dir/$config_file" ]]; then
+            log_info "Syncing $config_file"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$config_file" "$workspace_path/$config_file"
+        fi
+    done
+
+    # Sync top-level markdown context/docs files.
+    local md_files
+    md_files=$(find "$project_dir" -maxdepth 1 -name "*.md" -type f 2>/dev/null || true)
+    if [[ -n "$md_files" ]]; then
+        log_info "Syncing markdown files"
+        while IFS= read -r md_file; do
+            local filename
+            filename=$(basename "$md_file")
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$md_file" "$workspace_path/$filename"
+        done <<< "$md_files"
+    fi
+
+    # Refresh metadata for future sync auto-detection.
+    registry_update "$vm_name" ".project_dir" "\"$project_dir\""
+    registry_update "$vm_name" ".project_name" "\"$(basename "$project_dir")\""
+
+    log_info "Workspace sync complete."
+    log_info "Updated: dotfolders (.ralph/.claude/.codex/.gemini), .ralphrc, and top-level *.md files."
 
     return 0
 }
