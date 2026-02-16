@@ -190,6 +190,7 @@ ACTIONS:
     logs <vm> [-f|--follow]    View agent logs
     enable-autostart <vm>      Enable agent autostart on boot
     disable-autostart <vm>     Disable agent autostart
+    gh-watcher <action> <vm>   Manage GitHub watcher (see: foundry agent gh-watcher help)
 
 AGENT TYPES:
     ralph   - ralph-claude-code autonomous agent (default, runs in tmux)
@@ -203,6 +204,70 @@ EXAMPLES:
     foundry agent logs my-project --follow
     foundry agent stop my-project
     foundry agent enable-autostart my-project
+    foundry agent gh-watcher init my-project
+EOF
+}
+
+show_gh_watcher_help() {
+    cat << 'EOF'
+foundry agent gh-watcher - Automated GitHub issue/PR monitoring
+
+USAGE:
+    foundry agent gh-watcher <action> <vm>
+
+DESCRIPTION:
+    The GitHub watcher monitors repositories for @ralph mentions in issues
+    and pull requests, automatically triggers Ralph to work on tasks, and
+    creates pull requests when complete.
+
+ACTIONS:
+    init <vm>              Initialize GitHub watcher (prompts for config)
+    start <vm>             Start watcher daemon in background
+    stop <vm>              Stop watcher daemon
+    status <vm>            Show watcher status and task queue
+    logs <vm> [--follow]   View watcher logs
+    reset <vm>             Clear processed task history
+
+WORKFLOW:
+    1. User creates issue or PR comment with @ralph mention
+    2. Watcher detects mention within 60 seconds
+    3. Watcher populates fix_plan.md with task context
+    4. Watcher starts Ralph to work autonomously
+    5. Ralph creates PR when complete (or posts error comment)
+    6. Watcher resumes polling for new tasks
+
+CONFIGURATION:
+    Location: /root/.config/gh-watcher/ (inside VM)
+    - config.conf      Watcher settings (repos, poll interval)
+    - processed.json   Completed task history
+    - watcher.log      Activity log
+
+GITHUB TOKEN:
+    Required permissions (Fine-grained Personal Access Token):
+    - Issues: Read and write
+    - Pull requests: Read and write
+    - Contents: Read only
+
+    Create at: https://github.com/settings/tokens?type=beta
+
+EXAMPLES:
+    # Setup
+    foundry agent gh-watcher init my-vm
+    foundry agent gh-watcher start my-vm
+
+    # Monitor
+    foundry agent gh-watcher status my-vm
+    foundry agent gh-watcher logs my-vm --follow
+
+    # Maintenance
+    foundry agent gh-watcher stop my-vm
+    foundry agent gh-watcher reset my-vm
+
+PRIORITY:
+    1. @ralph in PR comments (fixes to existing PRs)
+    2. @ralph in issues (new features/bugs)
+
+For more information, see: docs/designs/2026-02-15-github-watcher-automation.md
 EOF
 }
 
@@ -503,6 +568,39 @@ cmd_agent() {
             ;;
         disable-autostart)
             agent_disable_autostart "$@"
+            ;;
+        gh-watcher)
+            # GitHub watcher subcommands
+            local gh_action="${1:-help}"
+            shift || true
+            case "$gh_action" in
+                init)
+                    agent_gh_watcher_init "$@"
+                    ;;
+                start)
+                    agent_gh_watcher_start "$@"
+                    ;;
+                stop)
+                    agent_gh_watcher_stop "$@"
+                    ;;
+                status)
+                    agent_gh_watcher_status "$@"
+                    ;;
+                logs)
+                    agent_gh_watcher_logs "$@"
+                    ;;
+                reset)
+                    agent_gh_watcher_reset "$@"
+                    ;;
+                help|--help|-h)
+                    show_gh_watcher_help
+                    ;;
+                *)
+                    log_error "Unknown gh-watcher action: $gh_action"
+                    echo "Run 'foundry agent gh-watcher help' for usage"
+                    return 1
+                    ;;
+            esac
             ;;
         help|--help|-h)
             show_agent_help

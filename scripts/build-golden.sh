@@ -350,7 +350,18 @@ EOF
         # Build & Dev Tools
         build-essential shellcheck
     )
-    local all_packages=("${core_packages[@]}" "${custom_packages[@]}")
+
+    # GitHub CLI needs to be installed from its own repo (not in Ubuntu repos)
+    log_info "Adding GitHub CLI repository"
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o "$mount_dir/usr/share/keyrings/githubcli-archive-keyring.gpg"
+    chmod 644 "$mount_dir/usr/share/keyrings/githubcli-archive-keyring.gpg"
+    cat > "$mount_dir/etc/apt/sources.list.d/github-cli.list" <<EOF
+deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main
+EOF
+    chroot "$mount_dir" apt-get update
+
+    # Add gh to packages list
+    local all_packages=(gh "${core_packages[@]}" "${custom_packages[@]}")
     install_packages "$mount_dir" "${all_packages[@]}"
 
     log_info "Installing nvm and Node.js 24"
@@ -433,6 +444,10 @@ cd /opt/ralph
 
     log_info "Installing update-ai-deps.sh script"
     install -m 755 "${ROOT_DIR}/templates/update-ai-deps.sh" "$mount_dir/usr/local/bin/update-ai-deps"
+
+    log_info "Installing ralph-gh-watcher script"
+    chroot "$mount_dir" mkdir -p /opt/foundry
+    install -m 755 "${ROOT_DIR}/templates/ralph/ralph_gh_watcher.sh" "$mount_dir/opt/foundry/ralph_gh_watcher.sh"
 
     local host_git_config="${FOUND_HOST_HOME}/.gitconfig"
     if [[ -f "$host_git_config" ]]; then

@@ -668,6 +668,294 @@ agent_disable_autostart() {
 }
 
 # ============================================================================
+# GITHUB WATCHER MANAGEMENT
+# ============================================================================
+
+# Initialize GitHub watcher for a VM
+# Usage: agent_gh_watcher_init <vm_name>
+agent_gh_watcher_init() {
+    local vm_name="$1"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    log_info "Initializing GitHub watcher for VM '$vm_name'..."
+
+    # Prompt for configuration
+    echo ""
+    echo "GitHub Watcher Configuration"
+    echo "============================="
+    echo ""
+
+    local watched_repos github_token
+
+    # Get repositories to watch
+    read -r -p "Enter repositories to watch (comma-separated, e.g., owner/repo1,owner/repo2): " watched_repos
+    if [[ -z "$watched_repos" ]]; then
+        log_error "No repositories specified"
+        return 1
+    fi
+
+    # Get GitHub token
+    echo ""
+    echo "GitHub Token Setup"
+    echo "=================="
+    echo "You need a fine-grained Personal Access Token with these permissions:"
+    echo "  - Issues: Read and write"
+    echo "  - Pull requests: Read and write"
+    echo "  - Contents: Read only"
+    echo ""
+    echo "Create one at: https://github.com/settings/tokens?type=beta"
+    echo ""
+    read -r -s -p "Enter GitHub token (input hidden): " github_token
+    echo ""
+
+    if [[ -z "$github_token" ]]; then
+        log_error "No token provided"
+        return 1
+    fi
+
+    # Create config directory in VM
+    _ssh_cmd "$vm_name" "mkdir -p /root/.config/gh-watcher /root/.config/gh"
+
+    # Create GitHub token file
+    _ssh_cmd "$vm_name" "echo '$github_token' > /root/.config/gh/token"
+    _ssh_cmd "$vm_name" "chmod 600 /root/.config/gh/token"
+
+    # Create config file
+    local config_content
+    config_content=$(cat <<EOF
+# GitHub Watcher Configuration
+
+# Enable automatic polling
+WATCHER_ENABLED=true
+
+# Polling interval in seconds
+POLL_INTERVAL=60
+
+# Repositories to monitor (comma-separated)
+WATCHED_REPOS="$watched_repos"
+
+# GitHub token location
+GITHUB_TOKEN_FILE="/root/.config/gh/token"
+
+# Ralph execution timeout in minutes (max 120 per Ralph's limit)
+RALPH_TIMEOUT=120
+
+# Post error comments on failure
+POST_ERROR_COMMENTS=true
+EOF
+)
+
+    # Write config file using echo (heredoc doesn't work with _ssh_cmd's -n flag)
+    local config_escaped
+    config_escaped="${config_content//\"/\\\"}"
+    _ssh_cmd "$vm_name" "echo \"$config_escaped\" > /root/.config/gh-watcher/config.conf"
+
+    # Initialize processed.json
+    _ssh_cmd "$vm_name" 'echo "{
+  \\\"version\\\": \\\"1.0\\\",
+  \\\"processed\\\": {},
+  \\\"last_poll\\\": \\\"1970-01-01T00:00:00Z\\\"
+}" > /root/.config/gh-watcher/processed.json'
+
+    # Create log file
+    _ssh_cmd "$vm_name" "touch /root/.config/gh-watcher/watcher.log"
+
+    log_info "GitHub watcher initialized successfully"
+    log_info "  Watching: $watched_repos"
+    log_info "  Ralph workspace: /root"
+    log_info ""
+    log_info "Start watcher with: foundry agent gh-watcher start $vm_name"
+
+    return 0
+}
+
+# Start GitHub watcher daemon
+# Usage: agent_gh_watcher_start <vm_name>
+agent_gh_watcher_start() {
+    local vm_name="$1"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    # Check if config exists
+    if ! _ssh_cmd "$vm_name" "test -f /root/.config/gh-watcher/config.conf"; then
+        log_error "GitHub watcher not initialized"
+        log_info "Run: foundry agent gh-watcher init $vm_name"
+        return 1
+    fi
+
+    # Check if watcher already running
+    if _ssh_cmd_tty "$vm_name" "tmux has-session -t ralph-gh-watcher 2>/dev/null"; then
+        log_warn "GitHub watcher already running in VM '$vm_name'"
+        return 0
+    fi
+
+    log_info "Starting GitHub watcher in VM '$vm_name'..."
+
+    # Start watcher in tmux session
+    _ssh_cmd_tty "$vm_name" "tmux new-session -d -s ralph-gh-watcher '/opt/foundry/ralph_gh_watcher.sh start'"
+
+    # Verify session started
+    sleep 1
+    if _ssh_cmd_tty "$vm_name" "tmux has-session -t ralph-gh-watcher 2>/dev/null"; then
+        log_info "GitHub watcher started successfully"
+        log_info "  View logs: foundry agent gh-watcher logs $vm_name"
+        log_info "  Check status: foundry agent gh-watcher status $vm_name"
+        return 0
+    else
+        log_error "Failed to start GitHub watcher"
+        return 1
+    fi
+}
+
+# Stop GitHub watcher daemon
+# Usage: agent_gh_watcher_stop <vm_name>
+agent_gh_watcher_stop() {
+    local vm_name="$1"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    log_info "Stopping GitHub watcher in VM '$vm_name'..."
+
+    # Kill tmux session
+    _ssh_cmd_tty "$vm_name" "tmux kill-session -t ralph-gh-watcher 2>/dev/null || true"
+
+    log_info "GitHub watcher stopped"
+    return 0
+}
+
+# Show GitHub watcher status
+# Usage: agent_gh_watcher_status <vm_name>
+agent_gh_watcher_status() {
+    local vm_name="${1:-}"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    log_info "Fetching GitHub watcher status from VM '$vm_name'..."
+    echo ""
+
+    _ssh_cmd "$vm_name" "/opt/foundry/ralph_gh_watcher.sh status"
+}
+
+# View GitHub watcher logs
+# Usage: agent_gh_watcher_logs <vm_name> [--follow|-f]
+agent_gh_watcher_logs() {
+    local vm_name="$1"
+    local follow=""
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --follow|-f)
+                follow="-f"
+                ;;
+            *)
+                log_warn "Unknown option: $1"
+                ;;
+        esac
+        shift
+    done
+
+    _check_vm_running "$vm_name" || return 1
+
+    local log_path="/root/.config/gh-watcher/watcher.log"
+
+    log_info "Viewing GitHub watcher logs from $log_path"
+    if [[ -n "$follow" ]]; then
+        log_info "Following logs... (Ctrl+C to stop)"
+    fi
+    echo ""
+
+    # Check if log file exists
+    if ! _ssh_cmd "$vm_name" "test -f '$log_path'"; then
+        log_warn "Log file not found: $log_path"
+        log_info "Watcher may not have started yet"
+        return 0
+    fi
+
+    # View or follow logs
+    if [[ -n "$follow" ]]; then
+        local ssh_key
+        ssh_key=$(registry_get "$vm_name" ".ssh_key" 2>/dev/null)
+        ssh_key="${ssh_key%\"}"
+        ssh_key="${ssh_key#\"}"
+        local ssh_key_opt=""
+        if [[ -n "$ssh_key" && "$ssh_key" != "null" ]]; then
+            ssh_key_opt="-i $ssh_key"
+        fi
+
+        local vm_ip
+        vm_ip=$(_get_vm_ip "$vm_name")
+
+        exec ssh $ssh_key_opt $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "tail -f '$log_path'"
+    else
+        _ssh_cmd "$vm_name" "tail -100 '$log_path'"
+    fi
+}
+
+# Reset GitHub watcher state (clear processed tasks)
+# Usage: agent_gh_watcher_reset <vm_name>
+agent_gh_watcher_reset() {
+    local vm_name="$1"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    log_warn "This will clear all processed task history"
+    if ! confirm "Are you sure?"; then
+        log_info "Cancelled"
+        return 0
+    fi
+
+    log_info "Resetting GitHub watcher state in VM '$vm_name'..."
+
+    # Reset processed.json
+    _ssh_cmd "$vm_name" "cat > /root/.config/gh-watcher/processed.json" <<'EOF'
+{
+  "version": "1.0",
+  "processed": {},
+  "last_poll": "1970-01-01T00:00:00Z"
+}
+EOF
+
+    # Remove current task file
+    _ssh_cmd "$vm_name" "rm -f /root/.config/gh-watcher/current_task.json"
+
+    log_info "GitHub watcher state reset"
+    log_info "All previously processed tasks have been cleared"
+    return 0
+}
+
+# ============================================================================
 # TESTING/EXAMPLES
 # ============================================================================
 #
@@ -695,4 +983,12 @@ agent_disable_autostart() {
 #
 #   # Enable autostart on boot
 #   agent_enable_autostart my-project
+#
+#   # GitHub Watcher
+#   foundry agent gh-watcher init my-project
+#   foundry agent gh-watcher start my-project
+#   foundry agent gh-watcher status my-project
+#   foundry agent gh-watcher logs my-project --follow
+#   foundry agent gh-watcher stop my-project
+#   foundry agent gh-watcher reset my-project
 #
