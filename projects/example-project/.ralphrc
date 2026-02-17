@@ -1,0 +1,27 @@
+# Ralph configuration for example project
+# This is a PROJECT-SPECIFIC configuration that overrides the default template.
+#
+# This file will be copied to /root/.ralphrc in the VM, replacing the default.
+# Customize these settings based on your project's needs.
+
+PROJECT_NAME="example-project"
+PROJECT_TYPE="typescript"
+
+# Loop settings
+MAX_CALLS_PER_HOUR=100
+CLAUDE_TIMEOUT_MINUTES=15
+CLAUDE_OUTPUT_FORMAT="json"
+
+# Tool permissions - FULL ACCESS
+# VMs have root access and run autonomously, so all tools are allowed
+# This enables Claude to install dependencies, run commands, and manage the system
+ALLOWED_TOOLS="Write,Read,Edit,Glob,Grep,Task,TodoWrite,WebFetch,WebSearch,NotebookEdit,Bash"
+
+# Session management
+SESSION_CONTINUITY=true
+SESSION_EXPIRY_HOURS=24
+
+# Circuit breaker thresholds
+CB_NO_PROGRESS_THRESHOLD=3
+CB_SAME_ERROR_THRESHOLD=5
+CB_OUTPUT_DECLINE_THRESHOLD=70

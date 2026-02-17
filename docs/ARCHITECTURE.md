@@ -89,54 +89,39 @@ Located at `~/.config/foundry/vms.json`:
 
 ## Workspace Structure
 
-Workspaces live in `/work/<project-name>/` inside VMs:
+Current runtime workspace lives in `/root` inside each VM:
 
 ```
-/work/<project-name>/
-├── PROMPT.md                   # Ralph instructions
-├── fix_plan.md               # Task list
-├── specs/                      # Requirements
-├── logs/                       # Ralph logs
-│
+/root/
 ├── repos/                      # Git repositories
-│   ├── backend/
-│   ├── frontend/
-│   └── shared-lib/
-│
-├── context/                    # AI agent context (read-only)
-│   ├── company.md
-│   ├── instructions.md
-│   ├── coding-standards.md
-│   └── architecture.md
-│
-├── memory/                     # Agent memory (read-write)
-│   ├── decisions.md
-│   ├── progress.md
-│   ├── blockers.md
-│   └── learnings.md
-│
-├── workspace.json
-└── README.md
+├── .ralph/                     # Ralph config + plans
+├── .claude/                    # Claude config (optional)
+├── .codex/                     # Codex config (optional)
+├── .gemini/                    # Gemini config (optional)
+├── .ralphrc                    # Ralph runtime config
+├── *.md                        # Top-level project docs
+└── logs/
+    └── ralph.log
 ```
 
 ## Agent Integration
 
 ### Supported Agent Types
 
-1. **ralph-claude-code** (Autonomous)
+1. **ralph** (Autonomous)
    - Continuous loop until tasks complete
    - Built-in tmux monitoring
    - Primary autonomous agent
 
-2. **claude-code** (Interactive)
+2. **claude** (Interactive)
    - Claude Code CLI in screen session
    - Manual or script-driven
 
-3. **gemini-cli** (Interactive)
+3. **gemini** (Interactive)
    - Google's Gemini CLI
    - Screen session for interaction
 
-4. **openai-codex** (Interactive)
+4. **codex** (Interactive)
    - OpenAI's Codex CLI
    - Screen session for interaction
 
@@ -172,11 +157,11 @@ foundry template build golden
 ## Resource Configuration
 
 ### Default Resources Per VM
-- **CPU**: 50% of host cores
+- **CPU**: 4 vCPUs
 - **RAM**: 8GB
 - **Disk**: 20GB (expandable)
 
-All configurable per-VM via `projects/<name>/` folder or CLI flags.
+Configured via defaults in `config/default.conf` and user overrides in `~/.config/foundry/config.conf`.
 
 ## Data Storage
 

@@ -2,7 +2,7 @@
 
 ## Project Status
 
-🚧 **Phase 1: Foundation** - In Progress
+🚧 **Phase 2+: Active Development** - In Progress
 
 ## Phase 1: Foundation & Core Structure ✅
 
@@ -17,18 +17,18 @@
 - [x] Initialize git repository
 
 ### Project Setup 🔄
-- [ ] Create LICENSE file (MIT)
-- [ ] Create shell.nix for NixOS development
-- [ ] Create install.sh script
-- [ ] Set up config/ directory with default configs
-- [ ] Create template workspace files
+- [x] Create LICENSE file (MIT)
+- [x] Create shell.nix for NixOS development
+- [x] Create install.sh script
+- [x] Set up config/ directory with default configs
+- [x] Create template workspace files
 - [ ] Create template systemd service
-- [ ] Create example workspace.json files
+- [x] Create example project config files
 
 ## Phase 2: Host Setup & Dependencies
 
 ### Host Configuration Scripts
-- [ ] `scripts/setup-host.sh` - Master setup script
+- [x] `scripts/setup-host.sh` - Master setup script
   - [ ] Detect host OS (Arch, NixOS, Ubuntu, Fedora)
   - [ ] Check for KVM support
   - [ ] Check/install dependencies
@@ -37,14 +37,14 @@
   - [ ] Initialize config directories
   - [ ] Validate setup
 
-- [ ] `scripts/install-firecracker.sh`
+- [x] `scripts/install-firecracker.sh`
   - [ ] Download Firecracker binary
   - [ ] Verify checksum
   - [ ] Install to /usr/local/bin/
   - [ ] Set permissions
   - [ ] Test execution
 
-- [ ] `scripts/setup-network.sh`
+- [x] `scripts/setup-network.sh`
   - [ ] Enable IP forwarding
   - [ ] Create base TAP device structure
   - [ ] Configure iptables/nftables NAT
@@ -53,18 +53,18 @@
   - [ ] Validate network connectivity
 
 ### Dependency Checking
-- [ ] `lib/utils.sh` - Utility functions
-  - [ ] `check_command()` - Check if command exists
-  - [ ] `check_kvm()` - Verify KVM available
-  - [ ] `detect_os()` - Detect host OS
-  - [ ] `log_info/warn/error()` - Logging functions
-  - [ ] `confirm()` - User confirmation prompts
-  - [ ] `cleanup_on_exit()` - Trap handlers
+- [x] `lib/utils.sh` - Utility functions
+  - [x] `check_command()` - Check if command exists
+  - [x] `check_kvm()` - Verify KVM available
+  - [x] `detect_os()` - Detect host OS
+  - [x] `log_info/warn/error()` - Logging functions
+  - [x] `confirm()` - User confirmation prompts
+  - [x] `cleanup_on_exit()` - Trap handlers
 
 ## Phase 3: VM Template Building
 
 ### Base Template Builder
-- [ ] `scripts/build-ubuntu-base.sh`
+- [x] `scripts/build-ubuntu-base.sh`
   - [ ] Create disk image with qemu-img
   - [ ] Format as ext4
   - [ ] Mount loopback
@@ -78,7 +78,7 @@
   - [ ] Test boot with Firecracker
 
 ### Golden Template Builder
-- [ ] `scripts/build-golden.sh`
+- [x] `scripts/build-golden.sh`
   - [ ] Copy base template
   - [ ] Mount and chroot
   - [ ] Install Node.js and npm
@@ -95,7 +95,7 @@
   - [ ] Unmount and finalize
 
 ### Kernel Preparation
-- [ ] `scripts/prepare-kernel.sh`
+- [x] `scripts/prepare-kernel.sh`
   - [ ] Download kernel source (or extract from Arch)
   - [ ] Use Firecracker microvm config
   - [ ] Build vmlinux
@@ -103,18 +103,18 @@
   - [ ] Place in templates directory
 
 ### Template Management Module
-- [ ] `lib/template.sh`
-  - [ ] `template_list()` - List available templates
-  - [ ] `template_build()` - Build template (calls scripts)
-  - [ ] `template_delete()` - Delete template
-  - [ ] `template_exists()` - Check if template exists
-  - [ ] `template_path()` - Get template file path
+- [x] `lib/template.sh`
+  - [x] `template_list()` - List available templates
+  - [x] `template_build()` - Build template (calls scripts)
+  - [x] `template_delete()` - Delete template
+  - [x] `template_exists()` - Check if template exists
+  - [x] `template_path()` - Get template file path
 
 ## Phase 4: VM Lifecycle Management
 
 ### VM Creation
-- [ ] `lib/vm.sh` - Core VM functions
-  - [ ] `vm_create()` - Create new VM
+- [x] `lib/vm.sh` - Core VM functions
+  - [x] `vm_create()` - Create new VM
     - [ ] Parse arguments (name, config, from snapshot)
     - [ ] Allocate IP address (read registry)
     - [ ] Generate TAP device name
@@ -129,54 +129,54 @@
     - [ ] Copy workspace template files
     - [ ] Return success
 
-  - [ ] `vm_start()` - Start stopped VM
+  - [x] `vm_start()` - Start stopped VM
     - [ ] Read VM config from registry
     - [ ] Create TAP device
     - [ ] Start Firecracker process
     - [ ] Update registry status
     - [ ] Wait for SSH
 
-  - [ ] `vm_stop()` - Stop running VM
+  - [x] `vm_stop()` - Stop running VM
     - [ ] Send graceful shutdown to VM
     - [ ] Wait for process exit
     - [ ] Force kill if --force flag
     - [ ] Remove TAP device
     - [ ] Update registry status
 
-  - [ ] `vm_restart()` - Restart VM
+  - [x] `vm_restart()` - Restart VM
     - [ ] Call vm_stop()
     - [ ] Call vm_start()
 
-  - [ ] `vm_destroy()` - Destroy VM
+  - [x] `vm_destroy()` - Destroy VM
     - [ ] Confirm with user (unless --force)
     - [ ] Stop VM if running
     - [ ] Delete disk file
     - [ ] Remove from registry
     - [ ] Clean up TAP device
 
-  - [ ] `vm_ssh()` - SSH into VM
+  - [x] `vm_ssh()` - SSH into VM
     - [ ] Read IP from registry
     - [ ] Exec ssh command
 
-  - [ ] `vm_list()` - List VMs
+  - [x] `vm_list()` - List VMs
     - [ ] Read registry
     - [ ] Filter by status (--all, --running, --stopped)
     - [ ] Format output (table)
 
-  - [ ] `vm_status()` - Show VM details
+  - [x] `vm_status()` - Show VM details
     - [ ] Read from registry
     - [ ] Check Firecracker process
     - [ ] Test SSH connectivity
     - [ ] Show resource usage
     - [ ] Format detailed output
 
-  - [ ] `vm_ip()` - Get VM IP
+  - [x] `vm_ip()` - Get VM IP
     - [ ] Read from registry
     - [ ] Return IP address
 
 ### VM Operations
-- [ ] `lib/vm.sh` - Extended operations
-  - [ ] `vm_copy()` - Copy VM
+- [x] `lib/vm.sh` - Extended operations
+  - [x] `vm_copy()` - Copy VM
     - [ ] Stop source VM if running
     - [ ] Copy disk file
     - [ ] Allocate new IP
@@ -184,14 +184,14 @@
     - [ ] Register new VM
     - [ ] Optionally rename workspace inside
 
-  - [ ] `vm_rename()` - Rename VM
+  - [x] `vm_rename()` - Rename VM
     - [ ] Stop VM
     - [ ] Rename disk file
     - [ ] Update registry
     - [ ] Rename workspace inside VM
     - [ ] Restart if was running
 
-  - [ ] `vm_snapshot()` - Create snapshot
+  - [x] `vm_snapshot()` - Create snapshot
     - [ ] Stop VM
     - [ ] Copy to templates directory
     - [ ] Add to template list
@@ -200,34 +200,34 @@
 ## Phase 5: Networking Management
 
 ### Network Module
-- [ ] `lib/network.sh`
-  - [ ] `network_init()` - Initialize networking
+- [x] `lib/network.sh`
+  - [x] `network_init()` - Initialize networking
     - [ ] Create host TAP bridge/gateway
     - [ ] Set up IP forwarding
     - [ ] Configure NAT rules
     - [ ] Verify connectivity
 
-  - [ ] `network_create_tap()` - Create TAP device
+  - [x] `network_create_tap()` - Create TAP device
     - [ ] Generate device name
     - [ ] Create with ip tuntap add
     - [ ] Configure IP address
     - [ ] Bring up interface
     - [ ] Add routing rules
 
-  - [ ] `network_destroy_tap()` - Remove TAP device
+  - [x] `network_destroy_tap()` - Remove TAP device
     - [ ] Bring down interface
     - [ ] Delete device
     - [ ] Remove routing rules
 
-  - [ ] `network_allocate_ip()` - Allocate IP from pool
+  - [x] `network_allocate_ip()` - Allocate IP from pool
     - [ ] Read next_ip from registry
     - [ ] Increment and save
     - [ ] Return allocated IP
 
-  - [ ] `network_release_ip()` - Release IP back to pool
+  - [x] `network_release_ip()` - Release IP back to pool
     - [ ] Mark as available (future optimization)
 
-  - [ ] `network_status()` - Show network status
+  - [x] `network_status()` - Show network status
     - [ ] List TAP devices
     - [ ] Show IP allocations
     - [ ] Test connectivity
@@ -235,42 +235,42 @@
 ## Phase 6: Registry Management
 
 ### Registry Module
-- [ ] `lib/registry.sh`
-  - [ ] `registry_init()` - Initialize registry file
+- [x] `lib/registry.sh`
+  - [x] `registry_init()` - Initialize registry file
     - [ ] Create ~/.config/foundry/vms.json
     - [ ] Write initial structure
 
-  - [ ] `registry_add()` - Add VM to registry
+  - [x] `registry_add()` - Add VM to registry
     - [ ] Read JSON
     - [ ] Add VM entry
     - [ ] Write JSON
 
-  - [ ] `registry_update()` - Update VM entry
+  - [x] `registry_update()` - Update VM entry
     - [ ] Read JSON
     - [ ] Update fields
     - [ ] Write JSON
 
-  - [ ] `registry_remove()` - Remove VM from registry
+  - [x] `registry_remove()` - Remove VM from registry
     - [ ] Read JSON
     - [ ] Remove entry
     - [ ] Write JSON
 
-  - [ ] `registry_get()` - Get VM info
+  - [x] `registry_get()` - Get VM info
     - [ ] Read JSON
     - [ ] Return VM object
 
-  - [ ] `registry_list()` - List all VMs
+  - [x] `registry_list()` - List all VMs
     - [ ] Read JSON
     - [ ] Return VM array
 
-  - [ ] `registry_lock()` - Lock for concurrent access
-  - [ ] `registry_unlock()` - Release lock
+  - [x] `registry_lock()` - Lock for concurrent access
+  - [x] `registry_unlock()` - Release lock
 
 ## Phase 7: Workspace Management
 
 ### Workspace Module
-- [ ] `lib/workspace.sh`
-  - [ ] `workspace_init()` - Initialize workspace in VM
+- [x] `lib/workspace.sh`
+  - [x] `workspace_init()` - Initialize workspace in VM
     - [ ] SSH into VM
     - [ ] Create /work/<name> structure
     - [ ] Copy template files from framework
@@ -278,22 +278,22 @@
     - [ ] Clone repositories from config
     - [ ] Initialize git config
 
-  - [ ] `workspace_init_ralph()` - Initialize Ralph structure
+  - [x] `workspace_init_ralph()` - Initialize Ralph structure
     - [ ] SSH into VM
     - [ ] Run ralph-setup in workspace
     - [ ] Create PROMPT.md template
     - [ ] Create fix_plan.md template
     - [ ] Create specs/ and logs/
 
-  - [ ] `workspace_edit()` - Edit workspace file
+  - [x] `workspace_edit()` - Edit workspace file
     - [ ] SSH into VM
     - [ ] Open file in $EDITOR
 
 ## Phase 8: Agent Management
 
 ### Agent Module
-- [ ] `lib/agent.sh`
-  - [ ] `agent_start()` - Start agent
+- [x] `lib/agent.sh`
+  - [x] `agent_start()` - Start agent
     - [ ] Determine agent type
     - [ ] SSH into VM
     - [ ] Start appropriate CLI in tmux/screen
@@ -302,62 +302,62 @@
     - [ ] Update registry with agent info
     - [ ] Return session name
 
-  - [ ] `agent_stop()` - Stop agent
+  - [x] `agent_stop()` - Stop agent
     - [ ] Read agent info from registry
     - [ ] SSH into VM
     - [ ] Kill tmux/screen session
     - [ ] Update registry
 
-  - [ ] `agent_restart()` - Restart agent
+  - [x] `agent_restart()` - Restart agent
     - [ ] Call agent_stop()
     - [ ] Call agent_start()
 
-  - [ ] `agent_attach()` - Attach to agent session
+  - [x] `agent_attach()` - Attach to agent session
     - [ ] Read session info from registry
     - [ ] SSH into VM with tmux/screen attach
 
-  - [ ] `agent_status()` - Show agent status
+  - [x] `agent_status()` - Show agent status
     - [ ] Read registry
     - [ ] Check if session exists
     - [ ] Show agent type, runtime, status
     - [ ] If --all: show all agents
 
-  - [ ] `agent_logs()` - View agent logs
+  - [x] `agent_logs()` - View agent logs
     - [ ] Determine log location
     - [ ] SSH into VM
     - [ ] tail logs with options (--follow, --tail N)
 
-  - [ ] `agent_enable_autostart()` - Enable systemd autostart
+  - [x] `agent_enable_autostart()` - Enable systemd autostart
     - [ ] Copy systemd service template
     - [ ] Instantiate for workspace
     - [ ] Enable service
 
-  - [ ] `agent_disable_autostart()` - Disable autostart
+  - [x] `agent_disable_autostart()` - Disable autostart
     - [ ] Disable systemd service
     - [ ] Remove service file
 
 ## Phase 9: Configuration Management
 
 ### Config Module
-- [ ] `lib/config.sh`
-  - [ ] `config_init()` - Initialize config
+- [x] `lib/config.sh`
+  - [x] `config_init()` - Initialize config
     - [ ] Create ~/.config/foundry/
     - [ ] Copy default config
     - [ ] Create ~/.local/share/foundry/ directories
 
-  - [ ] `config_get()` - Get config value
+  - [x] `config_get()` - Get config value
     - [ ] Read config file
     - [ ] Return value for key
 
-  - [ ] `config_set()` - Set config value
+  - [x] `config_set()` - Set config value
     - [ ] Read config file
     - [ ] Update value
     - [ ] Write config
 
-  - [ ] `config_edit()` - Edit config in editor
+  - [x] `config_edit()` - Edit config in editor
     - [ ] Open config file in $EDITOR
 
-  - [ ] `config_load()` - Load all config
+  - [x] `config_load()` - Load all config
     - [ ] Read system config (/etc/foundry/config.conf)
     - [ ] Read user config (~/.config/foundry/config.conf)
     - [ ] Merge and return
@@ -365,21 +365,21 @@
 ## Phase 10: Main CLI
 
 ### CLI Entry Point
-- [ ] `bin/foundry` - Main CLI script
-  - [ ] Parse command structure (domain action args)
-  - [ ] Route to appropriate lib function
-  - [ ] Handle --help, --version
-  - [ ] Handle global flags (--verbose, --quiet, --dry-run)
-  - [ ] Error handling and user-friendly messages
+- [x] `bin/foundry` - Main CLI script
+  - [x] Parse command structure (domain action args)
+  - [x] Route to appropriate lib function
+  - [x] Handle --help, --version
+  - [x] Handle global flags (--verbose, --dry-run)
+  - [x] Error handling and user-friendly messages
   - [ ] Exit codes
 
 ### CLI Subcommands
-- [ ] Route `vm` commands to `lib/vm.sh`
-- [ ] Route `agent` commands to `lib/agent.sh`
-- [ ] Route `template` commands to `lib/template.sh`
-- [ ] Route `workspace` commands to `lib/workspace.sh`
-- [ ] Route `host` commands to `scripts/setup-*`
-- [ ] Route `config` commands to `lib/config.sh`
+- [x] Route `vm` commands to `lib/vm.sh`
+- [x] Route `agent` commands to `lib/agent.sh`
+- [x] Route `template` commands to `lib/template.sh`
+- [x] Route `workspace` commands to `lib/workspace.sh`
+- [x] Route `host` commands to `scripts/setup-*`
+- [x] Route `config` commands to `lib/config.sh`
 
 ### Help System
 - [ ] `--help` for each command
@@ -393,14 +393,14 @@
 - [ ] `templates/workspace/context/instructions.md.example`
 - [ ] `templates/workspace/context/coding-standards.md.example`
 - [ ] `templates/workspace/context/architecture.md.example`
-- [ ] `templates/workspace/memory/decisions.md`
-- [ ] `templates/workspace/memory/progress.md`
-- [ ] `templates/workspace/memory/blockers.md`
-- [ ] `templates/workspace/memory/learnings.md`
+- [x] `templates/workspace/memory/decisions.md`
+- [x] `templates/workspace/memory/progress.md`
+- [x] `templates/workspace/memory/blockers.md`
+- [x] `templates/workspace/memory/learnings.md`
 - [ ] `templates/workspace/PROMPT.md.example`
 - [ ] `templates/workspace/fix_plan.md.example`
 - [ ] `templates/workspace/workspace.json.example`
-- [ ] `templates/workspace/README.md`
+- [x] `templates/workspace/README.md`
 
 ### System Templates
 - [ ] `templates/systemd/ralph-agent@.service`
@@ -411,8 +411,8 @@
 - [ ] `docs/examples/single-repo.json`
 - [ ] `docs/examples/multi-repo.json`
 - [ ] `docs/examples/full-stack.json`
-- [ ] `config/default.conf`
-- [ ] `config/packages.txt`
+- [x] `config/default.conf`
+- [x] `config/packages.txt`
 
 ## Phase 12: Testing
 
@@ -435,7 +435,7 @@
 ## Phase 13: Installation & Distribution
 
 ### Installation
-- [ ] `install.sh` - Main installation script
+- [x] `install.sh` - Main installation script
   - [ ] Detect host OS
   - [ ] Check dependencies
   - [ ] Copy bin/foundry to /usr/local/bin/
@@ -602,4 +602,4 @@ Both agents must read:
 
 ---
 
-Last Updated: 2026-01-17
+Last Updated: 2026-02-16

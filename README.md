@@ -2,228 +2,137 @@
 
 > Lightweight, isolated microVMs for autonomous AI coding agents
 
-Agent Foundry is a framework for managing Firecracker microVMs where AI coding agents work autonomously on your projects. Each VM is an isolated development environment with rich context, allowing agents to code 24/7 while you focus on architecture and review.
+Run AI coding agents 24/7 in isolated Firecracker VMs. Each project gets its own VM with full context, multi-repo support, and autonomous operation.
 
 ## Features
 
-- **🤖 Autonomous Agents** - ralph-claude-code runs unattended with built-in safeguards
-- **🔒 Isolated Environments** - Each project gets dedicated VM, no host pollution
-- **🚀 Multiple Concurrent VMs** - Run unlimited projects simultaneously
-- **📚 Rich Context** - Workspaces include company docs, standards, architecture
-- **🔄 Multi-Repo Support** - Agents work across multiple repositories seamlessly
-- **💾 Reproducible** - Templates and snapshots for instant project setup
-- **🎯 Simple CLI** - Host-based commands abstract VM complexity
-- **🔌 Pluggable** - Support for Claude Code, Gemini CLI, OpenAI Codex
+- **🤖 Autonomous** - ralph-claude-code runs unattended with safeguards
+- **🔒 Isolated** - Dedicated VM per project, zero host pollution
+- **🚀 Concurrent** - Run unlimited VMs simultaneously
+- **📚 Rich Context** - Company docs, standards, architecture included
+- **🔄 Multi-Repo** - Agents work across multiple repositories
+- **🎯 Simple CLI** - Host commands abstract VM complexity
 
 ## Quick Start
 
 ```bash
-# Clone and install (automatically builds release bundle)
+# Install
 git clone https://github.com/user/agent-foundry.git
 cd agent-foundry
 ./install.sh --prefix ~/.local
 
-# Setup host
+# Setup
 foundry host setup
-
-# Build templates
 foundry template build base
 foundry template build golden
 
-# Create VM
+# Create and run
 foundry vm create my-project --project example-project
-
-# Start autonomous agent
-foundry agent start my-project ralph-claude-code
-
-# Monitor
+foundry agent start my-project ralph
 foundry agent logs my-project --follow
-
-# Attach anytime
-foundry agent attach my-project
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Host System (Arch/NixOS)              │
-│  ┌────────────────────────────────────────────────────┐ │
-│  │         Foundry CLI (bin/foundry)                  │ │
-│  │  vm create | agent start | agent logs | vm ssh    │ │
-│  └────────────────────────────────────────────────────┘ │
-│                           │                              │
-│  ┌────────────────────────▼────────────────────────┐   │
-│  │         Firecracker + TAP Networking             │   │
-│  │  172.16.0.1 → 172.16.0.10-254                    │   │
-│  └────────────────────────┬────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-   ┌────▼─────┐        ┌────▼─────┐        ┌────▼─────┐
-   │  VM 1    │        │  VM 2    │        │  VM 3    │
-   │ .11      │        │ .12      │        │ .13      │
-   │          │        │          │        │          │
-   │ /work/   │        │ /work/   │        │ /work/   │
-   │ project1/│        │ frontend/│        │ backend/ │
-   │  ├repos/ │        │  ├repos/ │        │  ├repos/ │
-   │  ├context│        │  ├context│        │  ├context│
-   │  └memory/│        │  └memory/│        │  └memory/│
-   │          │        │          │        │          │
-   │ Ralph →  │        │ Gemini → │        │ Codex →  │
-   │ Claude   │        │ CLI      │        │ CLI      │
-   └──────────┘        └──────────┘        └──────────┘
+Host System (Arch/NixOS)
+  ↓ Foundry CLI
+  ↓ Firecracker + TAP (172.16.0.0/24)
+  ↓
+┌─────────┬─────────┬─────────┐
+│  VM 1   │  VM 2   │  VM 3   │
+│  .11    │  .12    │  .13    │
+│ /root/  │ /root/  │ /root/  │
+│  ├repos │  ├repos │  ├repos │
+│  └.ralph│  └.ralph│  └.ralph│
+│ Ralph → │ Gemini  │ Codex   │
+│ Claude  │  CLI    │  CLI    │
+└─────────┴─────────┴─────────┘
 ```
 
 ## Use Cases
 
-### Autonomous Feature Development
-Define feature in `PROMPT.md`, start ralph-claude-code, agent implements across repos and commits to branch. Review and merge.
+- **Autonomous Features**: Define in `PROMPT.md`, agent implements across repos
+- **24/7 Work**: Start agent on refactoring, review progress in morning
+- **Parallel Development**: Run 3-5 VMs on different projects simultaneously
+- **Team Collaboration**: Share base templates with company standards
 
-### 24/7 Background Work
-Start agent on complex refactoring, log out. Agent works overnight. Review progress in morning.
+## Ralph File Structure
 
-### Parallel Development
-Run 3-5 VMs with different agents on different projects. Maximize AI subscription usage.
+```
+/root/                          # VM workspace
+├── .ralphrc                    # Config (optional, overrides default)
+├── .ralph/                     # Ralph files
+│   ├── PROMPT.md              # Mission: what to do
+│   ├── fix_plan.md           # Tasks: - [ ] checklist
+│   ├── AGENT.md              # Commands: npm test, etc
+│   ├── specs/                 # Requirements (optional)
+│   └── logs/                  # Execution logs
+└── repos/                      # Your code
+    ├── backend/
+    └── frontend/
+```
 
-### Team Collaboration
-Create company base template with standards. Everyone starts from same foundation.
+**How it works:**
+1. Ralph reads `PROMPT.md` → Understands mission
+2. Reads `fix_plan.md` → Gets next task
+3. Reads `AGENT.md` → Knows how to test
+4. Makes changes → Runs tests → Checks off task
+5. Repeats until all done
 
-## Documentation
-
-- **[VISION.md](docs/VISION.md)** - Project vision and goals
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Complete architecture overview
-- **[CLI-REFERENCE.md](docs/CLI-REFERENCE.md)** - Command reference
-- **[RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md)** - Ralph-claude-code integration details
-- **[TODO.md](TODO.md)** - Implementation roadmap
-
-## Requirements
-
-### Host System
-- Linux (Arch, NixOS, Ubuntu, Fedora, etc.)
-- KVM enabled (hardware virtualization)
-- 4+ CPU cores recommended
-- 16GB+ RAM recommended
-- 100GB+ disk space
-
-### Dependencies
-- Firecracker
-- QEMU utilities (`qemu-img`)
-- iproute2 (`ip` command)
-- iptables or nftables
-- jq
-- SSH client
-- Git
-
-*Note: tmux and screen are only needed inside VMs for agent management, not on the host*
-
-For NixOS hosts, use included `shell.nix`.
+See `projects/example-project/.ralph/` for complete example.
 
 ## Configuration
 
-### Default Resources per VM
-- **CPU**: 50% of host cores
-- **RAM**: 8GB
-- **Disk**: 20GB
+### .ralphrc (Two-Tier System)
 
-Configurable via:
+**Default** (`templates/.ralphrc.template`) - Full tool access, used when no project config exists
+
+**Project-Specific** (`projects/your-project/.ralphrc`) - Overrides default
+
+Customize: `ALLOWED_TOOLS`, `MAX_CALLS_PER_HOUR`, `CLAUDE_TIMEOUT_MINUTES`, circuit breaker thresholds
+
+```bash
+# Customize for a project
+cp templates/.ralphrc.template projects/my-project/.ralphrc
+vim projects/my-project/.ralphrc
+foundry workspace sync my-vm my-project  # Apply to VM
+```
+
+### VM Resources
+
+**Defaults:** 4 vCPUs, 8GB RAM, 20GB disk
+
+**Override:**
 - Global: `~/.config/foundry/config.conf`
-- Per-Project: `git-config.json` in projects/ folder
-- CLI flags: `--cpus 8 --memory 16384`
+- At create time: choose a different template and per-VM SSH key
 
 ### SSH Keys
-Foundry generates a per-VM SSH keypair under `~/.local/share/foundry/vms/<name>/ssh/` by default and uses it for VM access and git authentication. Foundry never reads `~/.ssh/` unless you explicitly pass `--ssh-key <path>` when creating a VM.
+
+Per-VM keypair in `~/.local/share/foundry/vms/<name>/ssh/`. Never reads `~/.ssh/` unless you pass `--ssh-key <path>`.
 
 ### Custom Packages
-Add packages to `~/.config/foundry/packages.txt`:
+
+Add to `~/.config/foundry/packages.txt`:
 ```txt
-# Additional packages for my VMs
 postgresql
 redis
 go
 rustup
 ```
 
-## Workspace Structure
-
-```
-/work/<project-name>/
-├── PROMPT.md                   # Ralph instructions
-├── fix_plan.md               # Task list
-├── repos/                      # Git repositories
-│   ├── backend/
-│   ├── frontend/
-│   └── shared-lib/
-├── context/                    # AI context files
-│   ├── company.md
-│   ├── instructions.md
-│   └── architecture.md
-├── memory/                     # Agent memory
-│   ├── progress.md
-│   └── decisions.md
-└── workspace.json              # Configuration
-```
-
-## Ralph File Structure (ralph-claude-code)
-
-When using [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) for autonomous development, Agent Foundry creates a `.ralph/` directory with specific files:
-
-```
-project/
-├── .ralph/                     # Ralph configuration (hidden folder)
-│   ├── PROMPT.md              # What to do - Ralph's mission and workflow
-│   ├── fix_plan.md           # Task list - Specific bugs/features to complete
-│   ├── AGENT.md              # How to run - Build/test/deploy commands
-│   ├── specs/                 # Detailed requirements (optional)
-│   ├── logs/                  # Ralph execution logs
-│   └── .circuit_breaker_state # Ralph's safety state
-├── .ralphrc                    # Ralph configuration (tool permissions, settings)
-└── repos/                      # Your actual code
-```
-
-### File Relationships
-
-**PROMPT.md** = **What to do** (High-level mission)
-- Tells Ralph the overall goal and approach
-- How to prioritize tasks from fix_plan.md
-- Where code lives and what tools to use
-- Guidelines for making changes
-- **You write this** - defines project goals
-
-**fix_plan.md** = **Task list** (Specific work items)
-- Concrete tasks with file locations and line numbers
-- Checkbox format: `- [ ] Fix error handling in main.py:170`
-- Ralph checks these off as it completes them
-- **You write this** - what needs to be done
-
-**AGENT.md** = **How to run** (Build/test reference)
-- Technical commands: `npm test`, `uv run pytest`, etc.
-- Project structure and dependencies
-- Deployment and troubleshooting steps
-- **Auto-maintained by Ralph** - updated as it learns
-
-**The workflow:**
-```
-1. Ralph reads PROMPT.md     → "Work through fix_plan.md tasks, one at a time"
-2. Ralph reads fix_plan.md   → "Task 1: Fix error in api/client.ts:45"
-3. Ralph reads AGENT.md      → "To test: npm test"
-4. Claude makes the change   → Edits the file, runs tests
-5. Ralph checks it off       → Updates fix_plan.md: - [x] Task 1
-6. Repeat until all done     → EXIT_SIGNAL when complete
-```
-
-See `projects/example-project/.ralph/` for a complete working example.
-
 ## CLI Commands
 
 ```bash
 # VM lifecycle
-foundry vm create <name>
+foundry vm create <name> [template] [--project <project>] [--ssh-key <path>]
 foundry vm start <name>
 foundry vm stop <name>
-foundry vm ssh <name>
+foundry vm ssh <name> [command]
 foundry vm destroy <name>
+foundry vm list
+foundry vm status <name>
+foundry vm update <name>
 
 # VM operations
 foundry vm copy <src> <dst>
@@ -231,41 +140,74 @@ foundry vm rename <old> <new>
 foundry vm snapshot <name> <snapshot>
 
 # Agent management
-foundry agent start <vm> <agent-type>
+foundry agent start <vm> <agent-type>  # ralph, claude, gemini, codex
 foundry agent stop <vm>
-foundry agent logs <vm> --follow
+foundry agent restart <vm>
+foundry agent logs <vm> [--follow]
 foundry agent attach <vm>
-foundry agent status --all
+foundry agent status <vm>
+foundry agent gh-watcher <action> <vm>
 
-# Workspace sync
-foundry workspace sync <vm>
+# Workspace
+foundry workspace init <vm> <config.json>
+foundry workspace sync <vm> [project]
+foundry workspace init-ralph <vm>
+foundry workspace edit <vm> <file>
+foundry workspace info <vm>
+foundry workspace template [file]
 
 # Templates
 foundry template build base      # Downloads Ubuntu 22.04 base
 foundry template build golden    # Configures AI tools (apt based)
+foundry template list
 
 # Host setup
 foundry host setup
 foundry host status
+
+# Network
+foundry network init
+foundry network status
+foundry network cleanup
 ```
+
+Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
+
+## Requirements
+
+**Host System:**
+- Linux (Arch, NixOS, Ubuntu, Fedora)
+- KVM enabled (hardware virtualization)
+- 4+ CPU cores, 16GB+ RAM recommended
+- 100GB+ disk space
+
+**Dependencies:**
+- Firecracker, QEMU utils (`qemu-img`), iproute2 (`ip`), iptables/nftables, jq, SSH, Git
+
+**NixOS:** Use included `shell.nix`
+
+## Documentation
+
+- [VISION.md](docs/VISION.md) - Project goals and philosophy
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Complete architecture overview
+- [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) - Full command reference
+- [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) - Ralph-claude-code details
+- [TODO.md](TODO.md) - Implementation roadmap
 
 ## Development
 
 ```bash
-# For NixOS hosts
+# For NixOS
 nix-shell
 
-# For other Linux
-# Install dependencies manually
-
 # Run tests
-./tests/run-all.sh
+# (tests are not fully scaffolded yet)
 
-# Build templates (from repo)
+# Build templates
 ./scripts/build-ubuntu-base.sh
 ```
 
-**Note**: The release bundle is built automatically by `install.sh` if needed.
+Release bundle is built automatically by `install.sh` if needed.
 
 ## Project Status
 
@@ -275,11 +217,9 @@ See [TODO.md](TODO.md) for roadmap.
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file
+MIT License - See [LICENSE](LICENSE)
 
 ## Contributing
-
-Contributions welcome! This is a community-driven project.
 
 1. Read [VISION.md](docs/VISION.md) and [ARCHITECTURE.md](docs/ARCHITECTURE.md)
 2. Check [TODO.md](TODO.md) for open tasks
@@ -288,16 +228,14 @@ Contributions welcome! This is a community-driven project.
 
 ## Credits
 
-- Built on [Firecracker](https://firecracker-microvm.github.io/)
-- Uses [ralph-claude-code](https://github.com/frankbria/ralph-claude-code)
-- Inspired by the Ralph Wiggum technique
+Built on [Firecracker](https://firecracker-microvm.github.io/) • Uses [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) • Inspired by the Ralph Wiggum technique
 
 ## Support
 
-- GitHub Issues: Report bugs, request features
-- Discussions: Ask questions, share setups
-- Wiki: Community guides and tips
+- **GitHub Issues**: Report bugs, request features
+- **Discussions**: Ask questions, share setups
+- **Wiki**: Community guides and tips
 
 ---
 
-**Note**: Agent Foundry is for development use. Not intended for production workload hosting. Use proper container orchestration (Kubernetes, Docker Swarm) for production.
+**Note**: Agent Foundry is for development use only. Not intended for production workload hosting.

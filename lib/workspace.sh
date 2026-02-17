@@ -213,6 +213,20 @@ _copy_project_files() {
         log_warn "AGENT.md template not found: $agent_template"
     fi
 
+    # Copy .ralphrc: prefer project-specific, fallback to template
+    local project_ralphrc="$project_dir/.ralphrc"
+    local ralphrc_template="${TEMPLATES_DIR}/../.ralphrc.template"
+
+    if [[ -f "$project_ralphrc" ]]; then
+        # Use project-specific .ralphrc (overrides default)
+        _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_ralphrc" "${workspace_path}/.ralphrc"
+        log_debug "Copied project-specific .ralphrc"
+    elif [[ -f "$ralphrc_template" ]]; then
+        # Use default template as fallback
+        _scp_to_vm "$vm_ip" "$ssh_key_path" "$ralphrc_template" "${workspace_path}/.ralphrc"
+        log_debug "Copied default .ralphrc template (full tool access for autonomous VM)"
+    fi
+
     # Copy .ralph/ folder if exists
     if [[ -d "$project_dir/.ralph" ]]; then
         log_debug "Copying .ralph/ folder..."

@@ -29,7 +29,7 @@ Agents work continuously without supervision:
 ### 2. Multi-Project Support
 Run unlimited concurrent VMs:
 - Each project gets dedicated VM
-- 50% CPU cores + 8GB RAM per VM (configurable)
+- 4 vCPUs + 8GB RAM per VM by default (configurable)
 - Dynamic IP allocation (172.16.0.10-254)
 - Maximize AI subscription usage across projects
 
@@ -51,7 +51,7 @@ Leverage best tools for each task:
 Host-based CLI abstracts VM complexity:
 ```bash
 foundry vm create my-project --project acme-company
-foundry agent start my-project ralph-claude-code
+foundry agent start my-project ralph
 foundry agent logs my-project --follow
 ```
 
@@ -74,7 +74,7 @@ foundry vm ssh my-project
 
 ### Autonomous Feature Development
 1. Define feature in `PROMPT.md`
-2. Start ralph-claude-code
+2. Start `foundry agent start <vm> ralph`
 3. Agent implements across multiple repos
 4. Commits to feature branch
 5. Review and merge
