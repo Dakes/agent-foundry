@@ -32,6 +32,8 @@ WATCHED_REPOS="${WATCHED_REPOS:-}"
 GITHUB_TOKEN_FILE="${GITHUB_TOKEN_FILE:-/root/.config/gh/token}"
 RALPH_TIMEOUT="${RALPH_TIMEOUT:-120}"
 POST_ERROR_COMMENTS="${POST_ERROR_COMMENTS:-true}"
+POLL_LOOKBACK_SECONDS="${POLL_LOOKBACK_SECONDS:-900}"
+DRY_RUN="${DRY_RUN:-false}"
 
 RALPH_WORKSPACE="/root"
 
@@ -163,7 +165,7 @@ mark_processed() {
     # Update processed.json
     local temp_file
     temp_file=$(mktemp)
-    jq ".processed.\"$task_id\" = $task_data | .last_poll = \"$(date -Iseconds)\"" \
+    jq ".processed.\"$task_id\" = $task_data | .last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" \
         "$PROCESSED_FILE" > "$temp_file"
     mv "$temp_file" "$PROCESSED_FILE"
 
@@ -174,25 +176,50 @@ get_last_poll() {
     jq -r '.last_poll // "1970-01-01T00:00:00Z"' "$PROCESSED_FILE"
 }
 
+get_query_since() {
+    local last_poll
+    last_poll=$(get_last_poll)
+
+    if [[ "${POLL_LOOKBACK_SECONDS:-0}" =~ ^[0-9]+$ ]] && [[ "${POLL_LOOKBACK_SECONDS:-0}" -gt 0 ]]; then
+        local adjusted_since
+        adjusted_since=$(date -u -d "$last_poll - ${POLL_LOOKBACK_SECONDS} seconds" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+        if [[ -n "$adjusted_since" ]]; then
+            echo "$adjusted_since"
+            return 0
+        fi
+    fi
+
+    echo "$last_poll"
+}
+
 # ============================================================================
 # GITHUB API QUERIES
 # ============================================================================
 
 find_ralph_mentions() {
-    local last_poll
-    last_poll=$(get_last_poll)
+    local query_since
+    query_since=$(get_query_since)
 
-    log_debug "Searching for !ralph mentions (all open issues/PRs)"
+    log_debug "Searching for !ralph mentions (all open issues/PRs, since $query_since)"
 
     # Priority 1: Check recent PR comments for !ralph (use 'since' to reduce API calls)
     for repo in ${WATCHED_REPOS//,/ }; do
-        log_debug "Checking recent PR comments in $repo"
+        log_debug "Checking recent PR conversation comments in $repo"
 
-        # Get recent issue comments (includes PR comments)
-        if ! gh api "repos/$repo/issues/comments?since=$last_poll" \
+        # Get recent issue comments on PR conversations (not line-level review comments)
+        if ! gh api --paginate "repos/$repo/issues/comments?since=$query_since&per_page=100" \
             --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_comment", repo: "'"$repo"'", id: .id, number: (.issue_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login}' \
             2>&1; then
-            log_error "Failed to check PR comments in $repo (is gh CLI installed and authenticated?)"
+            log_error "Failed to check PR conversation comments in $repo (is gh CLI installed and authenticated?)"
+        fi
+
+        log_debug "Checking recent PR review comments in $repo"
+
+        # Get recent line-level PR review comments
+        if ! gh api --paginate "repos/$repo/pulls/comments?since=$query_since&per_page=100" \
+            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_comment", repo: "'"$repo"'", id: .id, number: (.pull_request_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login}' \
+            2>&1; then
+            log_error "Failed to check PR review comments in $repo"
         fi
     done
 
@@ -487,23 +514,60 @@ main_loop() {
         log_debug "Poll complete, processing results..."
 
         if [[ -n "$tasks" ]]; then
-            # Process first task only (FIFO with priority)
-            local task
-            task=$(echo "$tasks" | head -1)
+            # Process the first unprocessed task only.
+            # Avoid missing new tasks when the first returned comment was already handled.
+            local task=""
+            local candidate
+            while IFS= read -r candidate; do
+                [[ -z "$candidate" ]] && continue
 
-            local task_type repo
-            task_type=$(echo "$task" | jq -r '.type')
-            repo=$(echo "$task" | jq -r '.repo')
+                local candidate_type candidate_number candidate_id candidate_task_id
+                candidate_type=$(echo "$candidate" | jq -r '.type')
+                candidate_number=$(echo "$candidate" | jq -r '.number')
+                candidate_id=$(echo "$candidate" | jq -r '.id // empty')
 
-            case "$task_type" in
-                pr_comment)
-                    local pr_number comment_id task_id
-                    pr_number=$(echo "$task" | jq -r '.number')
-                    comment_id=$(echo "$task" | jq -r '.id')
-                    task_id="pr_${pr_number}_comment_${comment_id}"
+                case "$candidate_type" in
+                    pr_comment)
+                        candidate_task_id="pr_${candidate_number}_comment_${candidate_id}"
+                        ;;
+                    issue_comment)
+                        candidate_task_id="issue_${candidate_number}_comment_${candidate_id}"
+                        ;;
+                    issue)
+                        candidate_task_id="issue_${candidate_number}"
+                        ;;
+                    *)
+                        continue
+                        ;;
+                esac
 
-                    if ! is_processed "$task_id"; then
+                if ! is_processed "$candidate_task_id"; then
+                    task="$candidate"
+                    break
+                fi
+            done <<< "$tasks"
+
+            if [[ -z "$task" ]]; then
+                log_debug "No new unprocessed !ralph tasks in this poll cycle"
+            else
+                local task_type repo
+                task_type=$(echo "$task" | jq -r '.type')
+                repo=$(echo "$task" | jq -r '.repo')
+
+                case "$task_type" in
+                    pr_comment)
+                        local pr_number comment_id task_id
+                        pr_number=$(echo "$task" | jq -r '.number')
+                        comment_id=$(echo "$task" | jq -r '.id')
+                        task_id="pr_${pr_number}_comment_${comment_id}"
+
                         log_info "Found !ralph in PR #$pr_number (comment #$comment_id) from $repo"
+
+                        if [[ "$DRY_RUN" == "true" ]]; then
+                            log_info "[DRY RUN] Would process task $task_id from $repo"
+                            echo "$task" > "$CURRENT_TASK_FILE"
+                            continue
+                        fi
 
                         if build_context_for_pr "$repo" "$pr_number" "$comment_id"; then
                             echo "$task" > "$CURRENT_TASK_FILE"
@@ -527,23 +591,27 @@ main_loop() {
                             log_error "Failed to build context for PR #$pr_number"
                             mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
                         fi
-                    fi
-                    ;;
+                        ;;
 
-                issue|issue_comment)
-                    local issue_number task_id
-                    issue_number=$(echo "$task" | jq -r '.number')
+                    issue|issue_comment)
+                        local issue_number task_id
+                        issue_number=$(echo "$task" | jq -r '.number')
 
-                    if [[ "$task_type" == "issue_comment" ]]; then
-                        local comment_id
-                        comment_id=$(echo "$task" | jq -r '.id')
-                        task_id="issue_${issue_number}_comment_${comment_id}"
-                    else
-                        task_id="issue_${issue_number}"
-                    fi
+                        if [[ "$task_type" == "issue_comment" ]]; then
+                            local comment_id
+                            comment_id=$(echo "$task" | jq -r '.id')
+                            task_id="issue_${issue_number}_comment_${comment_id}"
+                        else
+                            task_id="issue_${issue_number}"
+                        fi
 
-                    if ! is_processed "$task_id"; then
                         log_info "Found !ralph in Issue #$issue_number from $repo"
+
+                        if [[ "$DRY_RUN" == "true" ]]; then
+                            log_info "[DRY RUN] Would process task $task_id from $repo"
+                            echo "$task" > "$CURRENT_TASK_FILE"
+                            continue
+                        fi
 
                         if build_context_for_issue "$repo" "$issue_number"; then
                             echo "$task" > "$CURRENT_TASK_FILE"
@@ -565,20 +633,20 @@ main_loop() {
                             log_error "Failed to build context for Issue #$issue_number"
                             mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
                         fi
-                    fi
-                    ;;
+                        ;;
 
-                *)
-                    log_warn "Unknown task type: $task_type"
-                    ;;
-            esac
+                    *)
+                        log_warn "Unknown task type: $task_type"
+                        ;;
+                esac
+            fi
         fi
 
         # Update last poll time
         log_debug "Updating last poll time..."
         local temp_file
         temp_file=$(mktemp)
-        if jq ".last_poll = \"$(date -Iseconds)\"" "$PROCESSED_FILE" > "$temp_file" 2>/dev/null; then
+        if jq ".last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" "$PROCESSED_FILE" > "$temp_file" 2>/dev/null; then
             mv "$temp_file" "$PROCESSED_FILE"
             log_debug "Last poll time updated successfully"
         else
@@ -600,6 +668,18 @@ main_loop() {
 
 cmd_start() {
     log_info "Starting GitHub watcher..."
+
+    if ! init_watcher; then
+        log_error "Failed to initialize watcher"
+        exit 1
+    fi
+
+    main_loop
+}
+
+cmd_dry_run() {
+    DRY_RUN=true
+    log_info "Starting GitHub watcher in DRY RUN mode (no Ralph execution, no processed.json updates)"
 
     if ! init_watcher; then
         log_error "Failed to initialize watcher"
@@ -675,6 +755,54 @@ cmd_queue() {
     fi
 }
 
+cmd_scan() {
+    if ! init_watcher; then
+        log_error "Failed to initialize watcher"
+        exit 1
+    fi
+
+    local tasks
+    tasks=$(find_ralph_mentions 2>/dev/null || true)
+
+    if [[ -z "$tasks" ]]; then
+        echo "No !ralph mentions found"
+        return 0
+    fi
+
+    while IFS= read -r task; do
+        [[ -z "$task" ]] && continue
+
+        local task_type number id task_id processed
+        task_type=$(echo "$task" | jq -r '.type')
+        number=$(echo "$task" | jq -r '.number')
+        id=$(echo "$task" | jq -r '.id // empty')
+
+        case "$task_type" in
+            pr_comment)
+                task_id="pr_${number}_comment_${id}"
+                ;;
+            issue_comment)
+                task_id="issue_${number}_comment_${id}"
+                ;;
+            issue)
+                task_id="issue_${number}"
+                ;;
+            *)
+                task_id="unknown"
+                ;;
+        esac
+
+        if is_processed "$task_id"; then
+            processed=true
+        else
+            processed=false
+        fi
+
+        echo "$task" | jq --arg task_id "$task_id" --argjson already_processed "$processed" \
+            '. + {task_id: $task_id, already_processed: $already_processed}'
+    done <<< "$tasks"
+}
+
 cmd_stop() {
     echo "Stopping GitHub watcher..."
 
@@ -697,22 +825,30 @@ main() {
         start)
             cmd_start
             ;;
+        dry-run)
+            cmd_dry_run
+            ;;
         status)
             cmd_status
             ;;
         queue)
             cmd_queue
             ;;
+        scan)
+            cmd_scan
+            ;;
         stop)
             cmd_stop
             ;;
         *)
-            echo "Usage: $0 {start|status|queue|stop}"
+            echo "Usage: $0 {start|dry-run|status|queue|scan|stop}"
             echo ""
             echo "Commands:"
             echo "  start   - Start the GitHub watcher daemon"
+            echo "  dry-run - Start watcher loop without executing Ralph or marking tasks processed"
             echo "  status  - Show watcher status"
             echo "  queue   - Show task queue and history"
+            echo "  scan    - Print detected !ralph tasks without starting Ralph"
             echo "  stop    - Stop the watcher daemon"
             exit 1
             ;;
