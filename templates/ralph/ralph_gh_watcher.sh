@@ -22,6 +22,7 @@ trap 'echo "[$(date)] ERROR: Script exited with error at line $LINENO (exit code
 CONFIG_DIR="/root/.config/gh-watcher"
 CONFIG_FILE="$CONFIG_DIR/config.conf"
 PROCESSED_FILE="$CONFIG_DIR/processed.json"
+RETRY_FILE="$CONFIG_DIR/retries.json"
 LOG_FILE="$CONFIG_DIR/watcher.log"
 CURRENT_TASK_FILE="$CONFIG_DIR/current_task.json"
 
@@ -34,6 +35,7 @@ RALPH_TIMEOUT="${RALPH_TIMEOUT:-120}"
 POST_ERROR_COMMENTS="${POST_ERROR_COMMENTS:-true}"
 POLL_LOOKBACK_SECONDS="${POLL_LOOKBACK_SECONDS:-900}"
 DRY_RUN="${DRY_RUN:-false}"
+RATE_LIMIT_RETRY_SECONDS="${RATE_LIMIT_RETRY_SECONDS:-3600}"
 
 RALPH_WORKSPACE="/root"
 
@@ -81,6 +83,17 @@ init_watcher() {
 }
 EOF
         log_info "Initialized processed tasks file: $PROCESSED_FILE"
+    fi
+
+    # Create retry state file if it doesn't exist
+    if [[ ! -f "$RETRY_FILE" ]]; then
+        cat > "$RETRY_FILE" <<'EOF'
+{
+  "version": "1.0",
+  "retries": {}
+}
+EOF
+        log_info "Initialized retry state file: $RETRY_FILE"
     fi
 
     # Create log file
@@ -149,6 +162,94 @@ wait_for_ralph() {
     log_info "Ralph has finished"
 }
 
+get_ralph_failure_reason() {
+    local status_file="$RALPH_WORKSPACE/.ralph/status.json"
+    if [[ ! -f "$status_file" ]]; then
+        return 1
+    fi
+
+    local status last_action exit_reason
+    status=$(jq -r '.status // ""' "$status_file" 2>/dev/null || echo "")
+    last_action=$(jq -r '.last_action // ""' "$status_file" 2>/dev/null || echo "")
+    exit_reason=$(jq -r '.exit_reason // ""' "$status_file" 2>/dev/null || echo "")
+
+    if [[ "$status" == "halted" ]]; then
+        if [[ -n "$exit_reason" ]]; then
+            echo "$exit_reason"
+        elif [[ -n "$last_action" ]]; then
+            echo "$last_action"
+        else
+            echo "ralph_halted"
+        fi
+        return 0
+    fi
+
+    return 1
+}
+
+get_latest_claude_result_file_after() {
+    local start_epoch="$1"
+    local logs_dir="$RALPH_WORKSPACE/.ralph/logs"
+    local latest_file
+    latest_file=$(
+        find "$logs_dir" -maxdepth 1 -type f -name 'claude_output_*.log' -printf '%T@ %p\n' 2>/dev/null \
+            | sort -nr \
+            | head -1 \
+            | cut -d' ' -f2-
+    )
+
+    if [[ -z "$latest_file" ]]; then
+        return 1
+    fi
+
+    local mtime
+    mtime=$(stat -c %Y "$latest_file" 2>/dev/null || echo "0")
+    if [[ ! "$mtime" =~ ^[0-9]+$ ]] || (( mtime < start_epoch )); then
+        return 1
+    fi
+
+    echo "$latest_file"
+}
+
+evaluate_ralph_outcome() {
+    local run_start_epoch="$1"
+
+    local failure_reason
+    failure_reason=$(get_ralph_failure_reason || true)
+    if [[ -n "$failure_reason" ]]; then
+        echo "failure:$failure_reason"
+        return 0
+    fi
+
+    local result_file
+    result_file=$(get_latest_claude_result_file_after "$run_start_epoch" || true)
+    if [[ -z "$result_file" ]]; then
+        echo "unknown:no_recent_result_file"
+        return 0
+    fi
+
+    if ! jq -e . "$result_file" >/dev/null 2>&1; then
+        echo "unknown:invalid_result_json"
+        return 0
+    fi
+
+    local is_error result_text
+    is_error=$(jq -r '.is_error // false' "$result_file" 2>/dev/null || echo "false")
+    result_text=$(jq -r '.result // ""' "$result_file" 2>/dev/null || echo "")
+
+    if [[ "$is_error" == "true" ]]; then
+        if echo "$result_text" | grep -qiE 'hit your limit|usage limit|rate[_ -]?limit|resets .*utc|5[^a-zA-Z0-9]*hour.*limit|limit.*reached'; then
+            echo "rate_limited:claude_usage_limit"
+            return 0
+        fi
+
+        echo "failure:claude_error"
+        return 0
+    fi
+
+    echo "success:ok"
+}
+
 # ============================================================================
 # PROCESSED TASKS TRACKING
 # ============================================================================
@@ -170,6 +271,45 @@ mark_processed() {
     mv "$temp_file" "$PROCESSED_FILE"
 
     log_debug "Marked task $task_id as processed"
+}
+
+clear_retry() {
+    local task_id="$1"
+    local temp_file
+    temp_file=$(mktemp)
+    jq "del(.retries.\"$task_id\")" "$RETRY_FILE" > "$temp_file"
+    mv "$temp_file" "$RETRY_FILE"
+}
+
+schedule_retry() {
+    local task_id="$1"
+    local seconds="$2"
+    local reason="$3"
+
+    local now next_epoch next_iso temp_file
+    now=$(date +%s)
+    next_epoch=$((now + seconds))
+    next_iso=$(date -u -d "@$next_epoch" +"%Y-%m-%dT%H:%M:%SZ")
+
+    temp_file=$(mktemp)
+    jq ".retries.\"$task_id\" = {\"reason\":\"$reason\",\"scheduled_at\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"next_retry_epoch\":$next_epoch,\"next_retry_at\":\"$next_iso\"}" \
+        "$RETRY_FILE" > "$temp_file"
+    mv "$temp_file" "$RETRY_FILE"
+
+    log_warn "Scheduled retry for $task_id at $next_iso (reason: $reason)"
+}
+
+is_retry_blocked() {
+    local task_id="$1"
+    local now next_retry_epoch
+    now=$(date +%s)
+    next_retry_epoch=$(jq -r ".retries.\"$task_id\".next_retry_epoch // 0" "$RETRY_FILE" 2>/dev/null || echo "0")
+
+    if [[ "$next_retry_epoch" =~ ^[0-9]+$ ]] && (( next_retry_epoch > now )); then
+        return 0
+    fi
+
+    return 1
 }
 
 get_last_poll() {
@@ -435,6 +575,12 @@ start_ralph() {
         return 1
     }
 
+    # Ensure stale loop session does not block startup.
+    tmux kill-session -t ralph-loop 2>/dev/null || true
+
+    # If the circuit breaker is open from prior runs, reset it before a new task.
+    ralph --reset-circuit >/dev/null 2>&1 || true
+
     # Start Ralph in tmux (will run in background)
     tmux new-session -d -s ralph-loop "ralph --monitor --timeout $RALPH_TIMEOUT 2>&1 | tee -a logs/ralph-watcher.log"
 
@@ -542,6 +688,9 @@ main_loop() {
                 esac
 
                 if ! is_processed "$candidate_task_id"; then
+                    if is_retry_blocked "$candidate_task_id"; then
+                        continue
+                    fi
                     task="$candidate"
                     break
                 fi
@@ -571,17 +720,39 @@ main_loop() {
 
                         if build_context_for_pr "$repo" "$pr_number" "$comment_id"; then
                             echo "$task" > "$CURRENT_TASK_FILE"
+                            local run_start_epoch
+                            run_start_epoch=$(date +%s)
 
                             if start_ralph; then
                                 wait_for_ralph
 
-                                # Check if Ralph succeeded or failed
-                                # For now, mark as completed (TODO: detect errors from Ralph)
-                                mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"completed\"}"
-                                log_info "Task $task_id completed"
+                                local outcome outcome_type outcome_detail
+                                outcome=$(evaluate_ralph_outcome "$run_start_epoch")
+                                outcome_type="${outcome%%:*}"
+                                outcome_detail="${outcome#*:}"
+
+                                case "$outcome_type" in
+                                    success)
+                                        clear_retry "$task_id"
+                                        mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"completed\"}"
+                                        log_info "Task $task_id completed"
+                                        ;;
+                                    rate_limited)
+                                        log_warn "Ralph hit usage limit for $task_id, scheduling retry"
+                                        post_error_comment "$repo" "$pr_number" "Claude usage limit reached. I will retry this task automatically in about one hour."
+                                        schedule_retry "$task_id" "$RATE_LIMIT_RETRY_SECONDS" "$outcome_detail"
+                                        ;;
+                                    failure|unknown)
+                                        clear_retry "$task_id"
+                                        log_error "Ralph failed for $task_id: $outcome_detail"
+                                        post_error_comment "$repo" "$pr_number" "Ralph exited early: $outcome_detail"
+                                        mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_runtime_failed\"}"
+                                        ;;
+                                esac
                             else
                                 log_error "Failed to start Ralph for $task_id"
                                 post_error_comment "$repo" "$pr_number" "Failed to start Ralph"
+                                clear_retry "$task_id"
                                 mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_start_failed\"}"
                             fi
 
@@ -615,15 +786,39 @@ main_loop() {
 
                         if build_context_for_issue "$repo" "$issue_number"; then
                             echo "$task" > "$CURRENT_TASK_FILE"
+                            local run_start_epoch
+                            run_start_epoch=$(date +%s)
 
                             if start_ralph; then
                                 wait_for_ralph
 
-                                mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"completed\"}"
-                                log_info "Task $task_id completed"
+                                local outcome outcome_type outcome_detail
+                                outcome=$(evaluate_ralph_outcome "$run_start_epoch")
+                                outcome_type="${outcome%%:*}"
+                                outcome_detail="${outcome#*:}"
+
+                                case "$outcome_type" in
+                                    success)
+                                        clear_retry "$task_id"
+                                        mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"completed\"}"
+                                        log_info "Task $task_id completed"
+                                        ;;
+                                    rate_limited)
+                                        log_warn "Ralph hit usage limit for $task_id, scheduling retry"
+                                        post_error_comment "$repo" "$issue_number" "Claude usage limit reached. I will retry this task automatically in about one hour."
+                                        schedule_retry "$task_id" "$RATE_LIMIT_RETRY_SECONDS" "$outcome_detail"
+                                        ;;
+                                    failure|unknown)
+                                        clear_retry "$task_id"
+                                        log_error "Ralph failed for $task_id: $outcome_detail"
+                                        post_error_comment "$repo" "$issue_number" "Ralph exited early: $outcome_detail"
+                                        mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_runtime_failed\"}"
+                                        ;;
+                                esac
                             else
                                 log_error "Failed to start Ralph for $task_id"
                                 post_error_comment "$repo" "$issue_number" "Failed to start Ralph"
+                                clear_retry "$task_id"
                                 mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_start_failed\"}"
                             fi
 
