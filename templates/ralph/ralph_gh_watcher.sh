@@ -348,7 +348,7 @@ find_ralph_mentions() {
 
         # Get recent issue comments on PR conversations (not line-level review comments)
         if ! gh api --paginate "repos/$repo/issues/comments?since=$query_since&per_page=100" \
-            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_comment", repo: "'"$repo"'", id: .id, number: (.issue_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login}' \
+            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_comment", repo: "'"$repo"'", id: .id, number: (.issue_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login, created_at: .created_at}' \
             2>&1; then
             log_error "Failed to check PR conversation comments in $repo (is gh CLI installed and authenticated?)"
         fi
@@ -357,7 +357,7 @@ find_ralph_mentions() {
 
         # Get recent line-level PR review comments
         if ! gh api --paginate "repos/$repo/pulls/comments?since=$query_since&per_page=100" \
-            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_comment", repo: "'"$repo"'", id: .id, number: (.pull_request_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login}' \
+            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_comment", repo: "'"$repo"'", id: .id, number: (.pull_request_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login, created_at: .created_at}' \
             2>&1; then
             log_error "Failed to check PR review comments in $repo"
         fi
@@ -369,11 +369,19 @@ find_ralph_mentions() {
 
         # Get ALL open issues and filter for !ralph
         if ! gh api "repos/$repo/issues?state=open&per_page=100" \
-            --jq '.[] | select(.pull_request == null) | select(.body | test("!ralph"; "i")) | {type: "issue", repo: "'"$repo"'", number: .number, title: .title, body: .body, html_url: .html_url, user: .user.login}' \
+            --jq '.[] | select(.pull_request == null) | select(.body | test("!ralph"; "i")) | {type: "issue", repo: "'"$repo"'", number: .number, title: .title, body: .body, html_url: .html_url, user: .user.login, created_at: .created_at}' \
             2>&1; then
             log_error "Failed to check issues in $repo"
         fi
     done
+}
+
+get_latest_processed_ts() {
+    local repo="$1"
+    local number="$2"
+    # Find the latest trigger_created_at for this repo and issue/PR number
+    # We filter by both number and repo to be precise
+    jq -r "[.processed | to_entries[] | select(.value.repo == \"$repo\" and (.value.pr_number == $number or .value.number == $number)) | .value.trigger_created_at] | sort | last // \"\"" "$PROCESSED_FILE"
 }
 
 # ============================================================================
@@ -406,9 +414,16 @@ build_context_for_issue() {
     local repo_name
     repo_name=$(echo "$repo" | cut -d'/' -f2)
 
-    # Fetch all comments
+    # Fetch all comments (or only new ones if already processed)
+    local since_ts since_query=""
+    since_ts=$(get_latest_processed_ts "$repo" "$issue_number")
+    if [[ -n "$since_ts" ]]; then
+        since_query="?since=$since_ts"
+        log_info "Only fetching comments since $since_ts"
+    fi
+
     local comments
-    comments=$(gh api "repos/$repo/issues/$issue_number/comments" \
+    comments=$(gh api "repos/$repo/issues/$issue_number/comments${since_query}" \
         --jq '.[] | "**@\(.user.login)** (\(.created_at)):\n\(.body)\n"' 2>/dev/null || echo "")
 
     # Build fix_plan.md
@@ -481,12 +496,20 @@ build_context_for_pr() {
     local repo_name
     repo_name=$(echo "$repo" | cut -d'/' -f2)
 
+    # Fetch comments since last processed (if any)
+    local since_ts since_query=""
+    since_ts=$(get_latest_processed_ts "$repo" "$pr_number")
+    if [[ -n "$since_ts" ]]; then
+        since_query="?since=$since_ts"
+        log_info "Only fetching comments since $since_ts"
+    fi
+
     # Fetch all comments and review comments
     local issue_comments review_comments
-    issue_comments=$(gh api "repos/$repo/issues/$pr_number/comments" \
+    issue_comments=$(gh api "repos/$repo/issues/$pr_number/comments${since_query}" \
         --jq '.[] | "**@\(.user.login)** (\(.created_at)):\n\(.body)\n"' 2>/dev/null || echo "")
     # shellcheck disable=SC2016
-    review_comments=$(gh api "repos/$repo/pulls/$pr_number/comments" \
+    review_comments=$(gh api "repos/$repo/pulls/$pr_number/comments${since_query}" \
         --jq '.[] | "**@\(.user.login)** on `\(.path):\(.position)` (\(.created_at)):\n\(.body)\n"' 2>/dev/null || echo "")
 
     # Check for linked issues
@@ -699,9 +722,10 @@ main_loop() {
             if [[ -z "$task" ]]; then
                 log_debug "No new unprocessed !ralph tasks in this poll cycle"
             else
-                local task_type repo
+                local task_type repo created_at
                 task_type=$(echo "$task" | jq -r '.type')
                 repo=$(echo "$task" | jq -r '.repo')
+                created_at=$(echo "$task" | jq -r '.created_at')
 
                 case "$task_type" in
                     pr_comment)
@@ -734,7 +758,7 @@ main_loop() {
                                 case "$outcome_type" in
                                     success)
                                         clear_retry "$task_id"
-                                        mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"completed\"}"
+                                        mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"trigger_created_at\":\"$created_at\",\"result\":\"completed\"}"
                                         log_info "Task $task_id completed"
                                         ;;
                                     rate_limited)
@@ -800,7 +824,7 @@ main_loop() {
                                 case "$outcome_type" in
                                     success)
                                         clear_retry "$task_id"
-                                        mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"completed\"}"
+                                        mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"trigger_created_at\":\"$created_at\",\"result\":\"completed\"}"
                                         log_info "Task $task_id completed"
                                         ;;
                                     rate_limited)
