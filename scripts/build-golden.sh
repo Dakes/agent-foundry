@@ -364,6 +364,34 @@ EOF
     local all_packages=(gh "${core_packages[@]}" "${custom_packages[@]}")
     install_packages "$mount_dir" "${all_packages[@]}"
 
+    log_info "Configuring Docker for Firecracker VM compatibility"
+    # Create Docker daemon configuration
+    mkdir -p "$mount_dir/etc/docker"
+    cat > "$mount_dir/etc/docker/daemon.json" <<'EOF'
+{
+  "storage-driver": "overlay2",
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "iptables": true,
+  "ip-forward": true
+}
+EOF
+
+    # Switch to iptables-legacy for compatibility with Firecracker microvm kernels.
+    # Ubuntu 22.04 uses iptables-nft by default but Firecracker kernels may not
+    # have full nf_tables support compiled in.
+    chroot "$mount_dir" update-alternatives --set iptables /usr/sbin/iptables-legacy 2>/dev/null || true
+    chroot "$mount_dir" update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy 2>/dev/null || true
+    chroot "$mount_dir" update-alternatives --set arptables /usr/sbin/arptables-legacy 2>/dev/null || true
+    chroot "$mount_dir" update-alternatives --set ebtables /usr/sbin/ebtables-legacy 2>/dev/null || true
+
+    # Enable Docker service to start on boot
+    chroot "$mount_dir" systemctl enable docker 2>/dev/null || true
+
     log_info "Installing nvm and Node.js 24"
     # Install nvm
     # shellcheck disable=SC2016  # Variables should expand in chroot, not host

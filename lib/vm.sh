@@ -186,7 +186,7 @@ _generate_fc_config() {
 {
   "boot-source": {
     "kernel_image_path": "$kernel_path",
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off ip=${vm_ip}::${FOUNDRY_GATEWAY}:255.255.255.0::eth0:off:1.1.1.1"
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off ip=${vm_ip}::${FOUNDRY_GATEWAY}:255.255.255.0::eth0:off:1.1.1.1 cgroup_enable=memory swapaccount=1 systemd.unified_cgroup_hierarchy=0"
   },
   "drives": [
     {
