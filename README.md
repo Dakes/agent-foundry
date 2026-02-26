@@ -207,6 +207,48 @@ nix-shell
 ./scripts/build-ubuntu-base.sh
 ```
 
+## Docker Bridge Networking Kernel (Option C)
+
+Base template builds now compile a Firecracker kernel using the upstream microVM
+config plus `config/kernel/docker-netfilter.fragment` so Docker bridge NAT works
+inside guest VMs.
+
+Validation commands:
+
+```bash
+# Rebuild base template + kernel
+sudo foundry template build base
+
+# Confirm VM is using the built kernel and inspect baked config
+ls -lh ~/.local/share/foundry/vms/kernels/vmlinux
+grep -E '^(CONFIG_NETFILTER|CONFIG_NF_TABLES|CONFIG_IP_NF_NAT|CONFIG_BRIDGE_NETFILTER)=' \
+  ~/.local/share/foundry/vms/kernels/vmlinux.config
+```
+
+Practical smoke test (inside a VM):
+
+```bash
+foundry vm create net-smoke --project example-project
+foundry vm start net-smoke
+
+# Build and run with default Docker bridge networking
+foundry vm ssh net-smoke 'cat > /root/Dockerfile <<EOF
+FROM busybox:1.36
+CMD ["sh", "-c", "ip route && wget -qO- https://ifconfig.me || true"]
+EOF
+docker build -t net-smoke:latest /root
+docker run --rm net-smoke:latest'
+
+# Optional compose test
+foundry vm ssh net-smoke 'cat > /root/compose.yaml <<EOF
+services:
+  web:
+    image: busybox:1.36
+    command: ["sh", "-c", "ip route && wget -qO- https://ifconfig.me || true"]
+EOF
+docker compose -f /root/compose.yaml up --abort-on-container-exit'
+```
+
 Release bundle is built automatically by `install.sh` if needed.
 
 ## Project Status

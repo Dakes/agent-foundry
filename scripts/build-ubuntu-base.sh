@@ -31,8 +31,7 @@ LOOP_DEV=""
 SSH_KEY=""
 BUILD_SUCCESS="false"
 
-# Global variables for discovered URLs
-DISCOVERED_KERNEL_URL=""
+# Global variable for discovered URL
 DISCOVERED_ROOTFS_URL=""
 
 usage() {
@@ -79,7 +78,7 @@ ensure_dependencies() {
 }
 
 discover_resources() {
-    log_info "Discovering latest Firecracker resources..."
+    log_info "Discovering latest Firecracker Ubuntu rootfs..."
     local arch
     arch=$(uname -m)
     
@@ -95,19 +94,6 @@ discover_resources() {
 
     local bucket_url="http://spec.ccfc.min.s3.amazonaws.com"
     
-    # Find latest kernel key
-    log_debug "Finding latest kernel for $arch..."
-    local kernel_prefix="firecracker-ci/$ci_version/$arch/vmlinux-"
-    local latest_kernel_key
-    latest_kernel_key=$(curl -s "$bucket_url/?prefix=$kernel_prefix&list-type=2" \
-        | grep -oP "(?<=<Key>)(${kernel_prefix}[0-9]+\.[0-9]+\.[0-9]{1,3})(?=</Key>)" \
-        | sort -V | tail -1 || true)
-
-    if [[ -z "$latest_kernel_key" ]]; then
-        log_warn "Could not find kernel with prefix $kernel_prefix. Falling back to stable v1.10."
-        latest_kernel_key="firecracker-ci/v1.10/$arch/vmlinux-5.10.223"
-    fi
-
     # Find latest ubuntu squashfs key (Firecracker CI uses squashfs for distribution)
     log_debug "Finding latest Ubuntu rootfs for $arch..."
     local ubuntu_prefix="firecracker-ci/$ci_version/$arch/ubuntu-"
@@ -123,22 +109,11 @@ discover_resources() {
         DISCOVERED_ROOTFS_URL="https://s3.amazonaws.com/spec.ccfc.min/$latest_ubuntu_key"
     fi
 
-    DISCOVERED_KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/$latest_kernel_key"
-    
-    log_info "Discovered Kernel: $(basename "$DISCOVERED_KERNEL_URL")"
     log_info "Discovered Rootfs: $(basename "$DISCOVERED_ROOTFS_URL")"
 }
 
-download_resources() {
-    mkdir -p "$KERNELS_DIR"
+download_rootfs() {
     mkdir -p "$TEMPLATES_DIR"
-
-    if [[ ! -f "$OUTPUT_KERNEL" ]]; then
-        log_info "Downloading guest kernel from $DISCOVERED_KERNEL_URL"
-        curl -fsSL -o "$OUTPUT_KERNEL" "$DISCOVERED_KERNEL_URL"
-    else
-        log_info "Kernel already exists at $OUTPUT_KERNEL"
-    fi
 
     if [[ ! -f "$OUTPUT_IMAGE" ]]; then
         log_info "Downloading Ubuntu rootfs from $DISCOVERED_ROOTFS_URL"
@@ -166,6 +141,17 @@ download_resources() {
     else
         log_info "Base image already exists at $OUTPUT_IMAGE. Re-using."
     fi
+}
+
+prepare_kernel() {
+    mkdir -p "$KERNELS_DIR"
+
+    log_info "Building Docker-capable Firecracker kernel"
+    "${PROJECT_ROOT}/scripts/prepare-kernel.sh" \
+        --force \
+        --profile docker-netfilter \
+        --install-dir "$KERNELS_DIR" \
+        --output-name "$(basename "$OUTPUT_KERNEL")"
 }
 
 resize_image() {
@@ -260,7 +246,8 @@ main() {
 
     select_ssh_key
     discover_resources
-    download_resources
+    download_rootfs
+    prepare_kernel
     resize_image
     inject_ssh_key
     inject_dns_config

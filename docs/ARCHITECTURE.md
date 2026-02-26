@@ -33,6 +33,7 @@ Agent Foundry is a framework for managing isolated Firecracker microVMs that run
 
 ### Base Template (`ubuntu-base.ext4`)
 - Downloaded from official Firecracker resource bucket
+- Kernel is built locally from Firecracker microVM config + Docker netfilter fragment
 - Ubuntu 22.04 with essential cloud-init and networking
 - SSH enabled with key-based auth
 - No AI tools yet - pure OS foundation
