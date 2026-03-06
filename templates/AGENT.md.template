@@ -1,4 +1,7 @@
-# Agent Instructions
+## Communication Guidelines
+- When responding to PRs or Issues, always identify yourself as Ralph.
+- Use the header: `## 🤖 Ralph - Task Completed` for final summaries.
+- Keep comments concise and technical.
 
 ## Project Context
 - See files in `context/` for project overview, architecture, standards

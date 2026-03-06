@@ -336,28 +336,54 @@ get_query_since() {
 # GITHUB API QUERIES
 # ============================================================================
 
+add_reaction() {
+    local repo="$1"
+    local type="$2" # issue, issue_comment, pr_review_comment
+    local id="$3"   # number or comment_id
+    local emoji="${4:-eyes}"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY RUN] Would add $emoji reaction to $type $id in $repo"
+        return 0
+    fi
+
+    log_debug "Adding $emoji reaction to $type $id in $repo"
+
+    case "$type" in
+        issue)
+            gh api "repos/$repo/issues/$id/reactions" -f content="$emoji" >/dev/null 2>&1 || true
+            ;;
+        issue_comment)
+            gh api "repos/$repo/issues/comments/$id/reactions" -f content="$emoji" >/dev/null 2>&1 || true
+            ;;
+        pr_review_comment)
+            gh api "repos/$repo/pulls/comments/$id/reactions" -f content="$emoji" >/dev/null 2>&1 || true
+            ;;
+    esac
+}
+
 find_ralph_mentions() {
     local query_since
     query_since=$(get_query_since)
 
     log_debug "Searching for !ralph mentions (all open issues/PRs, since $query_since)"
 
-    # Priority 1: Check recent PR comments for !ralph (use 'since' to reduce API calls)
+    # Priority 1: Check recent PR/Issue comments for !ralph (use 'since' to reduce API calls)
     for repo in ${WATCHED_REPOS//,/ }; do
-        log_debug "Checking recent PR conversation comments in $repo"
+        log_debug "Checking recent comments in $repo"
 
-        # Get recent issue comments on PR conversations (not line-level review comments)
+        # Get recent issue comments on PR conversations or Issues
         if ! gh api --paginate "repos/$repo/issues/comments?since=$query_since&per_page=100" \
-            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_comment", repo: "'"$repo"'", id: .id, number: (.issue_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login, created_at: .created_at}' \
+            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "issue_comment", repo: "'"$repo"'", id: .id, number: (.issue_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login, created_at: .created_at}' \
             2>&1; then
-            log_error "Failed to check PR conversation comments in $repo (is gh CLI installed and authenticated?)"
+            log_error "Failed to check comments in $repo (is gh CLI installed and authenticated?)"
         fi
 
         log_debug "Checking recent PR review comments in $repo"
 
         # Get recent line-level PR review comments
         if ! gh api --paginate "repos/$repo/pulls/comments?since=$query_since&per_page=100" \
-            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_comment", repo: "'"$repo"'", id: .id, number: (.pull_request_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login, created_at: .created_at}' \
+            --jq '.[] | select(.body | test("!ralph"; "i")) | {type: "pr_review_comment", repo: "'"$repo"'", id: .id, number: (.pull_request_url | split("/")[-1] | tonumber), body: .body, html_url: .html_url, user: .user.login, created_at: .created_at}' \
             2>&1; then
             log_error "Failed to check PR review comments in $repo"
         fi
@@ -455,6 +481,7 @@ ${comments}
 - [ ] Run tests and verify functionality
 - [ ] Create pull request to ${repo} with "Fixes #${issue_number}" in description
 - [ ] Ensure PR title and body clearly explain the changes
+- [ ] **IMPORTANT**: Comment on the original issue (#${issue_number}) with a summary of your work. Start your comment with "## 🤖 Ralph - Task Completed" to identify yourself.
 
 ## Notes
 
@@ -571,7 +598,7 @@ ${linked_issue_context}
 - [ ] Make necessary code changes in the correct repository
 - [ ] Run tests and verify all pass
 - [ ] Push fixes to branch \`${pr_branch}\` in ${repo}
-- [ ] Optionally comment on PR with summary of changes made
+- [ ] **IMPORTANT**: Comment on the PR with a summary of changes made. Start your comment with "## 🤖 Ralph - Task Completed" to identify yourself.
 
 ## Notes
 
@@ -630,7 +657,7 @@ post_error_comment() {
 
     local comment_body
     comment_body=$(cat <<EOF
-## 🤖 Ralph - Task Update
+## 🤖 Ralph - Task Update (Error)
 
 I encountered an issue while working on this task and couldn't complete it automatically.
 
@@ -645,7 +672,7 @@ ${error_message}
 - You can re-trigger me by posting another \`!ralph\` comment with additional context
 
 ---
-*This is an automated message from Ralph. I've returned to monitoring mode.*
+*This is an automated message from Ralph, your autonomous development agent.*
 EOF
 )
 
@@ -696,11 +723,11 @@ main_loop() {
                 candidate_id=$(echo "$candidate" | jq -r '.id // empty')
 
                 case "$candidate_type" in
-                    pr_comment)
-                        candidate_task_id="pr_${candidate_number}_comment_${candidate_id}"
-                        ;;
                     issue_comment)
                         candidate_task_id="issue_${candidate_number}_comment_${candidate_id}"
+                        ;;
+                    pr_review_comment)
+                        candidate_task_id="pr_${candidate_number}_review_${candidate_id}"
                         ;;
                     issue)
                         candidate_task_id="issue_${candidate_number}"
@@ -722,19 +749,24 @@ main_loop() {
             if [[ -z "$task" ]]; then
                 log_debug "No new unprocessed !ralph tasks in this poll cycle"
             else
-                local task_type repo created_at
+                local task_type repo created_at task_id_for_reaction
                 task_type=$(echo "$task" | jq -r '.type')
                 repo=$(echo "$task" | jq -r '.repo')
                 created_at=$(echo "$task" | jq -r '.created_at')
 
                 case "$task_type" in
-                    pr_comment)
-                        local pr_number comment_id task_id
-                        pr_number=$(echo "$task" | jq -r '.number')
+                    issue_comment|pr_review_comment)
+                        local number comment_id task_id
+                        number=$(echo "$task" | jq -r '.number')
                         comment_id=$(echo "$task" | jq -r '.id')
-                        task_id="pr_${pr_number}_comment_${comment_id}"
+                        
+                        if [[ "$task_type" == "issue_comment" ]]; then
+                            task_id="issue_${number}_comment_${comment_id}"
+                        else
+                            task_id="pr_${number}_review_${comment_id}"
+                        fi
 
-                        log_info "Found !ralph in PR #$pr_number (comment #$comment_id) from $repo"
+                        log_info "Found !ralph in $task_type #$comment_id (Issue/PR #$number) from $repo"
 
                         if [[ "$DRY_RUN" == "true" ]]; then
                             log_info "[DRY RUN] Would process task $task_id from $repo"
@@ -742,7 +774,23 @@ main_loop() {
                             continue
                         fi
 
-                        if build_context_for_pr "$repo" "$pr_number" "$comment_id"; then
+                        # React to the comment to show we've started
+                        add_reaction "$repo" "$task_type" "$comment_id" "eyes"
+
+                        local context_success=false
+                        if [[ "$task_type" == "issue_comment" ]] && ! gh api "repos/$repo/pulls/$number" >/dev/null 2>&1; then
+                            # It's a comment on a regular issue
+                            if build_context_for_issue "$repo" "$number"; then
+                                context_success=true
+                            fi
+                        else
+                            # It's a comment on a PR (conversation or review)
+                            if build_context_for_pr "$repo" "$number" "$comment_id"; then
+                                context_success=true
+                            fi
+                        fi
+
+                        if [[ "$context_success" == "true" ]]; then
                             echo "$task" > "$CURRENT_TASK_FILE"
                             local run_start_epoch
                             run_start_epoch=$(date +%s)
@@ -758,47 +806,41 @@ main_loop() {
                                 case "$outcome_type" in
                                     success)
                                         clear_retry "$task_id"
-                                        mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"trigger_created_at\":\"$created_at\",\"result\":\"completed\"}"
+                                        mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"trigger_created_at\":\"$created_at\",\"result\":\"completed\"}"
                                         log_info "Task $task_id completed"
+                                        add_reaction "$repo" "$task_type" "$comment_id" "rocket"
                                         ;;
                                     rate_limited)
                                         log_warn "Ralph hit usage limit for $task_id, scheduling retry"
-                                        post_error_comment "$repo" "$pr_number" "Claude usage limit reached. I will retry this task automatically in about one hour."
+                                        post_error_comment "$repo" "$number" "Claude usage limit reached. I will retry this task automatically in about one hour."
                                         schedule_retry "$task_id" "$RATE_LIMIT_RETRY_SECONDS" "$outcome_detail"
                                         ;;
                                     failure|unknown)
                                         clear_retry "$task_id"
                                         log_error "Ralph failed for $task_id: $outcome_detail"
-                                        post_error_comment "$repo" "$pr_number" "Ralph exited early: $outcome_detail"
-                                        mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_runtime_failed\"}"
+                                        post_error_comment "$repo" "$number" "Ralph exited early: $outcome_detail"
+                                        mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_runtime_failed\"}"
                                         ;;
                                 esac
                             else
                                 log_error "Failed to start Ralph for $task_id"
-                                post_error_comment "$repo" "$pr_number" "Failed to start Ralph"
+                                post_error_comment "$repo" "$number" "Failed to start Ralph"
                                 clear_retry "$task_id"
-                                mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_start_failed\"}"
+                                mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_start_failed\"}"
                             fi
 
                             # Cooldown period
                             sleep 120
                         else
-                            log_error "Failed to build context for PR #$pr_number"
-                            mark_processed "$task_id" "{\"type\":\"pr_comment\",\"pr_number\":$pr_number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
+                            log_error "Failed to build context for $task_type #$comment_id"
+                            mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
                         fi
                         ;;
 
-                    issue|issue_comment)
+                    issue)
                         local issue_number task_id
                         issue_number=$(echo "$task" | jq -r '.number')
-
-                        if [[ "$task_type" == "issue_comment" ]]; then
-                            local comment_id
-                            comment_id=$(echo "$task" | jq -r '.id')
-                            task_id="issue_${issue_number}_comment_${comment_id}"
-                        else
-                            task_id="issue_${issue_number}"
-                        fi
+                        task_id="issue_${issue_number}"
 
                         log_info "Found !ralph in Issue #$issue_number from $repo"
 
@@ -807,6 +849,9 @@ main_loop() {
                             echo "$task" > "$CURRENT_TASK_FILE"
                             continue
                         fi
+
+                        # React to the issue to show we've started
+                        add_reaction "$repo" "issue" "$issue_number" "eyes"
 
                         if build_context_for_issue "$repo" "$issue_number"; then
                             echo "$task" > "$CURRENT_TASK_FILE"
@@ -826,6 +871,7 @@ main_loop() {
                                         clear_retry "$task_id"
                                         mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"trigger_created_at\":\"$created_at\",\"result\":\"completed\"}"
                                         log_info "Task $task_id completed"
+                                        add_reaction "$repo" "issue" "$issue_number" "rocket"
                                         ;;
                                     rate_limited)
                                         log_warn "Ralph hit usage limit for $task_id, scheduling retry"

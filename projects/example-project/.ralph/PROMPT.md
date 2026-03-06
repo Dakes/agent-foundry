@@ -35,6 +35,7 @@ After completing ALL tasks in fix_plan.md:
 1. Run tests: `npm test`
 2. Run linting: `npm run lint`
 3. Build: `npm run build`
-4. Output the RALPH_STATUS block from fix_plan.md to signal completion
+4. **Final Comment**: Post a summary of your changes to the PR or Issue. **Always** start your comment with "## 🤖 Ralph - Task Completed" so users know it was an automated agent responding.
+5. Output the RALPH_STATUS block from fix_plan.md to signal completion
 
 Start by reading `/root/.ralph/fix_plan.md` to see Task 1.
