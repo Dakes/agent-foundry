@@ -50,10 +50,17 @@ $(jq -r '.body' "$context_file")
 
 $(jq -r '.discussion' "$context_file")
 
+## Triggering Request
+
+This is the newest direct request and has priority over older discussion when they conflict.
+
+$(jq -r '.trigger_body // .body' "$context_file")
+
 ## Requirements
 
 - Work in /root/repos/$(jq -r '.repo_name' "$context_file"), or additional repos only if the real execution path requires it.
-- Analyze the issue and discussion before editing code.
+- Analyze the issue and recent discussion before editing code.
+- Treat the "Triggering Request" section as the primary objective for this run.
 - Implement the minimal correct fix or feature.
 - Run relevant tests and validation.
 - Create a pull request to $(jq -r '.repo' "$context_file") with "Fixes #$(jq -r '.number' "$context_file")" in the description.
@@ -91,18 +98,21 @@ $(jq -r '.body' "$context_file")
 
 ## Conversation Thread
 
-### Issue Comments
-$(jq -r '.issue_comments' "$context_file")
-
-### Review Comments
-$(jq -r '.review_comments' "$context_file")
+$(jq -r '.conversation' "$context_file")
 
 ${linked_issue_section}
+
+## Triggering Request
+
+This is the newest direct request and has priority over older discussion when they conflict.
+
+$(jq -r '.trigger_body // "No trigger comment body available."' "$context_file")
 
 ## Requirements
 
 - Work in /root/repos/$(jq -r '.repo_name' "$context_file").
 - Fetch and checkout branch \`$(jq -r '.branch' "$context_file")\`.
+- Treat the "Triggering Request" section as the primary objective for this run.
 - Address all relevant PR feedback.
 - Run relevant tests and validation.
 - Push fixes back to branch \`$(jq -r '.branch' "$context_file")\`.
