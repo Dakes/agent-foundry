@@ -1,0 +1,27 @@
+event_loop:
+  completion_promise: LOOP_COMPLETE
+  max_iterations: 80
+  max_runtime_seconds: 14400
+  prompt_file: PROMPT.md
+
+cli:
+  backend: claude
+
+core:
+  specs_dir: ./specs/
+  guardrails:
+    - "Use focused commits and run tests before finishing tasks."
+    - "Do not edit deploy keys or VM bootstrap files."
+
+features:
+  preflight:
+    enabled: true
+    strict: false
+
+memories:
+  enabled: true
+  inject: auto
+  budget: 1200
+
+tasks:
+  enabled: true

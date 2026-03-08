@@ -6,7 +6,7 @@ Run AI coding agents 24/7 in isolated Firecracker VMs. Each project gets its own
 
 ## Features
 
-- **🤖 Autonomous** - ralph-claude-code runs unattended with safeguards
+- **🤖 Autonomous** - supports `ralph-claude-code` and `ralph-orchestrator`
 - **🔒 Isolated** - Dedicated VM per project, zero host pollution
 - **🚀 Concurrent** - Run unlimited VMs simultaneously
 - **📚 Rich Context** - Company docs, standards, architecture included
@@ -31,6 +31,27 @@ foundry vm create my-project --project example-project
 foundry agent start my-project ralph
 foundry agent logs my-project --follow
 ```
+
+## Ralph Variants
+
+Agent Foundry supports two autonomous Ralph integrations:
+
+- `ralph` (backed by `frankbria/ralph-claude-code`)
+- `ralph-orchestrator` (backed by `mikeyobrien/ralph-orchestrator`)
+
+Each VM image should include exactly one Ralph variant. Configure template builds with:
+
+```bash
+# ~/.config/foundry/config.conf
+RALPH_AGENT_VARIANT=ralph-claude-code
+# or
+RALPH_AGENT_VARIANT=ralph-orchestrator
+```
+
+Project examples:
+
+- `projects/example-project/` (ralph-claude-code)
+- `projects/example-project-orchestrator/` (ralph-orchestrator)
 
 ## Architecture
 
@@ -59,6 +80,8 @@ Host System (Arch/NixOS)
 
 ## Ralph File Structure
 
+`ralph-claude-code` projects typically use this layout:
+
 ```
 /root/                          # VM workspace
 ├── .ralphrc                    # Config (optional, overrides default)
@@ -80,7 +103,7 @@ Host System (Arch/NixOS)
 4. Makes changes → Runs tests → Checks off task
 5. Repeats until all done
 
-See `projects/example-project/.ralph/` for complete example.
+For `ralph-orchestrator`, use top-level `ralph.yml` and `PROMPT.md` (see `projects/example-project-orchestrator/`).
 
 ## Configuration
 
@@ -140,7 +163,7 @@ foundry vm rename <old> <new>
 foundry vm snapshot <name> <snapshot>
 
 # Agent management
-foundry agent start <vm> <agent-type>  # ralph, claude, gemini, codex
+foundry agent start <vm> <agent-type>  # ralph, ralph-orchestrator, claude, gemini, codex
 foundry agent stop <vm>
 foundry agent restart <vm>
 foundry agent logs <vm> [--follow]
@@ -191,7 +214,7 @@ Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
 - [VISION.md](docs/VISION.md) - Project goals and philosophy
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Complete architecture overview
 - [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) - Full command reference
-- [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) - Ralph-claude-code details
+- [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) - Ralph integration details
 - [TODO.md](TODO.md) - Implementation roadmap
 
 ## Development
@@ -228,7 +251,7 @@ MIT License - See [LICENSE](LICENSE)
 
 ## Credits
 
-Built on [Firecracker](https://firecracker-microvm.github.io/) • Uses [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) • Inspired by the Ralph Wiggum technique
+Built on [Firecracker](https://firecracker-microvm.github.io/) • Supports [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) and [ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator) • Inspired by the Ralph Wiggum technique
 
 ## Support
 

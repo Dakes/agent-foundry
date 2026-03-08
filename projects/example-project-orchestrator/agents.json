@@ -1,0 +1,8 @@
+{
+  "agents": [
+    "mikeyobrien/ralph-orchestrator",
+    "@anthropic-ai/claude-code",
+    "@openai/codex",
+    "@google/gemini-cli"
+  ]
+}

@@ -2,13 +2,15 @@
 
 The GitHub Watcher enables fully autonomous development by monitoring GitHub repositories for `!ralph` mentions, automatically triggering Ralph to work on tasks, and creating pull requests when complete.
 
+It supports both `ralph-claude-code` and `ralph-orchestrator`. The watcher detects the installed variant and generates the matching task format.
+
 ## Overview
 
 Once configured, the watcher runs 24/7 inside a VM, polling GitHub every 60 seconds for new work:
 
 1. Developer posts `!ralph` in an issue or PR comment
 2. Watcher detects the mention (within 60 seconds)
-3. Watcher populates Ralph's `fix_plan.md` with full context
+3. Watcher builds the matching Ralph task context
 4. Watcher starts Ralph to work autonomously
 5. Ralph completes the task and creates a PR (or posts an error comment)
 6. Watcher resumes polling for the next task
@@ -29,10 +31,25 @@ Once configured, the watcher runs 24/7 inside a VM, polling GitHub every 60 seco
 foundry agent gh-watcher init <vm-name>
 ```
 
-This will prompt you for:
-- Repositories to watch (comma-separated, e.g., `myorg/backend,myorg/frontend`)
-- Project directory (default: `/root/repos`)
-- GitHub Personal Access Token
+If `~/.config/foundry/projects/<project>/gh-watcher.json` exists, `init` loads it automatically. Otherwise it falls back to prompts.
+
+Minimal example:
+
+```json
+{
+  "watched_repos": ["myorg/backend", "myorg/frontend"],
+  "github_token_file": "./secrets/github-token.txt",
+  "poll_interval": 60,
+  "ralph_timeout": 120,
+  "post_error_comments": true,
+  "enabled": true
+}
+```
+
+Supported token sources in `gh-watcher.json`:
+- `github_token_file`
+- `github_token_env`
+- `github_token`
 
 **2. Start the watcher:**
 
@@ -82,9 +99,11 @@ The watcher will detect it and start working automatically.
 
 ## Configuration
 
-### Config File Location
+### Config File Locations
 
 Inside the VM: `/root/.config/gh-watcher/config.conf`
+
+Optional host-side project config: `~/.config/foundry/projects/<project>/gh-watcher.json`
 
 ### Configuration Options
 
@@ -97,9 +116,6 @@ POLL_INTERVAL=60
 
 # Repositories to monitor (comma-separated)
 WATCHED_REPOS="owner/repo1,owner/repo2"
-
-# Project working directory
-PROJECT_DIR="/root/repos"
 
 # GitHub token file location
 GITHUB_TOKEN_FILE="/root/.config/gh/token"
@@ -129,7 +145,7 @@ This is useful when a VM works on related projects.
 foundry agent gh-watcher init <vm-name>
 ```
 
-Prompts for configuration and sets up the watcher.
+Loads `gh-watcher.json` when present, otherwise prompts for configuration, then sets up the watcher.
 
 ### Start Watcher
 
@@ -205,7 +221,7 @@ Requirements:
 **What happens:**
 
 1. Watcher detects `!ralph` within 60 seconds
-2. Watcher creates `fix_plan.md` with full issue context
+2. Watcher creates the matching Ralph task file with full issue context
 3. Watcher starts Ralph
 4. Ralph:
    - Analyzes requirements

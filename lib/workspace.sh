@@ -56,6 +56,10 @@ TEMPLATES_DIR="${FOUNDRY_BASE_DIR}/templates/workspace"
 FOUNDRY_SSH_USER="${FOUNDRY_SSH_USER:-root}"
 FOUNDRY_SSH_OPTS="${FOUNDRY_SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -o PasswordAuthentication=no}"
 
+# Supported project agent identifiers (agents.json)
+RALPH_CLAUDE_CODE_AGENT="frankbria/ralph-claude-code"
+RALPH_ORCHESTRATOR_AGENT="mikeyobrien/ralph-orchestrator"
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -369,6 +373,132 @@ _resolve_project_dir() {
     echo "$project_dir"
 }
 
+_install_missing_npm_agent_cli() {
+    local vm_name="$1"
+    local description="$2"
+    local package="$3"
+    local binary="$4"
+
+    log_info "Installing missing ${description} in VM '$vm_name'"
+    _ssh_cmd "$vm_name" "bash -lc 'set -euo pipefail; export NVM_DIR=/root/.nvm; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; command -v npm >/dev/null 2>&1; npm install -g \"$package\"; bin_path=\$(command -v \"$binary\"); install -d /usr/local/bin; ln -sf \"\$bin_path\" \"/usr/local/bin/$binary\"'"
+}
+
+_desired_project_ralph_variant() {
+    local agents_config="$1"
+
+    if jq -e '.agents[] | select(. == "mikeyobrien/ralph-orchestrator")' "$agents_config" >/dev/null 2>&1; then
+        echo "ralph-orchestrator"
+        return 0
+    fi
+
+    if jq -e '.agents[] | select(. == "frankbria/ralph-claude-code")' "$agents_config" >/dev/null 2>&1; then
+        echo "ralph-claude-code"
+        return 0
+    fi
+
+    return 1
+}
+
+_installed_ralph_variant() {
+    local vm_name="$1"
+    _ssh_cmd "$vm_name" "if [[ -f /opt/foundry/ralph-agent-type ]]; then tr -d '[:space:]' < /opt/foundry/ralph-agent-type; elif [[ -d /opt/ralph ]]; then echo ralph-claude-code; elif command -v ralph >/dev/null 2>&1 && ralph --version 2>/dev/null | head -n 1 | grep -qi orchestrator; then echo ralph-orchestrator; else echo unknown; fi" 2>/dev/null || echo "unknown"
+}
+
+_switch_vm_ralph_variant() {
+    local vm_name="$1"
+    local desired_variant="$2"
+
+    case "$desired_variant" in
+        ralph-orchestrator)
+            log_info "Installing Ralph Orchestrator in VM '$vm_name'"
+            _ssh_cmd "$vm_name" "bash -lc 'set -euo pipefail; export NVM_DIR=/root/.nvm; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; rm -rf /opt/ralph; rm -f /root/.local/bin/ralph /usr/local/bin/ralph; npm uninstall -g @ralph-orchestrator/ralph-cli >/dev/null 2>&1 || true; npm install -g @ralph-orchestrator/ralph-cli; bin_path=\$(command -v ralph); install -d /usr/local/bin /opt/foundry; ln -sf \"\$bin_path\" /usr/local/bin/ralph; printf \"%s\\n\" ralph-orchestrator > /opt/foundry/ralph-agent-type'"
+            ;;
+        ralph-claude-code)
+            log_info "Installing ralph-claude-code in VM '$vm_name'"
+            _ssh_cmd "$vm_name" "bash -lc 'set -euo pipefail; export NVM_DIR=/root/.nvm; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; rm -rf /opt/ralph; rm -f /root/.local/bin/ralph /usr/local/bin/ralph; npm uninstall -g @ralph-orchestrator/ralph-cli >/dev/null 2>&1 || true; install -d /opt /opt/foundry; git clone https://github.com/frankbria/ralph-claude-code.git /opt/ralph; cd /opt/ralph; ./install.sh; if command -v ralph >/dev/null 2>&1; then ln -sf \"\$(command -v ralph)\" /usr/local/bin/ralph; fi; printf \"%s\\n\" ralph-claude-code > /opt/foundry/ralph-agent-type'"
+            ;;
+        *)
+            log_error "Unsupported Ralph variant: $desired_variant"
+            return 1
+            ;;
+    esac
+}
+
+_ensure_project_ralph_variant() {
+    local vm_name="$1"
+    local agents_config="$2"
+
+    local desired_variant installed_variant
+    desired_variant=$(_desired_project_ralph_variant "$agents_config" 2>/dev/null || true)
+    [[ -z "$desired_variant" ]] && return 0
+
+    installed_variant=$(_installed_ralph_variant "$vm_name")
+    if [[ "$installed_variant" == "$desired_variant" ]]; then
+        return 0
+    fi
+
+    log_warn "VM '$vm_name' has Ralph variant '$installed_variant' but project requires '$desired_variant'"
+    _switch_vm_ralph_variant "$vm_name" "$desired_variant"
+}
+
+_cleanup_legacy_ralph_workspace() {
+    local vm_name="$1"
+    local project_dir="$2"
+    local workspace_path="$3"
+
+    if [[ ! -d "$project_dir/.ralph" ]]; then
+        return 0
+    fi
+
+    local legacy_entries=(
+        "docs"
+        "lib"
+        "logs"
+        "templates"
+        "fix_plan.md"
+        "live.log"
+        "migrate_to_ralph_folder.sh"
+        "ralph_enable.sh"
+        "ralph_enable_ci.sh"
+        "ralph_import.sh"
+        "ralph_loop.sh"
+        "ralph_monitor.sh"
+        "setup.sh"
+    )
+
+    local entry
+    for entry in "${legacy_entries[@]}"; do
+        if [[ ! -e "$project_dir/.ralph/$entry" ]]; then
+            _ssh_cmd "$vm_name" "rm -rf '$workspace_path/.ralph/$entry'"
+        fi
+    done
+}
+
+_ensure_project_agent_clis() {
+    local vm_name="$1"
+    local agents_config="$2"
+
+    while IFS= read -r agent; do
+        case "$agent" in
+            "@anthropic-ai/claude-code")
+                if ! _ssh_cmd "$vm_name" "command -v claude >/dev/null 2>&1"; then
+                    _install_missing_npm_agent_cli "$vm_name" "Claude Code CLI" "@anthropic-ai/claude-code" "claude" || return 1
+                fi
+                ;;
+            "@openai/codex")
+                if ! _ssh_cmd "$vm_name" "command -v codex >/dev/null 2>&1"; then
+                    _install_missing_npm_agent_cli "$vm_name" "OpenAI Codex CLI" "@openai/codex" "codex" || return 1
+                fi
+                ;;
+            "@google/gemini-cli")
+                if ! _ssh_cmd "$vm_name" "command -v gemini >/dev/null 2>&1"; then
+                    _install_missing_npm_agent_cli "$vm_name" "Gemini CLI" "@google/gemini-cli" "gemini" || return 1
+                fi
+                ;;
+        esac
+    done < <(jq -r '.agents[]' "$agents_config" 2>/dev/null)
+}
+
 # Initialize workspace in VM from config file
 # Usage: workspace_init <vm_name> <config_file>
 #
@@ -431,7 +561,17 @@ workspace_init() {
     fi
 
     # Validate agent types
-    local supported_agents=("frankbria/ralph-claude-code" "@anthropic-ai/claude-code" "@openai/codex" "@google/gemini-cli")
+    local supported_agents=(
+        "$RALPH_CLAUDE_CODE_AGENT"
+        "$RALPH_ORCHESTRATOR_AGENT"
+        "@anthropic-ai/claude-code"
+        "@openai/codex"
+        "@google/gemini-cli"
+    )
+    local invalid_agents=0
+    local ralph_agent_count=0
+    local uses_ralph_orchestrator=false
+
     while IFS= read -r agent; do
         local supported=false
         for valid in "${supported_agents[@]}"; do
@@ -443,8 +583,34 @@ workspace_init() {
         if [[ "$supported" == "false" ]]; then
             log_error "Unsupported agent in agents.json: $agent"
             log_error "Supported: ${supported_agents[*]}"
+            invalid_agents=1
         fi
+
+        case "$agent" in
+            "$RALPH_CLAUDE_CODE_AGENT")
+                ralph_agent_count=$((ralph_agent_count + 1))
+                ;;
+            "$RALPH_ORCHESTRATOR_AGENT")
+                ralph_agent_count=$((ralph_agent_count + 1))
+                uses_ralph_orchestrator=true
+                ;;
+        esac
     done <<< "$agents_list"
+
+    if [[ $invalid_agents -ne 0 ]]; then
+        return 1
+    fi
+
+    if [[ $ralph_agent_count -gt 1 ]]; then
+        log_error "agents.json may include at most one Ralph agent per image"
+        log_error "Use either '$RALPH_CLAUDE_CODE_AGENT' or '$RALPH_ORCHESTRATOR_AGENT', not both"
+        return 1
+    fi
+
+    if [[ $ralph_agent_count -eq 0 ]]; then
+        log_warn "No Ralph agent listed in agents.json"
+        log_warn "Autonomous Ralph commands will be unavailable for this project"
+    fi
 
     # Create workspace directory structure
     log_debug "Creating workspace directories in /root/..."
@@ -461,7 +627,7 @@ workspace_init() {
     while IFS= read -r agent; do
         local dotfolder=""
         case "$agent" in
-            "frankbria/ralph-claude-code")
+            "$RALPH_CLAUDE_CODE_AGENT"|"${RALPH_ORCHESTRATOR_AGENT}")
                 dotfolder=".ralph"
                 ;;
             "@anthropic-ai/claude-code")
@@ -494,8 +660,29 @@ workspace_init() {
         done <<< "$md_files"
     fi
 
+    if [[ "$uses_ralph_orchestrator" == "true" ]]; then
+        # Ralph Orchestrator uses top-level YAML config files.
+        log_info "Copying Ralph Orchestrator config files..."
+        local ralph_yaml_files
+        ralph_yaml_files=$(find "$project_dir" -maxdepth 1 -type f \( -name "ralph.yml" -o -name "ralph.*.yml" \) 2>/dev/null || true)
+        if [[ -n "$ralph_yaml_files" ]]; then
+            while IFS= read -r ralph_yaml; do
+                local filename
+                filename=$(basename "$ralph_yaml")
+                _scp_to_vm "$vm_ip" "$ssh_key_path" "$ralph_yaml" "$workspace_path/$filename"
+                log_debug "Copied $filename"
+            done <<< "$ralph_yaml_files"
+        else
+            log_warn "Ralph Orchestrator selected but no ralph.yml found in project root"
+        fi
+    fi
+
     # Ralph uses files in .ralph/ folder (already copied above)
     # No additional Ralph initialization needed
+
+    _cleanup_legacy_ralph_workspace "$vm_name" "$project_dir" "$workspace_path" || return 1
+    _ensure_project_ralph_variant "$vm_name" "$agents_config" || return 1
+    _ensure_project_agent_clis "$vm_name" "$agents_config" || return 1
 
     # Update registry with workspace info
     registry_update "$vm_name" ".workspace" "\"$vm_name\""
@@ -531,6 +718,15 @@ workspace_sync() {
     local project_dir
     project_dir=$(_resolve_project_dir "$vm_name" "$project_ref") || return 1
 
+    local agents_config="$project_dir/agents.json"
+    local ralph_agent_count
+    ralph_agent_count=$(jq -r "[.agents[] | select(. == \"$RALPH_CLAUDE_CODE_AGENT\" or . == \"$RALPH_ORCHESTRATOR_AGENT\")] | length" "$agents_config" 2>/dev/null || echo "0")
+    if [[ "$ralph_agent_count" -gt 1 ]]; then
+        log_error "agents.json may include at most one Ralph agent per image"
+        log_error "Fix $agents_config before syncing"
+        return 1
+    fi
+
     local vm_ip ssh_key_path
     vm_ip=$(_get_vm_ip "$vm_name")
     ssh_key_path=$(_get_vm_ssh_key "$vm_name")
@@ -561,6 +757,8 @@ workspace_sync() {
         fi
     done
 
+    _cleanup_legacy_ralph_workspace "$vm_name" "$project_dir" "$workspace_path" || return 1
+
     # Sync common agent config files when present.
     local -a config_files=(".ralphrc")
     local config_file
@@ -570,6 +768,18 @@ workspace_sync() {
             _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$config_file" "$workspace_path/$config_file"
         fi
     done
+
+    # Sync top-level Ralph Orchestrator config files.
+    local ralph_yaml_files
+    ralph_yaml_files=$(find "$project_dir" -maxdepth 1 -type f \( -name "ralph.yml" -o -name "ralph.*.yml" \) 2>/dev/null || true)
+    if [[ -n "$ralph_yaml_files" ]]; then
+        log_info "Syncing Ralph YAML configs (ralph*.yml)"
+        while IFS= read -r ralph_yaml; do
+            local filename
+            filename=$(basename "$ralph_yaml")
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$ralph_yaml" "$workspace_path/$filename"
+        done <<< "$ralph_yaml_files"
+    fi
 
     # Sync top-level markdown context/docs files.
     local md_files
@@ -587,8 +797,11 @@ workspace_sync() {
     registry_update "$vm_name" ".project_dir" "\"$project_dir\""
     registry_update "$vm_name" ".project_name" "\"$(basename "$project_dir")\""
 
+    _ensure_project_ralph_variant "$vm_name" "$agents_config" || return 1
+    _ensure_project_agent_clis "$vm_name" "$agents_config" || return 1
+
     log_info "Workspace sync complete."
-    log_info "Updated: dotfolders (.ralph/.claude/.codex/.gemini), .ralphrc, and top-level *.md files."
+    log_info "Updated: dotfolders (.ralph/.claude/.codex/.gemini), .ralphrc, top-level *.md, and ralph*.yml files."
 
     return 0
 }

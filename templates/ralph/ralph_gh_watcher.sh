@@ -2,8 +2,8 @@
 #
 # Ralph GitHub Watcher - Autonomous GitHub Issue/PR Monitor
 #
-# Polls GitHub repositories for !ralph mentions, populates fix_plan.md,
-# and triggers Ralph to work autonomously on tasks.
+# Polls GitHub repositories for !ralph mentions, builds agent-specific task
+# context, and triggers the installed Ralph variant to work autonomously.
 #
 # Configuration: /root/.config/gh-watcher/config.conf
 # State tracking: /root/.config/gh-watcher/processed.json
@@ -25,6 +25,8 @@ PROCESSED_FILE="$CONFIG_DIR/processed.json"
 RETRY_FILE="$CONFIG_DIR/retries.json"
 LOG_FILE="$CONFIG_DIR/watcher.log"
 CURRENT_TASK_FILE="$CONFIG_DIR/current_task.json"
+CONTEXT_FILE="$CONFIG_DIR/current_context.json"
+HELPER_DIR="/opt/foundry/gh-watcher"
 
 # Default values (overridden by config file)
 WATCHER_ENABLED="${WATCHER_ENABLED:-false}"
@@ -38,6 +40,7 @@ DRY_RUN="${DRY_RUN:-false}"
 RATE_LIMIT_RETRY_SECONDS="${RATE_LIMIT_RETRY_SECONDS:-3600}"
 
 RALPH_WORKSPACE="/root"
+RALPH_AGENT_VARIANT="${RALPH_AGENT_VARIANT:-unknown}"
 
 # ============================================================================
 # LOGGING
@@ -63,6 +66,34 @@ log_error() {
 
 log_debug() {
     log "DEBUG" "$@"
+}
+
+# ============================================================================
+# HELPER MODULES
+# ============================================================================
+
+source_watcher_helpers() {
+    local common_helper="$HELPER_DIR/gh_watcher_common.sh"
+    local claude_helper="$HELPER_DIR/gh_watcher_agent_ralph_claude_code.sh"
+    local orchestrator_helper="$HELPER_DIR/gh_watcher_agent_ralph_orchestrator.sh"
+
+    if [[ ! -f "$common_helper" ]]; then
+        log_error "Watcher helper missing: $common_helper"
+        return 1
+    fi
+
+    # shellcheck source=/dev/null
+    source "$common_helper"
+
+    if [[ -f "$claude_helper" ]]; then
+        # shellcheck source=/dev/null
+        source "$claude_helper"
+    fi
+
+    if [[ -f "$orchestrator_helper" ]]; then
+        # shellcheck source=/dev/null
+        source "$orchestrator_helper"
+    fi
 }
 
 # ============================================================================
@@ -98,6 +129,10 @@ EOF
 
     # Create log file
     touch "$LOG_FILE"
+
+    if ! source_watcher_helpers; then
+        return 1
+    fi
 
     # Load configuration
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -138,10 +173,21 @@ EOF
         return 1
     fi
 
+    RALPH_AGENT_VARIANT=$(detect_ralph_agent_variant)
+    case "$RALPH_AGENT_VARIANT" in
+        ralph-claude-code|ralph-orchestrator)
+            ;;
+        *)
+            log_error "Unsupported Ralph watcher agent variant: $RALPH_AGENT_VARIANT"
+            return 1
+            ;;
+    esac
+
     log_info "GitHub watcher initialized"
     log_info "  Watching repos: $WATCHED_REPOS"
     log_info "  Poll interval: ${POLL_INTERVAL}s"
     log_info "  Ralph workspace: $RALPH_WORKSPACE"
+    log_info "  Ralph agent variant: $RALPH_AGENT_VARIANT"
 
     return 0
 }
@@ -211,6 +257,7 @@ get_latest_claude_result_file_after() {
     echo "$latest_file"
 }
 
+# shellcheck disable=SC2329
 evaluate_ralph_outcome() {
     local run_start_epoch="$1"
 
@@ -402,245 +449,95 @@ find_ralph_mentions() {
     done
 }
 
-get_latest_processed_ts() {
-    local repo="$1"
-    local number="$2"
-    # Find the latest trigger_created_at for this repo and issue/PR number
-    # We filter by both number and repo to be precise
-    jq -r "[.processed | to_entries[] | select(.value.repo == \"$repo\" and (.value.pr_number == $number or .value.number == $number)) | .value.trigger_created_at] | sort | last // \"\"" "$PROCESSED_FILE"
-}
-
 # ============================================================================
-# CONTEXT BUILDING
+# CONTEXT BUILDING AND AGENT EXECUTION
 # ============================================================================
 
 build_context_for_issue() {
     local repo="$1"
     local issue_number="$2"
+    local trigger_type="${3:-issue}"
+    local trigger_comment_id="${4:-}"
+    local trigger_created_at="${5:-}"
 
-    log_info "Building context for issue #$issue_number in $repo"
+    log_info "Building ${RALPH_AGENT_VARIANT} context for issue #$issue_number in $repo"
 
-    # Fetch issue details
-    local issue
-    issue=$(gh api "repos/$repo/issues/$issue_number" 2>/dev/null)
-
-    if [[ -z "$issue" ]]; then
-        log_error "Failed to fetch issue #$issue_number from $repo"
+    if ! build_issue_context_json "$repo" "$issue_number" "$trigger_type" "$trigger_comment_id" "$trigger_created_at" "$CONTEXT_FILE"; then
         return 1
     fi
 
-    local issue_title issue_body issue_url issue_user issue_labels
-    issue_title=$(echo "$issue" | jq -r '.title')
-    issue_body=$(echo "$issue" | jq -r '.body // "No description provided"')
-    issue_url=$(echo "$issue" | jq -r '.html_url')
-    issue_user=$(echo "$issue" | jq -r '.user.login')
-    issue_labels=$(echo "$issue" | jq -r '.labels | map(.name) | join(", ")')
-
-    # Extract repo name (e.g., "Dakes/core" -> "core")
-    local repo_name
-    repo_name=$(echo "$repo" | cut -d'/' -f2)
-
-    # Fetch all comments (or only new ones if already processed)
-    local since_ts since_query=""
-    since_ts=$(get_latest_processed_ts "$repo" "$issue_number")
-    if [[ -n "$since_ts" ]]; then
-        since_query="?since=$since_ts"
-        log_info "Only fetching comments since $since_ts"
-    fi
-
-    local comments
-    comments=$(gh api "repos/$repo/issues/$issue_number/comments${since_query}" \
-        --jq '.[] | "**@\(.user.login)** (\(.created_at)):\n\(.body)\n"' 2>/dev/null || echo "")
-
-    # Build fix_plan.md
-    cat > "$RALPH_WORKSPACE/.ralph/fix_plan.md" <<EOF
----
-# Task from Issue #${issue_number}: ${issue_title}
-
-## Repository Context
-
-**Repository:** ${repo}
-**Issue URL:** ${issue_url}
-**Local repo path:** /root/repos/${repo_name}
-**Created by:** @${issue_user}
-**Labels:** ${issue_labels}
-
-## Description
-
-${issue_body}
-
-## Discussion
-
-${comments}
-
-## Tasks
-
-- [ ] Navigate to /root/repos/${repo_name} (or relevant repo if multi-repo change needed)
-- [ ] Analyze requirements from issue description
-- [ ] Implement solution in the correct repository
-- [ ] Run tests and verify functionality
-- [ ] Create pull request to ${repo} with "Fixes #${issue_number}" in description
-- [ ] Ensure PR title and body clearly explain the changes
-- [ ] **IMPORTANT**: Comment on the original issue (#${issue_number}) with a summary of your work. Start your comment with "## 🤖 Ralph - Task Completed" to identify yourself.
-
-## Notes
-
-- This VM may have multiple repos under /root/repos/
-- Ensure changes are made in the correct repository: ${repo_name}
-- If changes span multiple repos, create separate PRs for each
-
----
-EOF
-
-    log_info "Created fix_plan.md for issue #$issue_number"
-    return 0
+    case "$RALPH_AGENT_VARIANT" in
+        ralph-claude-code)
+            prepare_ralph_claude_code_workspace "$CONTEXT_FILE"
+            ;;
+        ralph-orchestrator)
+            prepare_ralph_orchestrator_workspace "$CONTEXT_FILE"
+            ;;
+        *)
+            log_error "Unsupported Ralph agent variant in build_context_for_issue: $RALPH_AGENT_VARIANT"
+            return 1
+            ;;
+    esac
 }
 
 build_context_for_pr() {
     local repo="$1"
     local pr_number="$2"
-    local comment_id="$3"
+    local trigger_type="${3:-pr_review_comment}"
+    local trigger_comment_id="${4:-}"
+    local trigger_created_at="${5:-}"
 
-    log_info "Building context for PR #$pr_number in $repo (comment #$comment_id)"
+    log_info "Building ${RALPH_AGENT_VARIANT} context for PR #$pr_number in $repo"
 
-    # Fetch PR details
-    local pr
-    pr=$(gh api "repos/$repo/pulls/$pr_number" 2>/dev/null)
-
-    if [[ -z "$pr" ]]; then
-        log_error "Failed to fetch PR #$pr_number from $repo"
+    if ! build_pr_context_json "$repo" "$pr_number" "$trigger_type" "$trigger_comment_id" "$trigger_created_at" "$CONTEXT_FILE"; then
         return 1
     fi
 
-    local pr_title pr_body pr_url pr_branch pr_user
-    pr_title=$(echo "$pr" | jq -r '.title')
-    pr_body=$(echo "$pr" | jq -r '.body // "No description provided"')
-    pr_url=$(echo "$pr" | jq -r '.html_url')
-    pr_branch=$(echo "$pr" | jq -r '.head.ref')
-    pr_user=$(echo "$pr" | jq -r '.user.login')
-
-    # Extract repo name (e.g., "Dakes/core" -> "core")
-    local repo_name
-    repo_name=$(echo "$repo" | cut -d'/' -f2)
-
-    # Fetch comments since last processed (if any)
-    local since_ts since_query=""
-    since_ts=$(get_latest_processed_ts "$repo" "$pr_number")
-    if [[ -n "$since_ts" ]]; then
-        since_query="?since=$since_ts"
-        log_info "Only fetching comments since $since_ts"
-    fi
-
-    # Fetch all comments and review comments
-    local issue_comments review_comments
-    issue_comments=$(gh api "repos/$repo/issues/$pr_number/comments${since_query}" \
-        --jq '.[] | "**@\(.user.login)** (\(.created_at)):\n\(.body)\n"' 2>/dev/null || echo "")
-    # shellcheck disable=SC2016
-    review_comments=$(gh api "repos/$repo/pulls/$pr_number/comments${since_query}" \
-        --jq '.[] | "**@\(.user.login)** on `\(.path):\(.position)` (\(.created_at)):\n\(.body)\n"' 2>/dev/null || echo "")
-
-    # Check for linked issues
-    local linked_issue_context=""
-    local linked_issue
-    linked_issue=$(echo "$pr_body" | grep -oP '(?:Fixes|Closes|Resolves) #\K\d+' | head -1 || echo "")
-
-    if [[ -n "$linked_issue" ]]; then
-        local issue
-        issue=$(gh api "repos/$repo/issues/$linked_issue" 2>/dev/null || echo "")
-
-        if [[ -n "$issue" ]]; then
-            local issue_title issue_body
-            issue_title=$(echo "$issue" | jq -r '.title')
-            issue_body=$(echo "$issue" | jq -r '.body // "No description"')
-
-            linked_issue_context="
-## Related Issue
-
-Fixes #${linked_issue}: ${issue_title}
-
-${issue_body}
-"
-        fi
-    fi
-
-    # Build fix_plan.md
-    cat > "$RALPH_WORKSPACE/.ralph/fix_plan.md" <<EOF
----
-# Task from PR #${pr_number}: ${pr_title}
-
-## Repository Context
-
-**Repository:** ${repo}
-**PR URL:** ${pr_url}
-**Branch:** ${pr_branch}
-**Local repo path:** /root/repos/${repo_name}
-**Created by:** @${pr_user}
-**@ralph mentioned in comment:** #${comment_id}
-
-## PR Description
-
-${pr_body}
-
-## Conversation Thread
-
-### Issue Comments
-${issue_comments}
-
-### Review Comments (Code-level)
-${review_comments}
-${linked_issue_context}
-
-## Tasks
-
-- [ ] Navigate to /root/repos/${repo_name}
-- [ ] Fetch and checkout branch \`${pr_branch}\`
-- [ ] Review PR feedback and address all comments
-- [ ] Make necessary code changes in the correct repository
-- [ ] Run tests and verify all pass
-- [ ] Push fixes to branch \`${pr_branch}\` in ${repo}
-- [ ] **IMPORTANT**: Comment on the PR with a summary of changes made. Start your comment with "## 🤖 Ralph - Task Completed" to identify yourself.
-
-## Notes
-
-- This VM may have multiple repos under /root/repos/
-- Ensure changes are made in the correct repository: ${repo_name}
-- Push changes to the existing branch: ${pr_branch}
-
----
-EOF
-
-    log_info "Created fix_plan.md for PR #$pr_number"
-    return 0
+    case "$RALPH_AGENT_VARIANT" in
+        ralph-claude-code)
+            prepare_ralph_claude_code_workspace "$CONTEXT_FILE"
+            ;;
+        ralph-orchestrator)
+            prepare_ralph_orchestrator_workspace "$CONTEXT_FILE"
+            ;;
+        *)
+            log_error "Unsupported Ralph agent variant in build_context_for_pr: $RALPH_AGENT_VARIANT"
+            return 1
+            ;;
+    esac
 }
 
-# ============================================================================
-# RALPH EXECUTION
-# ============================================================================
-
 start_ralph() {
-    log_info "Starting Ralph with ${RALPH_TIMEOUT}-minute timeout..."
+    case "$RALPH_AGENT_VARIANT" in
+        ralph-claude-code)
+            start_ralph_claude_code_loop
+            ;;
+        ralph-orchestrator)
+            start_ralph_orchestrator_loop
+            ;;
+        *)
+            log_error "Unsupported Ralph agent variant in start_ralph: $RALPH_AGENT_VARIANT"
+            return 1
+            ;;
+    esac
+}
 
-    cd "$RALPH_WORKSPACE" || {
-        log_error "Failed to change directory to $RALPH_WORKSPACE"
-        return 1
-    }
+evaluate_ralph_outcome() {
+    local run_start_epoch="$1"
 
-    # Ensure stale loop session does not block startup.
-    tmux kill-session -t ralph-loop 2>/dev/null || true
-
-    # If the circuit breaker is open from prior runs, reset it before a new task.
-    ralph --reset-circuit >/dev/null 2>&1 || true
-
-    # Start Ralph in tmux (will run in background)
-    tmux new-session -d -s ralph-loop "ralph --monitor --timeout $RALPH_TIMEOUT 2>&1 | tee -a logs/ralph-watcher.log"
-
-    if tmux has-session -t ralph-loop 2>/dev/null; then
-        log_info "Ralph started successfully in tmux session 'ralph-loop'"
-        return 0
-    else
-        log_error "Failed to start Ralph tmux session"
-        return 1
-    fi
+    case "$RALPH_AGENT_VARIANT" in
+        ralph-claude-code)
+            evaluate_ralph_claude_code_outcome "$run_start_epoch"
+            ;;
+        ralph-orchestrator)
+            evaluate_ralph_orchestrator_outcome
+            ;;
+        *)
+            log_error "Unsupported Ralph agent variant in evaluate_ralph_outcome: $RALPH_AGENT_VARIANT"
+            echo "failure:unsupported_agent_variant"
+            return 0
+            ;;
+    esac
 }
 
 post_error_comment() {
@@ -669,7 +566,7 @@ ${error_message}
 **Next Steps:**
 - Review the error details above
 - Check the Ralph logs for more information
-- You can re-trigger me by posting another \`!ralph\` comment with additional context
+- You can re-trigger me by posting another comment that says "exclamation mark ralph" with additional context
 
 ---
 *This is an automated message from Ralph, your autonomous development agent.*
@@ -780,12 +677,12 @@ main_loop() {
                         local context_success=false
                         if [[ "$task_type" == "issue_comment" ]] && ! gh api "repos/$repo/pulls/$number" >/dev/null 2>&1; then
                             # It's a comment on a regular issue
-                            if build_context_for_issue "$repo" "$number"; then
+                            if build_context_for_issue "$repo" "$number" "$task_type" "$comment_id" "$created_at"; then
                                 context_success=true
                             fi
                         else
                             # It's a comment on a PR (conversation or review)
-                            if build_context_for_pr "$repo" "$number" "$comment_id"; then
+                            if build_context_for_pr "$repo" "$number" "$task_type" "$comment_id" "$created_at"; then
                                 context_success=true
                             fi
                         fi
@@ -812,7 +709,7 @@ main_loop() {
                                         ;;
                                     rate_limited)
                                         log_warn "Ralph hit usage limit for $task_id, scheduling retry"
-                                        post_error_comment "$repo" "$number" "Claude usage limit reached. I will retry this task automatically in about one hour."
+                                        post_error_comment "$repo" "$number" "Agent backend usage limit reached. I will retry this task automatically in about one hour."
                                         schedule_retry "$task_id" "$RATE_LIMIT_RETRY_SECONDS" "$outcome_detail"
                                         ;;
                                     failure|unknown)
@@ -853,7 +750,7 @@ main_loop() {
                         # React to the issue to show we've started
                         add_reaction "$repo" "issue" "$issue_number" "eyes"
 
-                        if build_context_for_issue "$repo" "$issue_number"; then
+                        if build_context_for_issue "$repo" "$issue_number" "issue" "" "$created_at"; then
                             echo "$task" > "$CURRENT_TASK_FILE"
                             local run_start_epoch
                             run_start_epoch=$(date +%s)
@@ -875,7 +772,7 @@ main_loop() {
                                         ;;
                                     rate_limited)
                                         log_warn "Ralph hit usage limit for $task_id, scheduling retry"
-                                        post_error_comment "$repo" "$issue_number" "Claude usage limit reached. I will retry this task automatically in about one hour."
+                                        post_error_comment "$repo" "$issue_number" "Agent backend usage limit reached. I will retry this task automatically in about one hour."
                                         schedule_retry "$task_id" "$RATE_LIMIT_RETRY_SECONDS" "$outcome_detail"
                                         ;;
                                     failure|unknown)
@@ -955,6 +852,17 @@ cmd_dry_run() {
 }
 
 cmd_status() {
+    local processed_valid=false
+    local current_valid=false
+
+    if [[ -f "$PROCESSED_FILE" ]] && jq -e . "$PROCESSED_FILE" >/dev/null 2>&1; then
+        processed_valid=true
+    fi
+
+    if [[ -f "$CURRENT_TASK_FILE" ]] && jq -e . "$CURRENT_TASK_FILE" >/dev/null 2>&1; then
+        current_valid=true
+    fi
+
     echo "GitHub Watcher Status"
     echo "====================="
 
@@ -964,6 +872,9 @@ cmd_status() {
         echo "  Enabled: $WATCHER_ENABLED"
         echo "  Repos: $WATCHED_REPOS"
         echo "  Poll interval: ${POLL_INTERVAL}s"
+        if source_watcher_helpers >/dev/null 2>&1; then
+            echo "  Ralph agent variant: $(detect_ralph_agent_variant)"
+        fi
         echo ""
     else
         echo "Configuration: Not found"
@@ -984,18 +895,23 @@ cmd_status() {
 
     echo ""
 
-    if [[ -f "$PROCESSED_FILE" ]]; then
+    if [[ "$processed_valid" == "true" ]]; then
         local task_count last_poll
         task_count=$(jq '.processed | length' "$PROCESSED_FILE")
         last_poll=$(jq -r '.last_poll' "$PROCESSED_FILE")
         echo "Processed tasks: $task_count"
         echo "Last poll: $last_poll"
+    elif [[ -f "$PROCESSED_FILE" ]]; then
+        echo "Processed tasks: unavailable (invalid JSON in $PROCESSED_FILE)"
     fi
 
-    if [[ -f "$CURRENT_TASK_FILE" ]]; then
+    if [[ "$current_valid" == "true" ]]; then
         echo ""
         echo "Current task:"
         jq '.' "$CURRENT_TASK_FILE" 2>/dev/null || echo "  (unable to parse)"
+    elif [[ -f "$CURRENT_TASK_FILE" ]]; then
+        echo ""
+        echo "Current task: unavailable (invalid JSON in $CURRENT_TASK_FILE)"
     fi
 }
 
@@ -1043,11 +959,11 @@ cmd_scan() {
         id=$(echo "$task" | jq -r '.id // empty')
 
         case "$task_type" in
-            pr_comment)
-                task_id="pr_${number}_comment_${id}"
-                ;;
             issue_comment)
                 task_id="issue_${number}_comment_${id}"
+                ;;
+            pr_review_comment)
+                task_id="pr_${number}_review_${id}"
                 ;;
             issue)
                 task_id="issue_${number}"

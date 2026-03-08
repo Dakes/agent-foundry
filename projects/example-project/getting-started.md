@@ -2,6 +2,7 @@
 
 1. **Inspect the configuration files**
    - `git-config.json` lists the repositories Agent Foundry will clone and the deploy key each repo uses.
+   - `agents.json` must include at most one Ralph-family agent (`frankbria/ralph-claude-code` or `mikeyobrien/ralph-orchestrator`).
    - `.ralph/` contains prompt, plan, and agent instructions that are automatically copied into each workspace if you run Ralph.
 
 2. **Generate a VM**

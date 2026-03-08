@@ -8,7 +8,7 @@ Agent Foundry is a framework for managing isolated Firecracker microVMs that run
 
 1. **Isolation** - Each project gets its own VM, no cross-contamination
 2. **Reproducibility** - VMs built from scripts, snapshots for reuse
-3. **Autonomy** - Agents run unattended with ralph-claude-code
+3. **Autonomy** - Agents run unattended with a Ralph integration (ralph-claude-code or ralph-orchestrator)
 4. **Flexibility** - Support multiple AI CLIs and concurrent VMs
 5. **Portability** - System-agnostic host, works on any Linux
 
@@ -41,7 +41,7 @@ Agent Foundry is a framework for managing isolated Firecracker microVMs that run
 ### Golden Template (`golden.ext4`)
 - Base template + AI development stack
 - Pre-installed: Claude Code CLI, Gemini CLI, OpenAI CLI
-- ralph-claude-code system-wide installation in `/opt/ralph`
+- Exactly one Ralph variant installed per image (`ralph-claude-code` or `ralph-orchestrator`)
 - Per-VM SSH keys for git authentication (generated at VM create time)
 - Docker, Node.js, Python 3, development tools
 - This is what users actually clone
@@ -95,6 +95,7 @@ Current runtime workspace lives in `/root` inside each VM:
 /root/
 ├── repos/                      # Git repositories
 ├── .ralph/                     # Ralph config + plans
+├── ralph.yml                   # Ralph Orchestrator config (optional)
 ├── .claude/                    # Claude config (optional)
 ├── .codex/                     # Codex config (optional)
 ├── .gemini/                    # Gemini config (optional)
@@ -111,17 +112,22 @@ Current runtime workspace lives in `/root` inside each VM:
 1. **ralph** (Autonomous)
    - Continuous loop until tasks complete
    - Built-in tmux monitoring
-   - Primary autonomous agent
+   - Backed by `frankbria/ralph-claude-code`
 
-2. **claude** (Interactive)
+2. **ralph-orchestrator** (Autonomous)
+   - `ralph run` orchestration loop via `ralph.yml`
+   - Built-in tmux monitoring
+   - Backed by `mikeyobrien/ralph-orchestrator`
+
+3. **claude** (Interactive)
    - Claude Code CLI in screen session
    - Manual or script-driven
 
-3. **gemini** (Interactive)
+4. **gemini** (Interactive)
    - Google's Gemini CLI
    - Screen session for interaction
 
-4. **codex** (Interactive)
+5. **codex** (Interactive)
    - OpenAI's Codex CLI
    - Screen session for interaction
 

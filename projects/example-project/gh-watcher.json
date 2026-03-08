@@ -1,0 +1,11 @@
+{
+  "watched_repos": [
+    "myorg/backend",
+    "myorg/frontend"
+  ],
+  "github_token_file": "./secrets/github-token.txt",
+  "poll_interval": 60,
+  "ralph_timeout": 120,
+  "post_error_comments": true,
+  "enabled": true
+}

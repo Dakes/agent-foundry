@@ -156,18 +156,6 @@ EOF
     rm -f "$chroot_dir/usr/sbin/policy-rc.d"
 }
 
-install_python_cli_pkg() {
-    local description="$1"
-    local package="$2"
-
-    log_info "Installing ${description}"
-    if chroot "$MOUNT_DIR" python3 -m pip install --upgrade "$package"; then
-        log_info "${description} installed"
-    else
-        log_warn "Failed to install ${description} (package: $package)"
-    fi
-}
-
 
 is_mounted() {
     local target="$1"
@@ -333,7 +321,7 @@ EOF
 
     local core_packages=(
         # Base
-        git python3 python3-pip docker.io jq
+        ca-certificates git python3 python3-pip docker.io jq
 
         # System Monitoring
         htop btop ncdu lsof
@@ -351,18 +339,18 @@ EOF
         build-essential shellcheck
     )
 
-    # GitHub CLI needs to be installed from its own repo (not in Ubuntu repos)
+    # Bootstrap the chroot first so dpkg state and TLS certs exist before adding HTTPS repos.
+    local all_packages=("${core_packages[@]}" "${custom_packages[@]}")
+    install_packages "$mount_dir" "${all_packages[@]}"
+
+    # GitHub CLI needs to be installed from its own repo (not in Ubuntu repos).
     log_info "Adding GitHub CLI repository"
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o "$mount_dir/usr/share/keyrings/githubcli-archive-keyring.gpg"
     chmod 644 "$mount_dir/usr/share/keyrings/githubcli-archive-keyring.gpg"
     cat > "$mount_dir/etc/apt/sources.list.d/github-cli.list" <<EOF
 deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main
 EOF
-    chroot "$mount_dir" apt-get update
-
-    # Add gh to packages list
-    local all_packages=(gh "${core_packages[@]}" "${custom_packages[@]}")
-    install_packages "$mount_dir" "${all_packages[@]}"
+    install_packages "$mount_dir" gh
 
     log_info "Installing nvm and Node.js 24"
     # Install nvm
@@ -414,30 +402,8 @@ fi
 EOF
     chmod 644 "$mount_dir/etc/profile.d/local-bin-path.sh"
 
-    log_info "Installing Claude Code CLI"
-    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
-    chroot "$mount_dir" /bin/bash -c '
-set -euo pipefail
-export NVM_DIR="/root/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-npm install -g @anthropic-ai/claude-code
-'
-
-    install_python_cli_pkg "Gemini CLI" "gemini-cli"
-    install_python_cli_pkg "OpenAI CLI" "openai"
-
-    log_info "Setting up ralph-claude-code"
-    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
-    chroot "$mount_dir" /bin/bash -c '
-set -euo pipefail
-export NVM_DIR="/root/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-install -d /opt
-rm -rf /opt/ralph
-git clone https://github.com/frankbria/ralph-claude-code.git /opt/ralph
-cd /opt/ralph
-./install.sh
-'
+    log_info "Skipping AI/Ralph CLI installation in golden image"
+    log_info "Agent CLIs are installed per-VM from project agents.json during workspace init/sync"
 
     log_info "Creating /work directory"
     chroot "$mount_dir" mkdir -p /work
@@ -446,8 +412,12 @@ cd /opt/ralph
     install -m 755 "${ROOT_DIR}/templates/update-ai-deps.sh" "$mount_dir/usr/local/bin/update-ai-deps"
 
     log_info "Installing ralph-gh-watcher script"
-    chroot "$mount_dir" mkdir -p /opt/foundry
+    chroot "$mount_dir" mkdir -p /opt/foundry/gh-watcher
     install -m 755 "${ROOT_DIR}/templates/ralph/ralph_gh_watcher.sh" "$mount_dir/opt/foundry/ralph_gh_watcher.sh"
+    install -m 755 "${ROOT_DIR}/templates/ralph/gh_watcher_common.sh" "$mount_dir/opt/foundry/gh-watcher/gh_watcher_common.sh"
+    install -m 755 "${ROOT_DIR}/templates/ralph/gh_watcher_agent_ralph_claude_code.sh" "$mount_dir/opt/foundry/gh-watcher/gh_watcher_agent_ralph_claude_code.sh"
+    install -m 755 "${ROOT_DIR}/templates/ralph/gh_watcher_agent_ralph_orchestrator.sh" "$mount_dir/opt/foundry/gh-watcher/gh_watcher_agent_ralph_orchestrator.sh"
+    rm -f "$mount_dir/opt/foundry/ralph-agent-type"
 
     local host_git_config="${FOUND_HOST_HOME}/.gitconfig"
     if [[ -f "$host_git_config" ]]; then

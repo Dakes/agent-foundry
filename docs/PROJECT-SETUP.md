@@ -6,6 +6,7 @@ This guide explains how to create and configure project folders for Agent Foundr
 
 Agent Foundry uses project folders to configure VMs. Each project folder contains:
 - **git-config.json**: Repository configuration (required)
+- **agents.json**: Agent selection for workspace provisioning (required)
 - **Context markdown files**: Project documentation for agents
 - **Deploy keys (optional)**: Per-repo SSH keys for git authentication
 - **.ralph/ folder**: Optional Ralph-specific configuration
@@ -24,9 +25,12 @@ By default, Foundry generates a unique SSH keypair for each VM under:
 projects/
   my-project/
     git-config.json           # Required: Repository configuration
+    agents.json               # Required: selected agents (one Ralph max)
     overview.md               # Project context
     architecture.md           # Architecture documentation
     coding-standards.md       # Coding guidelines
+    ralph.yml                 # Optional: Ralph Orchestrator config
+    PROMPT.md                 # Optional: Ralph Orchestrator prompt file
     .ralph/                   # Optional: Ralph-specific
       PROMPT.md
       fix_plan.md
@@ -75,7 +79,26 @@ Create `git-config.json` with your repositories:
 - `branch`: Branch to checkout (default: "main")
 - `ssh_key`: Filename of deploy key (without .pub extension)
 
-### Step 3: Generate Deploy Keys
+### Step 3: Create agents.json
+
+Create `agents.json` to declare which agents this project uses:
+
+```json
+{
+  "agents": [
+    "frankbria/ralph-claude-code",
+    "@anthropic-ai/claude-code",
+    "@openai/codex",
+    "@google/gemini-cli"
+  ]
+}
+```
+
+For Ralph Orchestrator projects, replace `frankbria/ralph-claude-code` with `mikeyobrien/ralph-orchestrator`.
+
+Important: include at most one Ralph-family agent per project/image.
+
+### Step 4: Generate Deploy Keys
 
 Generate a deploy key for each repository (optional):
 
@@ -91,7 +114,7 @@ ssh-keygen -t ed25519 -f frontend-deploy-key -C "frontend-deploy-key" -N ""
 - GitHub: Settings → Deploy keys
 - GitLab: Settings → Repository → Deploy keys
 
-### Step 4: Add Context Files
+### Step 5: Add Context Files
 
 Create markdown files with project documentation:
 
@@ -120,7 +143,7 @@ cat > coding-standards.md << 'EOF'
 EOF
 ```
 
-### Step 5: (Optional) Add Ralph Configuration
+### Step 6: (Optional) Add Ralph Configuration
 
 If using Ralph, create `.ralph/` folder:
 
@@ -156,6 +179,7 @@ This will:
 5. Clone repositories using deploy keys
 6. Copy markdown files to `/work/dev-vm-1/context/`
 7. Copy `.ralph/` folder if it exists
+8. Copy `ralph.yml` / `ralph.*.yml` if present
 
 ### Create Multiple VMs from Same Project
 
@@ -171,8 +195,9 @@ All VMs use the same project configuration but are independent instances.
 The project folder structure is agent-agnostic:
 
 **Ralph (Autonomous):**
-- Uses `.ralph/` folder for task management
-- Reads context files automatically
+- `frankbria/ralph-claude-code`: uses `.ralph/` + optional `.ralphrc`
+- `mikeyobrien/ralph-orchestrator`: uses `ralph.yml` + `PROMPT.md` (+ optional `.ralph/`)
+- Only one Ralph-family agent should be configured per project/image
 
 **Claude Code (Interactive):**
 - No `.ralph/` folder needed
@@ -186,6 +211,7 @@ The project folder structure is agent-agnostic:
 ## Example: Complete Setup
 
 See `projects/example-project/` in the repository for a complete working example.
+For Ralph Orchestrator, see `projects/example-project-orchestrator/`.
 
 ## Tips
 

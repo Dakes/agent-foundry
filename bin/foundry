@@ -182,7 +182,7 @@ USAGE:
     foundry agent <action> [args...]
 
 ACTIONS:
-    start <vm> [type]          Start agent (type: ralph, claude, gemini, codex)
+    start <vm> [type]          Start agent (type: ralph, ralph-orchestrator, claude, gemini, codex)
     stop <vm>                  Stop agent
     restart <vm>               Restart agent
     attach <vm>                Attach to agent session
@@ -194,12 +194,14 @@ ACTIONS:
 
 AGENT TYPES:
     ralph   - ralph-claude-code autonomous agent (default, runs in tmux)
+    ralph-orchestrator - ralph-orchestrator autonomous agent (runs in tmux)
     claude  - Claude Code CLI interactive session (runs in screen)
     gemini  - Gemini CLI interactive session (runs in screen)
     codex   - OpenAI Codex CLI interactive session (runs in screen)
 
 EXAMPLES:
     foundry agent start my-project ralph
+    foundry agent start my-project ralph-orchestrator
     foundry agent attach my-project
     foundry agent logs my-project --follow
     foundry agent stop my-project
@@ -219,9 +221,10 @@ DESCRIPTION:
     The GitHub watcher monitors repositories for @ralph mentions in issues
     and pull requests, automatically triggers Ralph to work on tasks, and
     creates pull requests when complete.
+    It supports both Ralph variants and generates agent-specific task files.
 
 ACTIONS:
-    init <vm>              Initialize GitHub watcher (prompts for config)
+    init <vm>              Initialize GitHub watcher (uses project gh-watcher.json if present, otherwise prompts)
     start <vm>             Start watcher daemon in background
     stop <vm>              Stop watcher daemon
     status <vm>            Show watcher status and task queue
@@ -231,7 +234,7 @@ ACTIONS:
 WORKFLOW:
     1. User creates issue or PR comment with @ralph mention
     2. Watcher detects mention within 60 seconds
-    3. Watcher populates fix_plan.md with task context
+    3. Watcher builds agent-specific task context
     4. Watcher starts Ralph to work autonomously
     5. Ralph creates PR when complete (or posts error comment)
     6. Watcher resumes polling for new tasks
@@ -241,6 +244,10 @@ CONFIGURATION:
     - config.conf      Watcher settings (repos, poll interval)
     - processed.json   Completed task history
     - watcher.log      Activity log
+
+PROJECT CONFIG:
+    Optional host-side config:
+    ~/.config/foundry/projects/<project>/gh-watcher.json
 
 GITHUB TOKEN:
     Required permissions (Fine-grained Personal Access Token):
@@ -280,7 +287,7 @@ USAGE:
 
 ACTIONS:
     init <vm> <config.json>    Initialize workspace from config file
-    sync <vm> [project]        Sync latest project files (.ralph/.claude/*.md) into VM (ignores editor swap files)
+    sync <vm> [project]        Sync latest project files (.ralph/.claude/.codex/.gemini, .ralphrc, ralph*.yml, *.md) into VM
     init-ralph <vm>            Initialize Ralph structure (PROMPT.md, fix_plan.md, AGENT.md)
     edit <vm> <file>           Edit workspace file in $EDITOR
     info <vm>                  Show workspace information

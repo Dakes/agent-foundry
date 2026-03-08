@@ -1,8 +1,13 @@
-# Ralph-Claude-Code Integration
+# Ralph Integration
 
 ## Overview
 
-Agent Foundry uses [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) as the primary autonomous agent framework. Ralph is a mature, production-ready system specifically built for Claude Code CLI with 3.5k+ stars and comprehensive testing.
+Agent Foundry supports two Ralph integrations:
+
+- [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) (`foundry agent start <vm> ralph`)
+- [ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator) (`foundry agent start <vm> ralph-orchestrator`)
+
+Each image should include exactly one Ralph variant.
 
 ## How Ralph Works
 
@@ -204,7 +209,7 @@ Framework provides convenient commands:
 
 ```bash
 # Start Ralph agent
-foundry agent start my-project ralph-claude-code
+foundry agent start my-project ralph
 
 # Behind the scenes:
 # 1. SSH into VM
@@ -212,6 +217,9 @@ foundry agent start my-project ralph-claude-code
 # 3. Start ralph-loop in tmux
 # 4. Register in agent registry
 # 5. Return to host
+
+# Orchestrator variant:
+foundry agent start my-project ralph-orchestrator
 
 # Check status
 foundry agent status my-project
