@@ -977,7 +977,7 @@ agent_disable_autostart() {
 # Initialize GitHub watcher for a VM
 # Usage: agent_gh_watcher_init <vm_name>
 agent_gh_watcher_init() {
-    local vm_name="$1"
+    local vm_name="${1:-}"
     local watched_repos=""
     local github_token=""
     local poll_interval="60"
@@ -1083,7 +1083,7 @@ EOF
 # Start GitHub watcher daemon
 # Usage: agent_gh_watcher_start <vm_name> [--new|--all]
 agent_gh_watcher_start() {
-    local vm_name="$1"
+    local vm_name="${1:-}"
     shift || true
     local flags="$*"
 
@@ -1129,7 +1129,7 @@ agent_gh_watcher_start() {
 # Mark all existing mentions as processed
 # Usage: agent_gh_watcher_mark_all <vm_name>
 agent_gh_watcher_mark_all() {
-    local vm_name="$1"
+    local vm_name="${1:-}"
 
     if [[ -z "$vm_name" ]]; then
         log_error "VM name required"
@@ -1146,7 +1146,7 @@ agent_gh_watcher_mark_all() {
 # Stop GitHub watcher daemon
 # Usage: agent_gh_watcher_stop <vm_name>
 agent_gh_watcher_stop() {
-    local vm_name="$1"
+    local vm_name="${1:-}"
 
     if [[ -z "$vm_name" ]]; then
         log_error "VM name required"
