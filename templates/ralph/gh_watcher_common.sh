@@ -55,17 +55,29 @@ write_tmux_runner_script() {
     local command="$1"
 
     mkdir -p "$(dirname "$RUN_STATUS_FILE")" "$RALPH_WORKSPACE/logs"
-
-    cat > /tmp/start-ralph-watcher.sh <<EOF
+# Write runner script
+cat > /tmp/start-ralph-watcher.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 set -o pipefail
+
+# Initialize NVM if it exists
+export NVM_DIR="/root/.nvm"
+if [[ -s "\$NVM_DIR/nvm.sh" ]]; then
+# shellcheck source=/dev/null
+source "\$NVM_DIR/nvm.sh"
+# Use default node version
+nvm use default >/dev/null 2>&1 || true
+fi
+
 cd "$RALPH_WORKSPACE"
 rm -f "$RUN_STATUS_FILE"
+set +e
 {
-    ${command}
+$command
 }
 rc=\$?
+set -e
 printf '{"exit_code":%s,"finished_at":"%s"}\n' "\$rc" "\$(date -u +"%Y-%m-%dT%H:%M:%SZ")" > "$RUN_STATUS_FILE"
 exit "\$rc"
 EOF

@@ -215,24 +215,27 @@ show_gh_watcher_help() {
 foundry agent gh-watcher - Automated GitHub issue/PR monitoring
 
 USAGE:
-    foundry agent gh-watcher <action> <vm>
+    foundry agent gh-watcher <action> <vm> [options]
 
 DESCRIPTION:
-    The GitHub watcher monitors repositories for @ralph mentions in issues
+    The GitHub watcher monitors repositories for !ralph mentions in issues
     and pull requests, automatically triggers Ralph to work on tasks, and
     creates pull requests when complete.
     It supports both Ralph variants and generates agent-specific task files.
 
 ACTIONS:
     init <vm>              Initialize GitHub watcher (uses project gh-watcher.json if present, otherwise prompts)
-    start <vm>             Start watcher daemon in background
+    start <vm> [--new|--all] Start watcher daemon in background.
+                           --new: Only process mentions from this moment on.
+                           --all: Process all un-processed mentions from the last 30 days.
     stop <vm>              Stop watcher daemon
     status <vm>            Show watcher status and task queue
     logs <vm> [--follow]   View watcher logs
     reset <vm>             Clear processed task history
+    mark-all <vm>          Mark all existing mentions as processed without running Ralph
 
 WORKFLOW:
-    1. User creates issue or PR comment with @ralph mention
+    1. User creates issue or PR comment with !ralph mention
     2. Watcher detects mention within 60 seconds
     3. Watcher builds agent-specific task context
     4. Watcher starts Ralph to work autonomously
@@ -260,7 +263,7 @@ GITHUB TOKEN:
 EXAMPLES:
     # Setup
     foundry agent gh-watcher init my-vm
-    foundry agent gh-watcher start my-vm
+    foundry agent gh-watcher start my-vm --new
 
     # Monitor
     foundry agent gh-watcher status my-vm
@@ -268,11 +271,11 @@ EXAMPLES:
 
     # Maintenance
     foundry agent gh-watcher stop my-vm
-    foundry agent gh-watcher reset my-vm
+    foundry agent gh-watcher mark-all my-vm
 
 PRIORITY:
-    1. @ralph in PR comments (fixes to existing PRs)
-    2. @ralph in issues (new features/bugs)
+    1. !ralph in PR comments (fixes to existing PRs)
+    2. !ralph in issues (new features/bugs)
 
 For more information, see: docs/designs/2026-02-15-github-watcher-automation.md
 EOF
@@ -598,6 +601,9 @@ cmd_agent() {
                     ;;
                 reset)
                     agent_gh_watcher_reset "$@"
+                    ;;
+                mark-all)
+                    agent_gh_watcher_mark_all "$@"
                     ;;
                 help|--help|-h)
                     show_gh_watcher_help

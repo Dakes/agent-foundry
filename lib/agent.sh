@@ -1081,9 +1081,11 @@ EOF
 }
 
 # Start GitHub watcher daemon
-# Usage: agent_gh_watcher_start <vm_name>
+# Usage: agent_gh_watcher_start <vm_name> [--new|--all]
 agent_gh_watcher_start() {
     local vm_name="$1"
+    shift || true
+    local flags="$*"
 
     if [[ -z "$vm_name" ]]; then
         log_error "VM name required"
@@ -1109,7 +1111,7 @@ agent_gh_watcher_start() {
     log_info "Starting GitHub watcher in VM '$vm_name'..."
 
     # Start watcher in tmux session
-    _ssh_cmd_tty "$vm_name" "tmux new-session -d -s ralph-gh-watcher '/opt/foundry/ralph_gh_watcher.sh start'"
+    _ssh_cmd_tty "$vm_name" "tmux new-session -d -s ralph-gh-watcher '/opt/foundry/ralph_gh_watcher.sh start $flags'"
 
     # Verify session started
     sleep 1
@@ -1122,6 +1124,23 @@ agent_gh_watcher_start() {
         log_error "Failed to start GitHub watcher"
         return 1
     fi
+}
+
+# Mark all existing mentions as processed
+# Usage: agent_gh_watcher_mark_all <vm_name>
+agent_gh_watcher_mark_all() {
+    local vm_name="$1"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+    _require_gh_watcher_supported_variant "$vm_name" || return 1
+
+    log_info "Marking all existing !ralph mentions as processed in VM '$vm_name'..."
+    _ssh_cmd_tty "$vm_name" "/opt/foundry/ralph_gh_watcher.sh mark-all"
 }
 
 # Stop GitHub watcher daemon

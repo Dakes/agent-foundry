@@ -303,6 +303,9 @@ evaluate_ralph_outcome() {
 
 is_processed() {
     local task_id="$1"
+    if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
+        return 1
+    fi
     jq -e ".processed.\"$task_id\"" "$PROCESSED_FILE" >/dev/null 2>&1
 }
 
@@ -310,14 +313,28 @@ mark_processed() {
     local task_id="$1"
     local task_data="$2"
 
+    # Ensure processed.json is valid
+    if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
+        cat > "$PROCESSED_FILE" <<'EOF'
+{
+  "version": "1.0",
+  "processed": {},
+  "last_poll": "1970-01-01T00:00:00Z"
+}
+EOF
+    fi
+
     # Update processed.json
     local temp_file
     temp_file=$(mktemp)
-    jq ".processed.\"$task_id\" = $task_data | .last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" \
-        "$PROCESSED_FILE" > "$temp_file"
-    mv "$temp_file" "$PROCESSED_FILE"
-
-    log_debug "Marked task $task_id as processed"
+    if jq ".processed.\"$task_id\" = $task_data | .last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" \
+        "$PROCESSED_FILE" > "$temp_file" 2>/dev/null; then
+        mv "$temp_file" "$PROCESSED_FILE"
+        log_debug "Marked task $task_id as processed"
+    else
+        log_warn "Failed to mark task $task_id as processed"
+        rm -f "$temp_file"
+    fi
 }
 
 clear_retry() {
@@ -663,6 +680,26 @@ main_loop() {
                             task_id="pr_${number}_review_${comment_id}"
                         fi
 
+                        # Check if the issue/PR is open
+                        local is_open=false
+                        if [[ "$task_type" == "issue_comment" ]] || [[ "$task_type" == "issue" ]]; then
+                            # Regular issue check
+                            if gh api "repos/$repo/issues/$number" --jq '.state' 2>/dev/null | grep -q "open"; then
+                                is_open=true
+                            fi
+                        elif [[ "$task_type" == "pr_review_comment" ]]; then
+                            # PR review comment check
+                            if gh api "repos/$repo/pulls/$number" --jq '.state' 2>/dev/null | grep -q "open"; then
+                                is_open=true
+                            fi
+                        fi
+
+                        if [[ "$is_open" != "true" ]]; then
+                            log_debug "Skipping $task_type #$number in $repo as it is CLOSED"
+                            mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"skipped_closed\"}"
+                            continue
+                        fi
+
                         log_info "Found !ralph in $task_type #$comment_id (Issue/PR #$number) from $repo"
 
                         if [[ "$DRY_RUN" == "true" ]]; then
@@ -739,6 +776,13 @@ main_loop() {
                         issue_number=$(echo "$task" | jq -r '.number')
                         task_id="issue_${issue_number}"
 
+                        # Check if the issue is open
+                        if ! gh api "repos/$repo/issues/$issue_number" --jq '.state' 2>/dev/null | grep -q "open"; then
+                            log_debug "Skipping Issue #$issue_number in $repo as it is CLOSED"
+                            mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"skipped_closed\"}"
+                            continue
+                        fi
+
                         log_info "Found !ralph in Issue #$issue_number from $repo"
 
                         if [[ "$DRY_RUN" == "true" ]]; then
@@ -808,6 +852,18 @@ main_loop() {
         log_debug "Updating last poll time..."
         local temp_file
         temp_file=$(mktemp)
+
+        # Ensure processed.json is valid
+        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
+            cat > "$PROCESSED_FILE" <<'EOF'
+{
+  "version": "1.0",
+  "processed": {},
+  "last_poll": "1970-01-01T00:00:00Z"
+}
+EOF
+        fi
+
         if jq ".last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" "$PROCESSED_FILE" > "$temp_file" 2>/dev/null; then
             mv "$temp_file" "$PROCESSED_FILE"
             log_debug "Last poll time updated successfully"
@@ -984,6 +1040,64 @@ cmd_scan() {
     done <<< "$tasks"
 }
 
+cmd_mark_all() {
+    log_info "Scanning all repositories to mark all existing !ralph mentions as processed..."
+
+    if ! init_watcher; then
+        log_error "Failed to initialize watcher"
+        exit 1
+    fi
+
+    # Set last poll to very old date to find everything
+    local temp_processed
+    temp_processed=$(mktemp)
+    jq '.last_poll = "1970-01-01T00:00:00Z"' "$PROCESSED_FILE" > "$temp_processed"
+    mv "$temp_processed" "$PROCESSED_FILE"
+
+    local tasks
+    tasks=$(find_ralph_mentions 2>/dev/null || true)
+
+    if [[ -z "$tasks" ]]; then
+        log_info "No !ralph mentions found to mark."
+        return 0
+    fi
+
+    local count=0
+    while IFS= read -r task; do
+        [[ -z "$task" ]] && continue
+
+        local task_type number id task_id created_at repo
+        task_type=$(echo "$task" | jq -r '.type')
+        number=$(echo "$task" | jq -r '.number')
+        id=$(echo "$task" | jq -r '.id // empty')
+        created_at=$(echo "$task" | jq -r '.created_at')
+        repo=$(echo "$task" | jq -r '.repo')
+
+        case "$task_type" in
+            issue_comment)
+                task_id="issue_${number}_comment_${id}"
+                ;;
+            pr_review_comment)
+                task_id="pr_${number}_review_${id}"
+                ;;
+            issue)
+                task_id="issue_${number}"
+                ;;
+            *)
+                continue
+                ;;
+        esac
+
+        if ! is_processed "$task_id"; then
+            mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"trigger_created_at\":\"$created_at\",\"result\":\"marked_as_completed_bulk\"}"
+            log_info "Marked $task_id as processed"
+            ((count++))
+        fi
+    done <<< "$tasks"
+
+    log_info "Successfully marked $count mentions as processed."
+}
+
 cmd_stop() {
     echo "Stopping GitHub watcher..."
 
@@ -1001,12 +1115,79 @@ cmd_stop() {
 
 main() {
     local command="${1:-start}"
+    shift || true
 
     case "$command" in
         start)
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --new)
+                        log_info "Setting poll window to NOW (skipping past mentions)"
+                        mkdir -p "$(dirname "$PROCESSED_FILE")"
+                        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
+                            echo "{\"version\":\"1.0\",\"processed\":{},\"last_poll\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}" > "$PROCESSED_FILE"
+                        else
+                            local temp_file
+                            temp_file=$(mktemp)
+                            jq ".last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" "$PROCESSED_FILE" > "$temp_file" && mv "$temp_file" "$PROCESSED_FILE"
+                        fi
+                        shift
+                        ;;
+                    --all)
+                        local lookback_date
+                        lookback_date=$(date -u -d "30 days ago" +"%Y-%m-%dT%H:%M:%SZ")
+                        log_warn "!!! WARNING: Processing all un-processed mentions from the last 30 days ($lookback_date) !!!"
+                        mkdir -p "$(dirname "$PROCESSED_FILE")"
+                        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
+                            echo "{\"version\":\"1.0\",\"processed\":{},\"last_poll\":\"$lookback_date\"}" > "$PROCESSED_FILE"
+                        else
+                            local temp_file
+                            temp_file=$(mktemp)
+                            jq ".last_poll = \"$lookback_date\"" "$PROCESSED_FILE" > "$temp_file" && mv "$temp_file" "$PROCESSED_FILE"
+                        fi
+                        shift
+                        ;;
+                    *)
+                        shift
+                        ;;
+                esac
+            done
             cmd_start
             ;;
         dry-run)
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --new)
+                        log_info "Setting poll window to NOW (skipping past mentions)"
+                        mkdir -p "$(dirname "$PROCESSED_FILE")"
+                        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
+                            echo "{\"version\":\"1.0\",\"processed\":{},\"last_poll\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}" > "$PROCESSED_FILE"
+                        else
+                            local temp_file
+                            temp_file=$(mktemp)
+                            jq ".last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" "$PROCESSED_FILE" > "$temp_file" && mv "$temp_file" "$PROCESSED_FILE"
+                        fi
+                        shift
+                        ;;
+                    --all)
+                        local lookback_date
+                        lookback_date=$(date -u -d "30 days ago" +"%Y-%m-%dT%H:%M:%SZ")
+                        log_warn "!!! WARNING: Processing all un-processed mentions from the last 30 days ($lookback_date) !!!"
+                        mkdir -p "$(dirname "$PROCESSED_FILE")"
+                        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
+                            echo "{\"version\":\"1.0\",\"processed\":{},\"last_poll\":\"$lookback_date\"}" > "$PROCESSED_FILE"
+                        else
+                            local temp_file
+                            temp_file=$(mktemp)
+                            jq ".last_poll = \"$lookback_date\"" "$PROCESSED_FILE" > "$temp_file" && mv "$temp_file" "$PROCESSED_FILE"
+                        fi
+                        shift
+                        ;;
+                    *)
+                        shift
+                        ;;
+                esac
+            done
             cmd_dry_run
             ;;
         status)
@@ -1018,19 +1199,27 @@ main() {
         scan)
             cmd_scan
             ;;
+        mark-all)
+            cmd_mark_all
+            ;;
         stop)
             cmd_stop
             ;;
         *)
-            echo "Usage: $0 {start|dry-run|status|queue|scan|stop}"
+            echo "Usage: $0 {start|dry-run|status|queue|scan|mark-all|stop} [options]"
             echo ""
             echo "Commands:"
-            echo "  start   - Start the GitHub watcher daemon"
-            echo "  dry-run - Start watcher loop without executing Ralph or marking tasks processed"
-            echo "  status  - Show watcher status"
-            echo "  queue   - Show task queue and history"
-            echo "  scan    - Print detected !ralph tasks without starting Ralph"
-            echo "  stop    - Stop the watcher daemon"
+            echo "  start    - Start the GitHub watcher daemon"
+            echo "  dry-run  - Start watcher loop without executing Ralph"
+            echo "  status   - Show watcher status"
+            echo "  queue    - Show task queue and history"
+            echo "  scan     - Print detected !ralph tasks without starting Ralph"
+            echo "  mark-all - Mark all existing !ralph mentions as processed without running Ralph"
+            echo "  stop     - Stop the watcher daemon"
+            echo ""
+            echo "Options for start/dry-run:"
+            echo "  --new    - Reset state to only process mentions from this moment on"
+            echo "  --all    - Reset state to process all existing un-processed mentions from history"
             exit 1
             ;;
     esac
