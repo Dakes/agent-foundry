@@ -104,17 +104,7 @@ init_watcher() {
     # Create config directory
     mkdir -p "$CONFIG_DIR"
 
-    # Create empty processed.json if it doesn't exist
-    if [[ ! -f "$PROCESSED_FILE" ]]; then
-        cat > "$PROCESSED_FILE" <<'EOF'
-{
-  "version": "1.0",
-  "processed": {},
-  "last_poll": "1970-01-01T00:00:00Z"
-}
-EOF
-        log_info "Initialized processed tasks file: $PROCESSED_FILE"
-    fi
+    ensure_processed_file_valid
 
     # Create retry state file if it doesn't exist
     if [[ ! -f "$RETRY_FILE" ]]; then
@@ -190,6 +180,66 @@ EOF
     log_info "  Ralph agent variant: $RALPH_AGENT_VARIANT"
 
     return 0
+}
+
+ensure_processed_file_valid() {
+    local reset_needed=false
+
+    if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
+        reset_needed=true
+    elif ! jq -e '.processed and .last_poll' "$PROCESSED_FILE" >/dev/null 2>&1; then
+        reset_needed=true
+    fi
+
+    if [[ "$reset_needed" == "true" ]]; then
+        cat > "$PROCESSED_FILE" <<'EOF'
+{
+  "version": "1.0",
+  "processed": {},
+  "last_poll": "1970-01-01T00:00:00Z"
+}
+EOF
+        log_warn "Rebuilt processed tasks file: $PROCESSED_FILE"
+    fi
+}
+
+set_last_poll() {
+    local timestamp="$1"
+    local temp_file
+
+    ensure_processed_file_valid
+    temp_file=$(mktemp)
+    if jq ".last_poll = \"$timestamp\"" "$PROCESSED_FILE" > "$temp_file" 2>/dev/null; then
+        mv "$temp_file" "$PROCESSED_FILE"
+        return 0
+    fi
+
+    rm -f "$temp_file"
+    return 1
+}
+
+task_id_for_task_json() {
+    local task_json="$1"
+    local task_type number id
+
+    task_type=$(echo "$task_json" | jq -r '.type')
+    number=$(echo "$task_json" | jq -r '.number')
+    id=$(echo "$task_json" | jq -r '.id // empty')
+
+    case "$task_type" in
+        issue_comment)
+            echo "issue_${number}_comment_${id}"
+            ;;
+        pr_review_comment)
+            echo "pr_${number}_review_${id}"
+            ;;
+        issue)
+            echo "issue_${number}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 # ============================================================================
@@ -303,9 +353,7 @@ evaluate_ralph_outcome() {
 
 is_processed() {
     local task_id="$1"
-    if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
-        return 1
-    fi
+    ensure_processed_file_valid
     jq -e ".processed.\"$task_id\"" "$PROCESSED_FILE" >/dev/null 2>&1
 }
 
@@ -313,16 +361,7 @@ mark_processed() {
     local task_id="$1"
     local task_data="$2"
 
-    # Ensure processed.json is valid
-    if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
-        cat > "$PROCESSED_FILE" <<'EOF'
-{
-  "version": "1.0",
-  "processed": {},
-  "last_poll": "1970-01-01T00:00:00Z"
-}
-EOF
-    fi
+    ensure_processed_file_valid
 
     # Update processed.json
     local temp_file
@@ -377,6 +416,7 @@ is_retry_blocked() {
 }
 
 get_last_poll() {
+    ensure_processed_file_valid
     jq -r '.last_poll // "1970-01-01T00:00:00Z"' "$PROCESSED_FILE"
 }
 
@@ -631,25 +671,8 @@ main_loop() {
             while IFS= read -r candidate; do
                 [[ -z "$candidate" ]] && continue
 
-                local candidate_type candidate_number candidate_id candidate_task_id
-                candidate_type=$(echo "$candidate" | jq -r '.type')
-                candidate_number=$(echo "$candidate" | jq -r '.number')
-                candidate_id=$(echo "$candidate" | jq -r '.id // empty')
-
-                case "$candidate_type" in
-                    issue_comment)
-                        candidate_task_id="issue_${candidate_number}_comment_${candidate_id}"
-                        ;;
-                    pr_review_comment)
-                        candidate_task_id="pr_${candidate_number}_review_${candidate_id}"
-                        ;;
-                    issue)
-                        candidate_task_id="issue_${candidate_number}"
-                        ;;
-                    *)
-                        continue
-                        ;;
-                esac
+                local candidate_task_id
+                candidate_task_id=$(task_id_for_task_json "$candidate") || continue
 
                 if ! is_processed "$candidate_task_id"; then
                     if is_retry_blocked "$candidate_task_id"; then
@@ -853,17 +876,7 @@ main_loop() {
         local temp_file
         temp_file=$(mktemp)
 
-        # Ensure processed.json is valid
-        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
-            cat > "$PROCESSED_FILE" <<'EOF'
-{
-  "version": "1.0",
-  "processed": {},
-  "last_poll": "1970-01-01T00:00:00Z"
-}
-EOF
-        fi
-
+        ensure_processed_file_valid
         if jq ".last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" "$PROCESSED_FILE" > "$temp_file" 2>/dev/null; then
             mv "$temp_file" "$PROCESSED_FILE"
             log_debug "Last poll time updated successfully"
@@ -1009,25 +1022,8 @@ cmd_scan() {
     while IFS= read -r task; do
         [[ -z "$task" ]] && continue
 
-        local task_type number id task_id processed
-        task_type=$(echo "$task" | jq -r '.type')
-        number=$(echo "$task" | jq -r '.number')
-        id=$(echo "$task" | jq -r '.id // empty')
-
-        case "$task_type" in
-            issue_comment)
-                task_id="issue_${number}_comment_${id}"
-                ;;
-            pr_review_comment)
-                task_id="pr_${number}_review_${id}"
-                ;;
-            issue)
-                task_id="issue_${number}"
-                ;;
-            *)
-                task_id="unknown"
-                ;;
-        esac
+        local task_id processed
+        task_id=$(task_id_for_task_json "$task" || echo "unknown")
 
         if is_processed "$task_id"; then
             processed=true
@@ -1042,60 +1038,89 @@ cmd_scan() {
 
 cmd_mark_all() {
     log_info "Scanning all repositories to mark all existing !ralph mentions as processed..."
+    echo "Scanning all repositories to mark all existing !ralph mentions as processed..."
 
     if ! init_watcher; then
         log_error "Failed to initialize watcher"
+        echo "Failed to initialize watcher" >&2
         exit 1
     fi
 
-    # Set last poll to very old date to find everything
-    local temp_processed
-    temp_processed=$(mktemp)
-    jq '.last_poll = "1970-01-01T00:00:00Z"' "$PROCESSED_FILE" > "$temp_processed"
-    mv "$temp_processed" "$PROCESSED_FILE"
+    if ! set_last_poll "1970-01-01T00:00:00Z"; then
+        log_error "Failed to reset last poll before mark-all scan"
+        echo "Failed to reset last poll before mark-all scan" >&2
+        exit 1
+    fi
 
     local tasks
     tasks=$(find_ralph_mentions 2>/dev/null || true)
 
     if [[ -z "$tasks" ]]; then
+        set_last_poll "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" || true
         log_info "No !ralph mentions found to mark."
+        echo "No !ralph mentions found to mark."
         return 0
     fi
 
-    local count=0
+    local found_count=0
+    local marked_count=0
+    local remaining_count=0
+    local -a remaining_task_ids=()
+
     while IFS= read -r task; do
         [[ -z "$task" ]] && continue
 
-        local task_type number id task_id created_at repo
+        local task_type number task_id created_at repo
         task_type=$(echo "$task" | jq -r '.type')
         number=$(echo "$task" | jq -r '.number')
-        id=$(echo "$task" | jq -r '.id // empty')
         created_at=$(echo "$task" | jq -r '.created_at')
         repo=$(echo "$task" | jq -r '.repo')
-
-        case "$task_type" in
-            issue_comment)
-                task_id="issue_${number}_comment_${id}"
-                ;;
-            pr_review_comment)
-                task_id="pr_${number}_review_${id}"
-                ;;
-            issue)
-                task_id="issue_${number}"
-                ;;
-            *)
-                continue
-                ;;
-        esac
+        task_id=$(task_id_for_task_json "$task") || continue
+        ((found_count += 1))
 
         if ! is_processed "$task_id"; then
             mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"trigger_created_at\":\"$created_at\",\"result\":\"marked_as_completed_bulk\"}"
             log_info "Marked $task_id as processed"
-            ((count++))
+            echo "Marked $task_id as processed"
+            ((marked_count += 1))
         fi
     done <<< "$tasks"
 
-    log_info "Successfully marked $count mentions as processed."
+    if ! set_last_poll "1970-01-01T00:00:00Z"; then
+        log_error "Failed to reset last poll for mark-all verification"
+        echo "Failed to reset last poll for mark-all verification" >&2
+        exit 1
+    fi
+
+    local verify_tasks
+    verify_tasks=$(find_ralph_mentions 2>/dev/null || true)
+    while IFS= read -r task; do
+        [[ -z "$task" ]] && continue
+        local task_id
+        task_id=$(task_id_for_task_json "$task") || continue
+        if ! is_processed "$task_id"; then
+            remaining_task_ids+=("$task_id")
+            ((remaining_count += 1))
+        fi
+    done <<< "$verify_tasks"
+
+    if ! set_last_poll "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"; then
+        log_error "Failed to advance last poll after mark-all"
+        echo "Failed to advance last poll after mark-all" >&2
+        exit 1
+    fi
+
+    log_info "Mark-all summary: found=$found_count marked=$marked_count remaining=$remaining_count"
+    echo "Mark-all summary: found=$found_count marked=$marked_count remaining=$remaining_count"
+
+    if [[ "$remaining_count" -gt 0 ]]; then
+        log_error "Mark-all verification failed; remaining unprocessed tasks: ${remaining_task_ids[*]}"
+        echo "Mark-all verification failed; remaining unprocessed tasks: ${remaining_task_ids[*]}" >&2
+        exit 1
+    fi
+
+    log_info "Successfully marked all existing mentions as processed."
+    echo "Successfully marked all existing mentions as processed."
 }
 
 cmd_stop() {

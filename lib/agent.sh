@@ -169,6 +169,36 @@ _get_vm_ssh_key() {
     echo "$ssh_key"
 }
 
+_scp_to_vm_path() {
+    local vm_name="$1"
+    local source="$2"
+    local dest="$3"
+    local vm_ip ssh_key
+
+    vm_ip=$(registry_get "$vm_name" ".ip")
+    ssh_key=$(registry_get "$vm_name" ".ssh_key")
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
+
+    if [[ -z "$ssh_key" || "$ssh_key" == "null" ]]; then
+        scp $FOUNDRY_SSH_OPTS -r "$source" "${FOUNDRY_SSH_USER}@${vm_ip}:${dest}"
+    else
+        scp -i "$ssh_key" $FOUNDRY_SSH_OPTS -r "$source" "${FOUNDRY_SSH_USER}@${vm_ip}:${dest}"
+    fi
+}
+
+_sync_gh_watcher_scripts() {
+    local vm_name="$1"
+    local watcher_root="$AGENT_FOUNDRY_BASE_DIR/templates/ralph"
+
+    _ssh_cmd "$vm_name" "mkdir -p /opt/foundry/gh-watcher" || return 1
+    _scp_to_vm_path "$vm_name" "$watcher_root/ralph_gh_watcher.sh" "/opt/foundry/ralph_gh_watcher.sh" || return 1
+    _scp_to_vm_path "$vm_name" "$watcher_root/gh_watcher_common.sh" "/opt/foundry/gh-watcher/gh_watcher_common.sh" || return 1
+    _scp_to_vm_path "$vm_name" "$watcher_root/gh_watcher_agent_ralph_claude_code.sh" "/opt/foundry/gh-watcher/gh_watcher_agent_ralph_claude_code.sh" || return 1
+    _scp_to_vm_path "$vm_name" "$watcher_root/gh_watcher_agent_ralph_orchestrator.sh" "/opt/foundry/gh-watcher/gh_watcher_agent_ralph_orchestrator.sh" || return 1
+    _ssh_cmd "$vm_name" "chmod 755 /opt/foundry/ralph_gh_watcher.sh /opt/foundry/gh-watcher/gh_watcher_common.sh /opt/foundry/gh-watcher/gh_watcher_agent_ralph_claude_code.sh /opt/foundry/gh-watcher/gh_watcher_agent_ralph_orchestrator.sh" || return 1
+}
+
 _check_vm_running() {
     local vm_name="$1"
     local status
@@ -1130,6 +1160,7 @@ agent_gh_watcher_start() {
 # Usage: agent_gh_watcher_mark_all <vm_name>
 agent_gh_watcher_mark_all() {
     local vm_name="${1:-}"
+    local watcher_was_running=false
 
     if [[ -z "$vm_name" ]]; then
         log_error "VM name required"
@@ -1139,8 +1170,25 @@ agent_gh_watcher_mark_all() {
     _check_vm_running "$vm_name" || return 1
     _require_gh_watcher_supported_variant "$vm_name" || return 1
 
+    if _ssh_cmd "$vm_name" "tmux has-session -t ralph-gh-watcher" >/dev/null 2>&1; then
+        watcher_was_running=true
+        log_info "Stopping running GitHub watcher before mark-all to avoid state races..."
+        _ssh_cmd "$vm_name" "tmux kill-session -t ralph-gh-watcher 2>/dev/null || true" || return 1
+    fi
+
+    log_info "Syncing local GitHub watcher scripts into VM '$vm_name'..."
+    _sync_gh_watcher_scripts "$vm_name" || return 1
+
     log_info "Marking all existing !ralph mentions as processed in VM '$vm_name'..."
-    _ssh_cmd_tty "$vm_name" "/opt/foundry/ralph_gh_watcher.sh mark-all"
+    if ! _ssh_cmd "$vm_name" "/opt/foundry/ralph_gh_watcher.sh mark-all"; then
+        log_error "GitHub watcher mark-all failed"
+        return 1
+    fi
+
+    log_info "Verified existing !ralph mentions are marked as processed"
+    if [[ "$watcher_was_running" == "true" ]]; then
+        log_info "Watcher was stopped for mark-all. Restart it with: foundry agent gh-watcher start $vm_name"
+    fi
 }
 
 # Stop GitHub watcher daemon
