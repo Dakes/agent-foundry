@@ -1,8 +1,8 @@
-# GitHub Watcher - Automated Ralph Workflow
+# GitHub Watcher - Automated Agent Workflow
 
-The GitHub Watcher enables fully autonomous development by monitoring GitHub repositories for `!ralph` mentions, automatically triggering Ralph to work on tasks, and creating pull requests when complete.
+The GitHub Watcher enables fully autonomous development by monitoring GitHub repositories for `!ralph` mentions, automatically triggering the configured autonomous agent to work on tasks, and creating pull requests when complete.
 
-It supports both `ralph-claude-code` and `ralph-orchestrator`. The watcher detects the installed variant and generates the matching task format.
+It supports `ralph-claude-code`, `ralph-orchestrator`, and `kimi-ralph`. The watcher reads the configured agent type from `/root/.config/gh-watcher/config.conf` (or falls back to legacy Ralph variant detection) and loads the matching adapter.
 
 ## Overview
 
@@ -10,16 +10,16 @@ Once configured, the watcher runs 24/7 inside a VM, polling GitHub every 60 seco
 
 1. Developer posts `!ralph` in an issue or PR comment
 2. Watcher detects the mention (within 60 seconds)
-3. Watcher builds the matching Ralph task context
-4. Watcher starts Ralph to work autonomously
-5. Ralph completes the task and creates a PR (or posts an error comment)
+3. Watcher builds the matching agent-specific task context
+4. Watcher starts the autonomous agent to work
+5. Agent completes the task and creates a PR (or posts an error comment)
 6. Watcher resumes polling for the next task
 
 ## Quick Start
 
 ### Prerequisites
 
-- VM with Ralph installed and configured
+- VM with an autonomous agent installed and configured (Ralph or kimi-ralph)
 - GitHub fine-grained Personal Access Token
 - Repositories to monitor
 
@@ -41,6 +41,7 @@ Minimal example:
   "github_token_file": "./secrets/github-token.txt",
   "poll_interval": 60,
   "ralph_timeout": 120,
+  "agent_type": "ralph",
   "post_error_comments": true,
   "enabled": true
 }
@@ -69,7 +70,7 @@ Once running, simply mention `!ralph` anywhere in:
 - Issue body or comments
 - Pull request body or comments
 
-The watcher will detect it and start working automatically.
+The watcher will detect it and start the configured autonomous agent automatically.
 
 ## GitHub Token Setup
 
@@ -120,10 +121,13 @@ WATCHED_REPOS="owner/repo1,owner/repo2"
 # GitHub token file location
 GITHUB_TOKEN_FILE="/root/.config/gh/token"
 
-# Ralph execution timeout in minutes (720 = 12 hours)
+# Agent execution timeout in minutes (720 = 12 hours)
+AGENT_TIMEOUT=720
+
+# Legacy Ralph timeout (kept for backward compatibility)
 RALPH_TIMEOUT=720
 
-# Post error comments when Ralph fails
+# Post error comments when the agent fails
 POST_ERROR_COMMENTS=true
 ```
 
@@ -161,7 +165,7 @@ Starts the watcher daemon in a tmux session (`ralph-gh-watcher`).
 foundry agent gh-watcher stop <vm-name>
 ```
 
-Stops the watcher daemon (Ralph continues if already working).
+Stops the watcher daemon (the agent continues if already working).
 
 ### Check Status
 
@@ -189,7 +193,7 @@ foundry agent gh-watcher logs <vm-name> --follow # Tail mode
 foundry agent gh-watcher reset <vm-name>
 ```
 
-Clears all processed task history. Useful if you want Ralph to retry a previously failed task.
+Clears all processed task history. Useful if you want the agent to retry a previously failed task.
 
 ## Task Priority
 
@@ -366,7 +370,7 @@ foundry vm ssh <vm-name> "ls -la /root/.config/gh-watcher/"
 foundry agent gh-watcher logs <vm-name>
 ```
 
-### Ralph Not Triggering
+### Agent Not Triggering
 
 ```bash
 # Check if watcher sees the mention
@@ -375,8 +379,9 @@ foundry agent gh-watcher status <vm-name>
 # Verify token permissions
 foundry vm ssh <vm-name> "gh auth status"
 
-# Check if Ralph is installed
-foundry vm ssh <vm-name> "command -v ralph"
+# Check if the autonomous agent is installed
+foundry vm ssh <vm-name> "command -v ralph"   # for Ralph
+foundry vm ssh <vm-name> "command -v kimi"    # for kimi-ralph
 ```
 
 ### Token Issues
@@ -414,15 +419,15 @@ SSH into the VM for direct control:
 foundry vm ssh <vm-name>
 
 # Control watcher directly
-/opt/ralph/ralph_gh_watcher.sh status
-/opt/ralph/ralph_gh_watcher.sh start
-/opt/ralph/ralph_gh_watcher.sh stop
-/opt/ralph/ralph_gh_watcher.sh queue
+/opt/foundry/gh-watcher/gh_watcher.sh status
+/opt/foundry/gh-watcher/gh_watcher.sh start
+/opt/foundry/gh-watcher/gh_watcher.sh stop
+/opt/foundry/gh-watcher/gh_watcher.sh queue
 
 # View logs
 tail -f /root/.config/gh-watcher/watcher.log
 
-# Check Ralph status
+# Check agent work session status
 tmux attach -t ralph-loop  # Detach with Ctrl+b d
 ```
 

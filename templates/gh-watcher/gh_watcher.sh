@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Ralph GitHub Watcher - Autonomous GitHub Issue/PR Monitor
+# Agent Foundry GitHub Watcher - Autonomous GitHub Issue/PR Monitor
 #
-# Polls GitHub repositories for !ralph mentions, builds agent-specific task
-# context, and triggers the installed Ralph variant to work autonomously.
+# Polls GitHub repositories for trigger mentions, builds agent-specific task
+# context, and triggers the configured autonomous agent to work.
 #
 # Configuration: /root/.config/gh-watcher/config.conf
 # State tracking: /root/.config/gh-watcher/processed.json
@@ -33,14 +33,20 @@ WATCHER_ENABLED="${WATCHER_ENABLED:-false}"
 POLL_INTERVAL="${POLL_INTERVAL:-60}"
 WATCHED_REPOS="${WATCHED_REPOS:-}"
 GITHUB_TOKEN_FILE="${GITHUB_TOKEN_FILE:-/root/.config/gh/token}"
-RALPH_TIMEOUT="${RALPH_TIMEOUT:-120}"
+AGENT_TIMEOUT="${AGENT_TIMEOUT:-120}"
 POST_ERROR_COMMENTS="${POST_ERROR_COMMENTS:-true}"
 POLL_LOOKBACK_SECONDS="${POLL_LOOKBACK_SECONDS:-900}"
 DRY_RUN="${DRY_RUN:-false}"
 RATE_LIMIT_RETRY_SECONDS="${RATE_LIMIT_RETRY_SECONDS:-3600}"
 
-RALPH_WORKSPACE="/root"
-RALPH_AGENT_VARIANT="${RALPH_AGENT_VARIANT:-unknown}"
+AGENT_WORKSPACE="/root"
+AGENT_TYPE="${AGENT_TYPE:-}"
+AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-Agent}"
+
+# Legacy compatibility: Ralph variant detection marker.
+RALPH_VARIANT_MARKER="${RALPH_VARIANT_MARKER:-/opt/foundry/ralph-agent-type}"
+RALPH_VARIANT_CLAUDE_CODE="${RALPH_VARIANT_CLAUDE_CODE:-ralph-claude-code}"
+RALPH_VARIANT_ORCHESTRATOR="${RALPH_VARIANT_ORCHESTRATOR:-ralph-orchestrator}"
 
 # ============================================================================
 # LOGGING
@@ -74,8 +80,6 @@ log_debug() {
 
 source_watcher_helpers() {
     local common_helper="$HELPER_DIR/gh_watcher_common.sh"
-    local claude_helper="$HELPER_DIR/gh_watcher_agent_ralph_claude_code.sh"
-    local orchestrator_helper="$HELPER_DIR/gh_watcher_agent_ralph_orchestrator.sh"
 
     if [[ ! -f "$common_helper" ]]; then
         log_error "Watcher helper missing: $common_helper"
@@ -85,15 +89,28 @@ source_watcher_helpers() {
     # shellcheck source=/dev/null
     source "$common_helper"
 
-    if [[ -f "$claude_helper" ]]; then
-        # shellcheck source=/dev/null
-        source "$claude_helper"
-    fi
+    # Backwards-compatible workspace variables used by legacy Ralph adapters.
+    RALPH_WORKSPACE="$AGENT_WORKSPACE"
+    KIMI_WORKSPACE="$AGENT_WORKSPACE"
 
-    if [[ -f "$orchestrator_helper" ]]; then
+    local adapter_file
+    adapter_file=$(_agent_adapter_file)
+    if [[ -n "$adapter_file" && -f "$adapter_file" ]]; then
         # shellcheck source=/dev/null
-        source "$orchestrator_helper"
+        source "$adapter_file"
+    else
+        log_error "Watcher adapter missing for agent type: $AGENT_TYPE"
+        return 1
     fi
+}
+
+_agent_adapter_file() {
+    if [[ -z "$AGENT_TYPE" ]]; then
+        echo ""
+        return
+    fi
+    # Generic naming convention: one adapter per autonomous agent type.
+    echo "$HELPER_DIR/gh_watcher_agent_${AGENT_TYPE}.sh"
 }
 
 # ============================================================================
@@ -120,11 +137,8 @@ EOF
     # Create log file
     touch "$LOG_FILE"
 
-    if ! source_watcher_helpers; then
-        return 1
-    fi
-
-    # Load configuration
+    # Load configuration before sourcing helpers so that AGENT_TYPE (and any
+    # other watcher settings) are available when we select the agent adapter.
     if [[ -f "$CONFIG_FILE" ]]; then
         # Source config file
         set -a
@@ -134,6 +148,10 @@ EOF
     else
         log_error "Configuration file not found: $CONFIG_FILE"
         log_error "Run 'foundry agent gh-watcher init <vm-name>' first"
+        return 1
+    fi
+
+    if ! source_watcher_helpers; then
         return 1
     fi
 
@@ -163,23 +181,64 @@ EOF
         return 1
     fi
 
-    RALPH_AGENT_VARIANT=$(detect_ralph_agent_variant)
-    case "$RALPH_AGENT_VARIANT" in
-        ralph-claude-code|ralph-orchestrator)
+    # Resolve agent type (legacy fallback to Ralph variant detection)
+    if [[ -z "$AGENT_TYPE" ]]; then
+        AGENT_TYPE=$(detect_legacy_agent_type)
+        log_warn "AGENT_TYPE not configured; falling back to legacy detection: $AGENT_TYPE"
+    fi
+
+    case "$AGENT_TYPE" in
+        ralph|ralph-orchestrator|kimi-ralph)
             ;;
         *)
-            log_error "Unsupported Ralph watcher agent variant: $RALPH_AGENT_VARIANT"
+            log_error "Unsupported watcher agent type: $AGENT_TYPE"
             return 1
             ;;
     esac
 
+    AGENT_DISPLAY_NAME=${AGENT_DISPLAY_NAME:-$AGENT_TYPE}
+
     log_info "GitHub watcher initialized"
     log_info "  Watching repos: $WATCHED_REPOS"
     log_info "  Poll interval: ${POLL_INTERVAL}s"
-    log_info "  Ralph workspace: $RALPH_WORKSPACE"
-    log_info "  Ralph agent variant: $RALPH_AGENT_VARIANT"
+    log_info "  Agent workspace: $AGENT_WORKSPACE"
+    log_info "  Agent type: $AGENT_TYPE"
 
     return 0
+}
+
+detect_legacy_agent_type() {
+    if [[ -f "$RALPH_VARIANT_MARKER" ]]; then
+        local variant
+        variant=$(tr -d '[:space:]' < "$RALPH_VARIANT_MARKER")
+        case "$variant" in
+            "$RALPH_VARIANT_ORCHESTRATOR")
+                echo "ralph-orchestrator"
+                ;;
+            *)
+                echo "ralph"
+                ;;
+        esac
+        return 0
+    fi
+
+    if [[ -d /opt/ralph ]]; then
+        echo "ralph"
+        return 0
+    fi
+
+    if command -v ralph >/dev/null 2>&1; then
+        local version
+        version=$(ralph --version 2>/dev/null | head -n 1 || true)
+        if echo "$version" | grep -qi "orchestrator"; then
+            echo "ralph-orchestrator"
+            return 0
+        fi
+        echo "ralph"
+        return 0
+    fi
+
+    echo "ralph"
 }
 
 ensure_processed_file_valid() {
@@ -243,108 +302,19 @@ task_id_for_task_json() {
 }
 
 # ============================================================================
-# RALPH STATUS CHECKING
+# AGENT STATUS CHECKING
 # ============================================================================
 
-is_ralph_running() {
+is_agent_running() {
     tmux has-session -t ralph-loop 2>/dev/null
 }
 
-wait_for_ralph() {
-    log_info "Waiting for Ralph to finish..."
-    while is_ralph_running; do
+wait_for_agent() {
+    log_info "Waiting for $AGENT_DISPLAY_NAME to finish..."
+    while is_agent_running; do
         sleep 30
     done
-    log_info "Ralph has finished"
-}
-
-get_ralph_failure_reason() {
-    local status_file="$RALPH_WORKSPACE/.ralph/status.json"
-    if [[ ! -f "$status_file" ]]; then
-        return 1
-    fi
-
-    local status last_action exit_reason
-    status=$(jq -r '.status // ""' "$status_file" 2>/dev/null || echo "")
-    last_action=$(jq -r '.last_action // ""' "$status_file" 2>/dev/null || echo "")
-    exit_reason=$(jq -r '.exit_reason // ""' "$status_file" 2>/dev/null || echo "")
-
-    if [[ "$status" == "halted" ]]; then
-        if [[ -n "$exit_reason" ]]; then
-            echo "$exit_reason"
-        elif [[ -n "$last_action" ]]; then
-            echo "$last_action"
-        else
-            echo "ralph_halted"
-        fi
-        return 0
-    fi
-
-    return 1
-}
-
-get_latest_claude_result_file_after() {
-    local start_epoch="$1"
-    local logs_dir="$RALPH_WORKSPACE/.ralph/logs"
-    local latest_file
-    latest_file=$(
-        find "$logs_dir" -maxdepth 1 -type f -name 'claude_output_*.log' -printf '%T@ %p\n' 2>/dev/null \
-            | sort -nr \
-            | head -1 \
-            | cut -d' ' -f2-
-    )
-
-    if [[ -z "$latest_file" ]]; then
-        return 1
-    fi
-
-    local mtime
-    mtime=$(stat -c %Y "$latest_file" 2>/dev/null || echo "0")
-    if [[ ! "$mtime" =~ ^[0-9]+$ ]] || (( mtime < start_epoch )); then
-        return 1
-    fi
-
-    echo "$latest_file"
-}
-
-# shellcheck disable=SC2329
-evaluate_ralph_outcome() {
-    local run_start_epoch="$1"
-
-    local failure_reason
-    failure_reason=$(get_ralph_failure_reason || true)
-    if [[ -n "$failure_reason" ]]; then
-        echo "failure:$failure_reason"
-        return 0
-    fi
-
-    local result_file
-    result_file=$(get_latest_claude_result_file_after "$run_start_epoch" || true)
-    if [[ -z "$result_file" ]]; then
-        echo "unknown:no_recent_result_file"
-        return 0
-    fi
-
-    if ! jq -e . "$result_file" >/dev/null 2>&1; then
-        echo "unknown:invalid_result_json"
-        return 0
-    fi
-
-    local is_error result_text
-    is_error=$(jq -r '.is_error // false' "$result_file" 2>/dev/null || echo "false")
-    result_text=$(jq -r '.result // ""' "$result_file" 2>/dev/null || echo "")
-
-    if [[ "$is_error" == "true" ]]; then
-        if echo "$result_text" | grep -qiE 'hit your limit|usage limit|rate[_ -]?limit|resets .*utc|5[^a-zA-Z0-9]*hour.*limit|limit.*reached'; then
-            echo "rate_limited:claude_usage_limit"
-            return 0
-        fi
-
-        echo "failure:claude_error"
-        return 0
-    fi
-
-    echo "success:ok"
+    log_info "$AGENT_DISPLAY_NAME has finished"
 }
 
 # ============================================================================
@@ -466,13 +436,13 @@ add_reaction() {
     esac
 }
 
-find_ralph_mentions() {
+find_trigger_mentions() {
     local query_since
     query_since=$(get_query_since)
 
-    log_debug "Searching for !ralph mentions (all open issues/PRs, since $query_since)"
+    log_debug "Searching for trigger mentions (all open issues/PRs, since $query_since)"
 
-    # Priority 1: Check recent PR/Issue comments for !ralph (use 'since' to reduce API calls)
+    # Priority 1: Check recent PR/Issue comments for trigger (use 'since' to reduce API calls)
     for repo in ${WATCHED_REPOS//,/ }; do
         log_debug "Checking recent comments in $repo"
 
@@ -493,11 +463,11 @@ find_ralph_mentions() {
         fi
     done
 
-    # Priority 2: Check ALL open issues for !ralph (not just updated ones)
+    # Priority 2: Check ALL open issues for trigger (not just updated ones)
     for repo in ${WATCHED_REPOS//,/ }; do
         log_debug "Checking all open issues in $repo"
 
-        # Get ALL open issues and filter for !ralph
+        # Get ALL open issues and filter for trigger
         if ! gh api "repos/$repo/issues?state=open&per_page=100" \
             --jq '.[] | select(.pull_request == null) | select(.body | test("!ralph"; "i")) | {type: "issue", repo: "'"$repo"'", number: .number, title: .title, body: .body, html_url: .html_url, user: .user.login, created_at: .created_at}' \
             2>&1; then
@@ -517,24 +487,13 @@ build_context_for_issue() {
     local trigger_comment_id="${4:-}"
     local trigger_created_at="${5:-}"
 
-    log_info "Building ${RALPH_AGENT_VARIANT} context for issue #$issue_number in $repo"
+    log_info "Building $AGENT_TYPE context for issue #$issue_number in $repo"
 
     if ! build_issue_context_json "$repo" "$issue_number" "$trigger_type" "$trigger_comment_id" "$trigger_created_at" "$CONTEXT_FILE"; then
         return 1
     fi
 
-    case "$RALPH_AGENT_VARIANT" in
-        ralph-claude-code)
-            prepare_ralph_claude_code_workspace "$CONTEXT_FILE"
-            ;;
-        ralph-orchestrator)
-            prepare_ralph_orchestrator_workspace "$CONTEXT_FILE"
-            ;;
-        *)
-            log_error "Unsupported Ralph agent variant in build_context_for_issue: $RALPH_AGENT_VARIANT"
-            return 1
-            ;;
-    esac
+    prepare_agent_workspace "$CONTEXT_FILE"
 }
 
 build_context_for_pr() {
@@ -544,57 +503,22 @@ build_context_for_pr() {
     local trigger_comment_id="${4:-}"
     local trigger_created_at="${5:-}"
 
-    log_info "Building ${RALPH_AGENT_VARIANT} context for PR #$pr_number in $repo"
+    log_info "Building $AGENT_TYPE context for PR #$pr_number in $repo"
 
     if ! build_pr_context_json "$repo" "$pr_number" "$trigger_type" "$trigger_comment_id" "$trigger_created_at" "$CONTEXT_FILE"; then
         return 1
     fi
 
-    case "$RALPH_AGENT_VARIANT" in
-        ralph-claude-code)
-            prepare_ralph_claude_code_workspace "$CONTEXT_FILE"
-            ;;
-        ralph-orchestrator)
-            prepare_ralph_orchestrator_workspace "$CONTEXT_FILE"
-            ;;
-        *)
-            log_error "Unsupported Ralph agent variant in build_context_for_pr: $RALPH_AGENT_VARIANT"
-            return 1
-            ;;
-    esac
+    prepare_agent_workspace "$CONTEXT_FILE"
 }
 
-start_ralph() {
-    case "$RALPH_AGENT_VARIANT" in
-        ralph-claude-code)
-            start_ralph_claude_code_loop
-            ;;
-        ralph-orchestrator)
-            start_ralph_orchestrator_loop
-            ;;
-        *)
-            log_error "Unsupported Ralph agent variant in start_ralph: $RALPH_AGENT_VARIANT"
-            return 1
-            ;;
-    esac
+start_agent() {
+    start_agent_loop
 }
 
-evaluate_ralph_outcome() {
+evaluate_agent_run_outcome() {
     local run_start_epoch="$1"
-
-    case "$RALPH_AGENT_VARIANT" in
-        ralph-claude-code)
-            evaluate_ralph_claude_code_outcome "$run_start_epoch"
-            ;;
-        ralph-orchestrator)
-            evaluate_ralph_orchestrator_outcome
-            ;;
-        *)
-            log_error "Unsupported Ralph agent variant in evaluate_ralph_outcome: $RALPH_AGENT_VARIANT"
-            echo "failure:unsupported_agent_variant"
-            return 0
-            ;;
-    esac
+    evaluate_agent_outcome "$run_start_epoch"
 }
 
 post_error_comment() {
@@ -611,7 +535,7 @@ post_error_comment() {
 
     local comment_body
     comment_body=$(cat <<EOF
-## 🤖 Ralph - Task Update (Error)
+## 🤖 $AGENT_DISPLAY_NAME - Task Update (Error)
 
 I encountered an issue while working on this task and couldn't complete it automatically.
 
@@ -622,11 +546,11 @@ ${error_message}
 
 **Next Steps:**
 - Review the error details above
-- Check the Ralph logs for more information
+- Check the agent logs for more information
 - You can re-trigger me by posting another comment that says "exclamation mark ralph" with additional context
 
 ---
-*This is an automated message from Ralph, your autonomous development agent.*
+*This is an automated message from $AGENT_DISPLAY_NAME.*
 EOF
 )
 
@@ -648,24 +572,23 @@ main_loop() {
     while true; do
         log_debug "=== Starting poll cycle ==="
 
-        # Check if Ralph is already running
-        if is_ralph_running; then
-            log_debug "Ralph is working, waiting..."
+        # Check if agent is already running
+        if is_agent_running; then
+            log_debug "$AGENT_DISPLAY_NAME is working, waiting..."
             sleep 30
             continue
         fi
 
-        log_debug "Checking for !ralph mentions..."
+        log_debug "Checking for trigger mentions..."
 
-        # Poll GitHub for !ralph mentions (with error handling)
+        # Poll GitHub for trigger mentions (with error handling)
         local tasks=""
-        tasks=$(find_ralph_mentions 2>/dev/null || true)
+        tasks=$(find_trigger_mentions 2>/dev/null || true)
 
         log_debug "Poll complete, processing results..."
 
         if [[ -n "$tasks" ]]; then
             # Process the first unprocessed task only.
-            # Avoid missing new tasks when the first returned comment was already handled.
             local task=""
             local candidate
             while IFS= read -r candidate; do
@@ -684,7 +607,7 @@ main_loop() {
             done <<< "$tasks"
 
             if [[ -z "$task" ]]; then
-                log_debug "No new unprocessed !ralph tasks in this poll cycle"
+                log_debug "No new unprocessed trigger tasks in this poll cycle"
             else
                 local task_type repo created_at task_id_for_reaction
                 task_type=$(echo "$task" | jq -r '.type')
@@ -706,12 +629,10 @@ main_loop() {
                         # Check if the issue/PR is open
                         local is_open=false
                         if [[ "$task_type" == "issue_comment" ]] || [[ "$task_type" == "issue" ]]; then
-                            # Regular issue check
                             if gh api "repos/$repo/issues/$number" --jq '.state' 2>/dev/null | grep -q "open"; then
                                 is_open=true
                             fi
                         elif [[ "$task_type" == "pr_review_comment" ]]; then
-                            # PR review comment check
                             if gh api "repos/$repo/pulls/$number" --jq '.state' 2>/dev/null | grep -q "open"; then
                                 is_open=true
                             fi
@@ -723,7 +644,7 @@ main_loop() {
                             continue
                         fi
 
-                        log_info "Found !ralph in $task_type #$comment_id (Issue/PR #$number) from $repo"
+                        log_info "Found trigger in $task_type #$comment_id (Issue/PR #$number) from $repo"
 
                         if [[ "$DRY_RUN" == "true" ]]; then
                             log_info "[DRY RUN] Would process task $task_id from $repo"
@@ -736,12 +657,10 @@ main_loop() {
 
                         local context_success=false
                         if [[ "$task_type" == "issue_comment" ]] && ! gh api "repos/$repo/pulls/$number" >/dev/null 2>&1; then
-                            # It's a comment on a regular issue
                             if build_context_for_issue "$repo" "$number" "$task_type" "$comment_id" "$created_at"; then
                                 context_success=true
                             fi
                         else
-                            # It's a comment on a PR (conversation or review)
                             if build_context_for_pr "$repo" "$number" "$task_type" "$comment_id" "$created_at"; then
                                 context_success=true
                             fi
@@ -752,11 +671,11 @@ main_loop() {
                             local run_start_epoch
                             run_start_epoch=$(date +%s)
 
-                            if start_ralph; then
-                                wait_for_ralph
+                            if start_agent; then
+                                wait_for_agent
 
                                 local outcome outcome_type outcome_detail
-                                outcome=$(evaluate_ralph_outcome "$run_start_epoch")
+                                outcome=$(evaluate_agent_run_outcome "$run_start_epoch")
                                 outcome_type="${outcome%%:*}"
                                 outcome_detail="${outcome#*:}"
 
@@ -768,29 +687,29 @@ main_loop() {
                                         add_reaction "$repo" "$task_type" "$comment_id" "rocket"
                                         ;;
                                     rate_limited)
-                                        log_warn "Ralph hit usage limit for $task_id, scheduling retry"
+                                        log_warn "$AGENT_DISPLAY_NAME hit usage limit for $task_id, scheduling retry"
                                         post_error_comment "$repo" "$number" "Agent backend usage limit reached. I will retry this task automatically in about one hour."
                                         schedule_retry "$task_id" "$RATE_LIMIT_RETRY_SECONDS" "$outcome_detail"
                                         ;;
                                     failure|unknown)
                                         clear_retry "$task_id"
-                                        log_error "Ralph failed for $task_id: $outcome_detail"
-                                        post_error_comment "$repo" "$number" "Ralph exited early: $outcome_detail"
-                                        mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_runtime_failed\"}"
+                                        log_error "$AGENT_DISPLAY_NAME failed for $task_id: $outcome_detail"
+                                        post_error_comment "$repo" "$number" "$AGENT_DISPLAY_NAME exited early: $outcome_detail"
+                                        mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_runtime_failed\"}"
                                         ;;
                                 esac
                             else
-                                log_error "Failed to start Ralph for $task_id"
-                                post_error_comment "$repo" "$number" "Failed to start Ralph"
+                                log_error "Failed to start $AGENT_DISPLAY_NAME for $task_id"
+                                post_error_comment "$repo" "$number" "Failed to start $AGENT_DISPLAY_NAME"
                                 clear_retry "$task_id"
-                                mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_start_failed\"}"
+                                mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_start_failed\"}"
                             fi
 
                             # Cooldown period
                             sleep 120
                         else
                             log_error "Failed to build context for $task_type #$comment_id"
-                            mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
+                            mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
                         fi
                         ;;
 
@@ -806,7 +725,7 @@ main_loop() {
                             continue
                         fi
 
-                        log_info "Found !ralph in Issue #$issue_number from $repo"
+                        log_info "Found trigger in Issue #$issue_number from $repo"
 
                         if [[ "$DRY_RUN" == "true" ]]; then
                             log_info "[DRY RUN] Would process task $task_id from $repo"
@@ -822,11 +741,11 @@ main_loop() {
                             local run_start_epoch
                             run_start_epoch=$(date +%s)
 
-                            if start_ralph; then
-                                wait_for_ralph
+                            if start_agent; then
+                                wait_for_agent
 
                                 local outcome outcome_type outcome_detail
-                                outcome=$(evaluate_ralph_outcome "$run_start_epoch")
+                                outcome=$(evaluate_agent_run_outcome "$run_start_epoch")
                                 outcome_type="${outcome%%:*}"
                                 outcome_detail="${outcome#*:}"
 
@@ -838,29 +757,29 @@ main_loop() {
                                         add_reaction "$repo" "issue" "$issue_number" "rocket"
                                         ;;
                                     rate_limited)
-                                        log_warn "Ralph hit usage limit for $task_id, scheduling retry"
+                                        log_warn "$AGENT_DISPLAY_NAME hit usage limit for $task_id, scheduling retry"
                                         post_error_comment "$repo" "$issue_number" "Agent backend usage limit reached. I will retry this task automatically in about one hour."
                                         schedule_retry "$task_id" "$RATE_LIMIT_RETRY_SECONDS" "$outcome_detail"
                                         ;;
                                     failure|unknown)
                                         clear_retry "$task_id"
-                                        log_error "Ralph failed for $task_id: $outcome_detail"
-                                        post_error_comment "$repo" "$issue_number" "Ralph exited early: $outcome_detail"
-                                        mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_runtime_failed\"}"
+                                        log_error "$AGENT_DISPLAY_NAME failed for $task_id: $outcome_detail"
+                                        post_error_comment "$repo" "$issue_number" "$AGENT_DISPLAY_NAME exited early: $outcome_detail"
+                                        mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_runtime_failed\"}"
                                         ;;
                                 esac
                             else
-                                log_error "Failed to start Ralph for $task_id"
-                                post_error_comment "$repo" "$issue_number" "Failed to start Ralph"
+                                log_error "Failed to start $AGENT_DISPLAY_NAME for $task_id"
+                                post_error_comment "$repo" "$issue_number" "Failed to start $AGENT_DISPLAY_NAME"
                                 clear_retry "$task_id"
-                                mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_start_failed\"}"
+                                mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_start_failed\"}"
                             fi
 
                             # Cooldown period
                             sleep 120
                         else
                             log_error "Failed to build context for Issue #$issue_number"
-                            mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
+                            mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
                         fi
                         ;;
 
@@ -910,7 +829,7 @@ cmd_start() {
 
 cmd_dry_run() {
     DRY_RUN=true
-    log_info "Starting GitHub watcher in DRY RUN mode (no Ralph execution, no processed.json updates)"
+    log_info "Starting GitHub watcher in DRY RUN mode (no agent execution, no processed.json updates)"
 
     if ! init_watcher; then
         log_error "Failed to initialize watcher"
@@ -941,9 +860,8 @@ cmd_status() {
         echo "  Enabled: $WATCHER_ENABLED"
         echo "  Repos: $WATCHED_REPOS"
         echo "  Poll interval: ${POLL_INTERVAL}s"
-        if source_watcher_helpers >/dev/null 2>&1; then
-            echo "  Ralph agent variant: $(detect_ralph_agent_variant)"
-        fi
+        echo "  Agent type: ${AGENT_TYPE:-unknown}"
+        echo "  Agent display name: ${AGENT_DISPLAY_NAME:-$AGENT_TYPE}"
         echo ""
     else
         echo "Configuration: Not found"
@@ -956,10 +874,10 @@ cmd_status() {
         echo "Watcher session: NOT RUNNING"
     fi
 
-    if is_ralph_running; then
-        echo "Ralph status: WORKING"
+    if is_agent_running 2>/dev/null; then
+        echo "Agent status: WORKING (${AGENT_DISPLAY_NAME:-$AGENT_TYPE})"
     else
-        echo "Ralph status: IDLE"
+        echo "Agent status: IDLE"
     fi
 
     echo ""
@@ -998,259 +916,109 @@ cmd_queue() {
 
     echo ""
     echo "Processed tasks:"
-    if [[ -f "$PROCESSED_FILE" ]]; then
-        jq -r '.processed | to_entries | .[] | "\(.key): \(.value.result) at \(.value.processed_at)"' "$PROCESSED_FILE" | tail -10
+    if [[ -f "$PROCESSED_FILE" ]] && jq -e . "$PROCESSED_FILE" >/dev/null 2>&1; then
+        jq '.processed | to_entries[] | "\(.key): \(.value.result) (\(.value.processed_at))"' "$PROCESSED_FILE" 2>/dev/null
     else
-        echo "  None"
+        echo "  (none or invalid state)"
     fi
-}
-
-cmd_scan() {
-    if ! init_watcher; then
-        log_error "Failed to initialize watcher"
-        exit 1
-    fi
-
-    local tasks
-    tasks=$(find_ralph_mentions 2>/dev/null || true)
-
-    if [[ -z "$tasks" ]]; then
-        echo "No !ralph mentions found"
-        return 0
-    fi
-
-    while IFS= read -r task; do
-        [[ -z "$task" ]] && continue
-
-        local task_id processed
-        task_id=$(task_id_for_task_json "$task" || echo "unknown")
-
-        if is_processed "$task_id"; then
-            processed=true
-        else
-            processed=false
-        fi
-
-        echo "$task" | jq --arg task_id "$task_id" --argjson already_processed "$processed" \
-            '. + {task_id: $task_id, already_processed: $already_processed}'
-    done <<< "$tasks"
-}
-
-cmd_mark_all() {
-    log_info "Scanning all repositories to mark all existing !ralph mentions as processed..."
-    echo "Scanning all repositories to mark all existing !ralph mentions as processed..."
-
-    if ! init_watcher; then
-        log_error "Failed to initialize watcher"
-        echo "Failed to initialize watcher" >&2
-        exit 1
-    fi
-
-    if ! set_last_poll "1970-01-01T00:00:00Z"; then
-        log_error "Failed to reset last poll before mark-all scan"
-        echo "Failed to reset last poll before mark-all scan" >&2
-        exit 1
-    fi
-
-    local tasks
-    tasks=$(find_ralph_mentions 2>/dev/null || true)
-
-    if [[ -z "$tasks" ]]; then
-        set_last_poll "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" || true
-        log_info "No !ralph mentions found to mark."
-        echo "No !ralph mentions found to mark."
-        return 0
-    fi
-
-    local found_count=0
-    local marked_count=0
-    local remaining_count=0
-    local -a remaining_task_ids=()
-
-    while IFS= read -r task; do
-        [[ -z "$task" ]] && continue
-
-        local task_type number task_id created_at repo
-        task_type=$(echo "$task" | jq -r '.type')
-        number=$(echo "$task" | jq -r '.number')
-        created_at=$(echo "$task" | jq -r '.created_at')
-        repo=$(echo "$task" | jq -r '.repo')
-        task_id=$(task_id_for_task_json "$task") || continue
-        ((found_count += 1))
-
-        if ! is_processed "$task_id"; then
-            mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"trigger_created_at\":\"$created_at\",\"result\":\"marked_as_completed_bulk\"}"
-            log_info "Marked $task_id as processed"
-            echo "Marked $task_id as processed"
-            ((marked_count += 1))
-        fi
-    done <<< "$tasks"
-
-    if ! set_last_poll "1970-01-01T00:00:00Z"; then
-        log_error "Failed to reset last poll for mark-all verification"
-        echo "Failed to reset last poll for mark-all verification" >&2
-        exit 1
-    fi
-
-    local verify_tasks
-    verify_tasks=$(find_ralph_mentions 2>/dev/null || true)
-    while IFS= read -r task; do
-        [[ -z "$task" ]] && continue
-        local task_id
-        task_id=$(task_id_for_task_json "$task") || continue
-        if ! is_processed "$task_id"; then
-            remaining_task_ids+=("$task_id")
-            ((remaining_count += 1))
-        fi
-    done <<< "$verify_tasks"
-
-    if ! set_last_poll "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"; then
-        log_error "Failed to advance last poll after mark-all"
-        echo "Failed to advance last poll after mark-all" >&2
-        exit 1
-    fi
-
-    log_info "Mark-all summary: found=$found_count marked=$marked_count remaining=$remaining_count"
-    echo "Mark-all summary: found=$found_count marked=$marked_count remaining=$remaining_count"
-
-    if [[ "$remaining_count" -gt 0 ]]; then
-        log_error "Mark-all verification failed; remaining unprocessed tasks: ${remaining_task_ids[*]}"
-        echo "Mark-all verification failed; remaining unprocessed tasks: ${remaining_task_ids[*]}" >&2
-        exit 1
-    fi
-
-    log_info "Successfully marked all existing mentions as processed."
-    echo "Successfully marked all existing mentions as processed."
 }
 
 cmd_stop() {
-    echo "Stopping GitHub watcher..."
+    log_info "Stopping GitHub watcher..."
 
     if tmux has-session -t ralph-gh-watcher 2>/dev/null; then
         tmux kill-session -t ralph-gh-watcher
-        echo "Watcher stopped"
+        log_info "GitHub watcher stopped"
     else
-        echo "Watcher is not running"
+        log_info "GitHub watcher was not running"
     fi
 }
 
+cmd_mark_all() {
+    log_info "Marking all existing trigger mentions as processed..."
+
+    # Load configuration first so AGENT_TYPE is available when selecting the
+    # agent adapter in source_watcher_helpers.
+    if [[ -f "$CONFIG_FILE" ]]; then
+        set -a
+        source "$CONFIG_FILE"
+        set +a
+    else
+        log_error "Configuration file not found: $CONFIG_FILE"
+        log_error "Run 'foundry agent gh-watcher init <vm-name>' first"
+        exit 1
+    fi
+
+    if ! source_watcher_helpers; then
+        log_error "Failed to load watcher helpers"
+        exit 1
+    fi
+
+    if [[ ! -f "$GITHUB_TOKEN_FILE" ]]; then
+        log_error "GitHub token file not found: $GITHUB_TOKEN_FILE"
+        exit 1
+    fi
+    export GH_TOKEN
+    GH_TOKEN=$(cat "$GITHUB_TOKEN_FILE")
+    if [[ -z "$GH_TOKEN" ]]; then
+        log_error "GitHub token is empty in $GITHUB_TOKEN_FILE"
+        exit 1
+    fi
+
+    ensure_processed_file_valid
+
+    local tasks=""
+    tasks=$(find_trigger_mentions 2>/dev/null || true)
+
+    local count=0
+    local candidate
+    while IFS= read -r candidate; do
+        [[ -z "$candidate" ]] && continue
+
+        local task_id
+        task_id=$(task_id_for_task_json "$candidate") || continue
+
+        if ! is_processed "$task_id"; then
+            mark_processed "$task_id" "{\"result\":\"skipped_mark_all\",\"processed_at\":\"$(date -Iseconds)\"}"
+            count=$((count + 1))
+        fi
+    done <<< "$tasks"
+
+    log_info "Marked $count existing mentions as processed"
+}
+
 # ============================================================================
-# MAIN ENTRY POINT
+# MAIN
 # ============================================================================
 
 main() {
-    local command="${1:-start}"
+    local action="${1:-start}"
     shift || true
 
-    case "$command" in
+    case "$action" in
         start)
-            while [[ $# -gt 0 ]]; do
-                case "$1" in
-                    --new)
-                        log_info "Setting poll window to NOW (skipping past mentions)"
-                        mkdir -p "$(dirname "$PROCESSED_FILE")"
-                        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
-                            echo "{\"version\":\"1.0\",\"processed\":{},\"last_poll\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}" > "$PROCESSED_FILE"
-                        else
-                            local temp_file
-                            temp_file=$(mktemp)
-                            jq ".last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" "$PROCESSED_FILE" > "$temp_file" && mv "$temp_file" "$PROCESSED_FILE"
-                        fi
-                        shift
-                        ;;
-                    --all)
-                        local lookback_date
-                        lookback_date=$(date -u -d "30 days ago" +"%Y-%m-%dT%H:%M:%SZ")
-                        log_warn "!!! WARNING: Processing all un-processed mentions from the last 30 days ($lookback_date) !!!"
-                        mkdir -p "$(dirname "$PROCESSED_FILE")"
-                        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
-                            echo "{\"version\":\"1.0\",\"processed\":{},\"last_poll\":\"$lookback_date\"}" > "$PROCESSED_FILE"
-                        else
-                            local temp_file
-                            temp_file=$(mktemp)
-                            jq ".last_poll = \"$lookback_date\"" "$PROCESSED_FILE" > "$temp_file" && mv "$temp_file" "$PROCESSED_FILE"
-                        fi
-                        shift
-                        ;;
-                    *)
-                        shift
-                        ;;
-                esac
-            done
-            cmd_start
+            cmd_start "$@"
             ;;
         dry-run)
-            while [[ $# -gt 0 ]]; do
-                case "$1" in
-                    --new)
-                        log_info "Setting poll window to NOW (skipping past mentions)"
-                        mkdir -p "$(dirname "$PROCESSED_FILE")"
-                        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
-                            echo "{\"version\":\"1.0\",\"processed\":{},\"last_poll\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}" > "$PROCESSED_FILE"
-                        else
-                            local temp_file
-                            temp_file=$(mktemp)
-                            jq ".last_poll = \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" "$PROCESSED_FILE" > "$temp_file" && mv "$temp_file" "$PROCESSED_FILE"
-                        fi
-                        shift
-                        ;;
-                    --all)
-                        local lookback_date
-                        lookback_date=$(date -u -d "30 days ago" +"%Y-%m-%dT%H:%M:%SZ")
-                        log_warn "!!! WARNING: Processing all un-processed mentions from the last 30 days ($lookback_date) !!!"
-                        mkdir -p "$(dirname "$PROCESSED_FILE")"
-                        if [[ ! -f "$PROCESSED_FILE" ]] || [[ ! -s "$PROCESSED_FILE" ]]; then
-                            echo "{\"version\":\"1.0\",\"processed\":{},\"last_poll\":\"$lookback_date\"}" > "$PROCESSED_FILE"
-                        else
-                            local temp_file
-                            temp_file=$(mktemp)
-                            jq ".last_poll = \"$lookback_date\"" "$PROCESSED_FILE" > "$temp_file" && mv "$temp_file" "$PROCESSED_FILE"
-                        fi
-                        shift
-                        ;;
-                    *)
-                        shift
-                        ;;
-                esac
-            done
-            cmd_dry_run
+            cmd_dry_run "$@"
             ;;
         status)
-            cmd_status
+            cmd_status "$@"
             ;;
         queue)
-            cmd_queue
-            ;;
-        scan)
-            cmd_scan
-            ;;
-        mark-all)
-            cmd_mark_all
+            cmd_queue "$@"
             ;;
         stop)
-            cmd_stop
+            cmd_stop "$@"
+            ;;
+        mark-all)
+            cmd_mark_all "$@"
             ;;
         *)
-            echo "Usage: $0 {start|dry-run|status|queue|scan|mark-all|stop} [options]"
-            echo ""
-            echo "Commands:"
-            echo "  start    - Start the GitHub watcher daemon"
-            echo "  dry-run  - Start watcher loop without executing Ralph"
-            echo "  status   - Show watcher status"
-            echo "  queue    - Show task queue and history"
-            echo "  scan     - Print detected !ralph tasks without starting Ralph"
-            echo "  mark-all - Mark all existing !ralph mentions as processed without running Ralph"
-            echo "  stop     - Stop the watcher daemon"
-            echo ""
-            echo "Options for start/dry-run:"
-            echo "  --new    - Reset state to only process mentions from this moment on"
-            echo "  --all    - Reset state to process all existing un-processed mentions from history"
+            log_error "Unknown watcher action: $action"
             exit 1
             ;;
     esac
 }
 
-# Run main if executed directly (not sourced)
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+main "$@"

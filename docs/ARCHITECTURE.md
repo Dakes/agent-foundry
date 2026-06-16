@@ -8,7 +8,7 @@ Agent Foundry is a framework for managing isolated Firecracker microVMs that run
 
 1. **Isolation** - Each project gets its own VM, no cross-contamination
 2. **Reproducibility** - VMs built from scripts, snapshots for reuse
-3. **Autonomy** - Agents run unattended with a Ralph integration (ralph-claude-code or ralph-orchestrator)
+3. **Autonomy** - Agents run unattended with an autonomous agent backend (ralph-claude-code, ralph-orchestrator, or kimi-ralph)
 4. **Flexibility** - Support multiple AI CLIs and concurrent VMs
 5. **Portability** - System-agnostic host, works on any Linux
 
@@ -41,7 +41,7 @@ Agent Foundry is a framework for managing isolated Firecracker microVMs that run
 ### Golden Template (`golden.ext4`)
 - Base template + AI development stack
 - Pre-installed: Claude Code CLI, Gemini CLI, OpenAI CLI
-- Exactly one Ralph variant installed per image (`ralph-claude-code` or `ralph-orchestrator`)
+- Exactly one autonomous agent variant installed per image (`ralph-claude-code`, `ralph-orchestrator`, or `kimi-ralph`)
 - Per-VM SSH keys for git authentication (generated at VM create time)
 - Docker, Node.js, Python 3, development tools
 - This is what users actually clone
@@ -95,6 +95,7 @@ Current runtime workspace lives in `/root` inside each VM:
 /root/
 ├── repos/                      # Git repositories
 ├── .ralph/                     # Ralph config + plans
+├── .kimi/                      # Kimi config + task prompts
 ├── ralph.yml                   # Ralph Orchestrator config (optional)
 ├── .claude/                    # Claude config (optional)
 ├── .codex/                     # Codex config (optional)
@@ -102,7 +103,8 @@ Current runtime workspace lives in `/root` inside each VM:
 ├── .ralphrc                    # Ralph runtime config
 ├── *.md                        # Top-level project docs
 └── logs/
-    └── ralph.log
+    ├── ralph.log
+    └── kimi-ralph.log
 ```
 
 ## Agent Integration
@@ -127,7 +129,12 @@ Current runtime workspace lives in `/root` inside each VM:
    - Google's Gemini CLI
    - Screen session for interaction
 
-5. **codex** (Interactive)
+5. **kimi-ralph** (Autonomous)
+   - Kimi Code CLI in Ralph loop mode
+   - Bounded to 100 iterations for safety
+   - Backed by `MoonshotAI/kimi-cli`
+
+6. **codex** (Interactive)
    - OpenAI's Codex CLI
    - Screen session for interaction
 
@@ -137,6 +144,7 @@ Each tool has its own skills directory:
 - Claude Code: `/root/.claude/skills/`
 - OpenAI Codex: `/root/.codex/skills/`
 - Gemini CLI: `/root/.gemini/commands/`
+- Kimi CLI: `/root/.kimi/skills/`
 
 Skills from `agent-foundry/skills/` are copied to appropriate locations during VM creation.
 
@@ -190,6 +198,7 @@ Configured via defaults in `config/default.conf` and user overrides in `~/.confi
 
 - `lib/vm.sh` - VM lifecycle functions
 - `lib/agent.sh` - Agent management
+- `lib/agent-registry.sh` - Agent type definitions and metadata
 - `lib/network.sh` - Networking setup
 - `lib/template.sh` - Template building
 - `lib/workspace.sh` - Workspace initialization
@@ -216,10 +225,12 @@ Configured via defaults in `config/default.conf` and user overrides in `~/.confi
 3. Add OS detection in VM initialization
 
 ### Adding New AI Agent Types
-1. Install CLI in golden template
-2. Add start/stop logic in `lib/agent.sh`
-3. Configure skills directory mapping
-4. Document in CLI reference
+1. Add the agent to `lib/agent-registry.sh`
+2. Provide a start-script template under `templates/<agent>/`
+3. Add a GitHub watcher adapter under `templates/<agent>/` if autonomous
+4. Add install logic in `lib/workspace.sh`
+5. Configure skills directory mapping
+6. Document in CLI reference
 
 ### Custom Template Variants
 1. Create custom `packages.txt`

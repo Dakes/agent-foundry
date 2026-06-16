@@ -6,7 +6,7 @@ Run AI coding agents 24/7 in isolated Firecracker VMs. Each project gets its own
 
 ## Features
 
-- **🤖 Autonomous** - supports `ralph-claude-code` and `ralph-orchestrator`
+- **🤖 Autonomous** - supports `ralph-claude-code`, `ralph-orchestrator`, and `kimi-ralph`
 - **🔒 Isolated** - Dedicated VM per project, zero host pollution
 - **🚀 Concurrent** - Run unlimited VMs simultaneously
 - **📚 Rich Context** - Company docs, standards, architecture included
@@ -32,14 +32,15 @@ foundry agent start my-project ralph
 foundry agent logs my-project --follow
 ```
 
-## Ralph Variants
+## Autonomous Agent Backends
 
-Agent Foundry supports two autonomous Ralph integrations:
+Agent Foundry supports multiple autonomous agent backends:
 
 - `ralph` (backed by `frankbria/ralph-claude-code`)
 - `ralph-orchestrator` (backed by `mikeyobrien/ralph-orchestrator`)
+- `kimi-ralph` (backed by `MoonshotAI/kimi-cli` in Ralph mode, capped at 100 iterations)
 
-Each VM image should include exactly one Ralph variant. Configure template builds with:
+Each VM may run only one autonomous agent at a time. For Ralph-backed images, configure template builds with:
 
 ```bash
 # ~/.config/foundry/config.conf
@@ -50,7 +51,7 @@ RALPH_AGENT_VARIANT=ralph-orchestrator
 
 Project examples:
 
-- `projects/example-project/` (ralph-claude-code)
+- `projects/example-project/` (kimi-ralph)
 - `projects/example-project-orchestrator/` (ralph-orchestrator)
 
 ## Architecture
@@ -163,7 +164,7 @@ foundry vm rename <old> <new>
 foundry vm snapshot <name> <snapshot>
 
 # Agent management
-foundry agent start <vm> <agent-type>  # ralph, ralph-orchestrator, claude, gemini, codex
+foundry agent start <vm> <agent-type>  # ralph, ralph-orchestrator, kimi-ralph, claude, gemini, codex
 foundry agent stop <vm>
 foundry agent restart <vm>
 foundry agent logs <vm> [--follow]
@@ -251,7 +252,7 @@ MIT License - See [LICENSE](LICENSE)
 
 ## Credits
 
-Built on [Firecracker](https://firecracker-microvm.github.io/) • Supports [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) and [ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator) • Inspired by the Ralph Wiggum technique
+Built on [Firecracker](https://firecracker-microvm.github.io/) • Supports [ralph-claude-code](https://github.com/frankbria/ralph-claude-code), [ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator), and [kimi-cli](https://github.com/MoonshotAI/kimi-cli) • Inspired by the Ralph Wiggum technique
 
 ## Support
 

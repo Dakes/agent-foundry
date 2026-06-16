@@ -1,0 +1,21 @@
+#!/bin/bash
+# Agent Foundry - Ralph autonomous agent start script
+# Rendered by lib/agent.sh for the active Ralph variant.
+
+cd "$AGENT_WORKSPACE" || {
+    echo "ERROR: cannot change to workspace $AGENT_WORKSPACE" >&2
+    exit 1
+}
+
+case "$AGENT_RALPH_VARIANT" in
+    ralph-orchestrator)
+        exec ralph run -c ralph.yml --autonomous 2>&1 | tee -a "$AGENT_LOG_FILE"
+        ;;
+    *)
+        # ralph-claude-code (or legacy unknown Ralph)
+        if [[ -f .ralph/.circuit_breaker_state ]]; then
+            ralph --reset-circuit >/dev/null 2>&1 || true
+        fi
+        exec ralph 2>&1 | tee -a "$AGENT_LOG_FILE"
+        ;;
+esac

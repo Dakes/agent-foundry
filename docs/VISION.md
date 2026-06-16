@@ -45,6 +45,7 @@ Leverage best tools for each task:
 - **Claude Code** - Primary coding agent (via ralph-claude-code)
 - **Gemini CLI** - Alternative for specific tasks
 - **OpenAI Codex** - Additional option
+- **Kimi Code CLI** - Autonomous agent via kimi-ralph mode
 - Pluggable architecture for future agents
 
 ### 5. Simple, Powerful UX
@@ -52,6 +53,8 @@ Host-based CLI abstracts VM complexity:
 ```bash
 foundry vm create my-project --project acme-company
 foundry agent start my-project ralph
+# or
+foundry agent start my-project kimi-ralph
 foundry agent logs my-project --follow
 ```
 

@@ -175,3 +175,8 @@ evaluate_ralph_orchestrator_outcome() {
         echo "failure:exit_code_${exit_code:-missing}"
     fi
 }
+
+# Standard generic interface used by the agent-aware GitHub watcher.
+prepare_agent_workspace() { prepare_ralph_orchestrator_workspace "$@"; }
+start_agent_loop() { start_ralph_orchestrator_loop; }
+evaluate_agent_outcome() { evaluate_ralph_orchestrator_outcome "$@"; }

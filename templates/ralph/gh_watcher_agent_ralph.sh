@@ -85,11 +85,7 @@ $(jq -r '.body' "$context_file")
 
 ## Conversation Thread
 
-### Issue Comments
-$(jq -r '.issue_comments' "$context_file")
-
-### Review Comments
-$(jq -r '.review_comments' "$context_file")
+$(jq -r '.conversation' "$context_file")
 
 ${linked_issue_section}
 
@@ -136,34 +132,10 @@ start_ralph_claude_code_loop() {
 }
 
 evaluate_ralph_claude_code_outcome() {
-    local run_start_epoch="$1"
-
-    local failure_reason
-    failure_reason=$(get_ralph_failure_reason || true)
-    if [[ -n "$failure_reason" ]]; then
-        echo "failure:$failure_reason"
-        return 0
-    fi
-
-    local result_file
-    result_file=$(get_latest_claude_result_file_after "$run_start_epoch" || true)
-    if [[ -n "$result_file" ]] && jq -e . "$result_file" >/dev/null 2>&1; then
-        local is_error result_text
-        is_error=$(jq -r '.is_error // false' "$result_file" 2>/dev/null || echo "false")
-        result_text=$(jq -r '.result // ""' "$result_file" 2>/dev/null || echo "")
-
-        if [[ "$is_error" == "true" ]]; then
-            if rate_limit_detected_in_text "$result_text"; then
-                echo "rate_limited:claude_usage_limit"
-            else
-                echo "failure:claude_error"
-            fi
-            return 0
-        fi
-    fi
-
+    local run_start_epoch="${1:-}"
     local exit_code
     exit_code=$(get_run_exit_code 2>/dev/null || true)
+
     if [[ "$exit_code" == "0" ]]; then
         echo "success:ok"
         return 0
@@ -171,7 +143,13 @@ evaluate_ralph_claude_code_outcome() {
 
     if watcher_log_contains_rate_limit; then
         echo "rate_limited:claude_usage_limit"
-    else
-        echo "failure:exit_code_${exit_code:-missing}"
+        return 0
     fi
+
+    echo "failure:exit_code_${exit_code:-missing}"
 }
+
+# Standard generic interface used by the agent-aware GitHub watcher.
+prepare_agent_workspace() { prepare_ralph_claude_code_workspace "$@"; }
+start_agent_loop() { start_ralph_claude_code_loop; }
+evaluate_agent_outcome() { evaluate_ralph_claude_code_outcome "$@"; }

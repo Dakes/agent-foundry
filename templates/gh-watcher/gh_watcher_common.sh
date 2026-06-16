@@ -61,6 +61,9 @@ cat > /tmp/start-ralph-watcher.sh <<EOF
 set -euo pipefail
 set -o pipefail
 
+# Ensure the Kimi Code CLI binary is on PATH.
+export PATH="/root/.kimi-code/bin:/root/.local/bin:/usr/local/bin:\$PATH"
+
 # Initialize NVM if it exists
 export NVM_DIR="/root/.nvm"
 if [[ -s "\$NVM_DIR/nvm.sh" ]]; then

@@ -40,6 +40,9 @@ fi
 if [[ -f "${SCRIPT_DIR}/vm.sh" ]]; then
     source "${SCRIPT_DIR}/vm.sh"
 fi
+if [[ -f "${SCRIPT_DIR}/agent-registry.sh" ]]; then
+    source "${SCRIPT_DIR}/agent-registry.sh"
+fi
 
 # ============================================================================
 # CONFIGURATION
@@ -73,6 +76,8 @@ _get_vm_ssh_key() {
     local vm_name="$1"
     local ssh_key
     ssh_key=$(registry_get "$vm_name" ".ssh_key")
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
     if [[ "$ssh_key" == "null" ]]; then
         ssh_key=""
     fi
@@ -111,6 +116,35 @@ _scp_to_vm() {
     local source="$3"
     local dest="$4"
     scp ${ssh_key_path:+-i "$ssh_key_path"} $FOUNDRY_SSH_OPTS -r "$source" "${FOUNDRY_SSH_USER}@${vm_ip}:${dest}"
+}
+
+# Copy the currently used host foundry binary into the VM so the VM runs the
+# same version as the host (watcher scripts, adapters, etc. stay in sync).
+_sync_foundry_binary_to_vm() {
+    local vm_name="$1"
+    local foundry_path
+    foundry_path=$(command -v foundry 2>/dev/null || true)
+
+    if [[ -z "$foundry_path" ]]; then
+        log_warn "Could not locate host 'foundry' binary; skipping binary sync"
+        return 0
+    fi
+    if [[ ! -f "$foundry_path" ]]; then
+        log_warn "Foundry binary path does not exist: $foundry_path"
+        return 0
+    fi
+
+    log_info "Syncing foundry binary ($foundry_path) into VM '$vm_name'"
+
+    local vm_ip ssh_key
+    vm_ip=$(_get_vm_ip "$vm_name")
+    ssh_key=$(_get_vm_ssh_key "$vm_name")
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
+
+    _ssh_cmd "$vm_name" "mkdir -p /usr/local/bin" || return 1
+    _scp_to_vm "$vm_ip" "$ssh_key" "$foundry_path" "/usr/local/bin/foundry" || return 1
+    _ssh_cmd "$vm_name" "chmod 755 /usr/local/bin/foundry" || return 1
 }
 
 # Setup SSH keys for git repositories
@@ -199,60 +233,6 @@ _setup_ssh_keys() {
     log_info "SSH keys configured for $repos_count repositories"
 }
 
-# Copy project files (markdown and ralph folder) to VM workspace
-_copy_project_files() {
-    local vm_ip="$1"
-    local ssh_key_path="$2"
-    local workspace_path="$3"
-    local project_dir="$4"
-
-    log_info "Copying project files..."
-
-    # Copy AGENT.md template
-    local agent_template="${TEMPLATES_DIR}/../AGENT.md.template"
-    if [[ -f "$agent_template" ]]; then
-        _scp_to_vm "$vm_ip" "$ssh_key_path" "$agent_template" "${workspace_path}/AGENT.md"
-        log_debug "Copied AGENT.md template"
-    else
-        log_warn "AGENT.md template not found: $agent_template"
-    fi
-
-    # Copy .ralphrc: prefer project-specific, fallback to template
-    local project_ralphrc="$project_dir/.ralphrc"
-    local ralphrc_template="${TEMPLATES_DIR}/../.ralphrc.template"
-
-    if [[ -f "$project_ralphrc" ]]; then
-        # Use project-specific .ralphrc (overrides default)
-        _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_ralphrc" "${workspace_path}/.ralphrc"
-        log_debug "Copied project-specific .ralphrc"
-    elif [[ -f "$ralphrc_template" ]]; then
-        # Use default template as fallback
-        _scp_to_vm "$vm_ip" "$ssh_key_path" "$ralphrc_template" "${workspace_path}/.ralphrc"
-        log_debug "Copied default .ralphrc template (full tool access for autonomous VM)"
-    fi
-
-    # Copy .ralph/ folder if exists
-    if [[ -d "$project_dir/.ralph" ]]; then
-        log_debug "Copying .ralph/ folder..."
-        _ssh_cmd "$vm_ip" "$ssh_key_path" "mkdir -p '${workspace_path}/.ralph'"
-        _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/.ralph/." "${workspace_path}/.ralph/"
-    fi
-
-    # Copy all .md files to context/ (excluding .ralph/)
-    local md_files
-    md_files=$(find "$project_dir" -maxdepth 1 -name "*.md" -type f)
-
-    if [[ -n "$md_files" ]]; then
-        log_debug "Copying .md files to context/..."
-        while IFS= read -r md_file; do
-            if [[ -f "$md_file" ]]; then
-                local filename
-                filename=$(basename "$md_file")
-                _scp_to_vm "$vm_ip" "$ssh_key_path" "$md_file" "${workspace_path}/context/${filename}"
-            fi
-        done <<< "$md_files"
-    fi
-}
 
 _check_vm_running() {
     local vm_name="$1"
@@ -383,6 +363,30 @@ _install_missing_npm_agent_cli() {
     _ssh_cmd "$vm_name" "bash -lc 'set -euo pipefail; export NVM_DIR=/root/.nvm; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; command -v npm >/dev/null 2>&1; npm install -g \"$package\"; bin_path=\$(command -v \"$binary\"); install -d /usr/local/bin; ln -sf \"\$bin_path\" \"/usr/local/bin/$binary\"'"
 }
 
+_install_missing_uv_agent_cli() {
+    local vm_name="$1"
+    local description="$2"
+    local package="$3"
+    local binary="$4"
+
+    log_info "Installing missing ${description} in VM '$vm_name'"
+    # Ensure uv is available. The golden image is expected to install uv in
+    # /usr/local; if not, bootstrap it there so it is on PATH for all sessions.
+    _ssh_cmd "$vm_name" "bash -lc 'set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local sh; fi; uv tool install \"$package\"; bin_path=\$(command -v \"$binary\"); install -d /usr/local/bin; ln -sf \"\$bin_path\" \"/usr/local/bin/$binary\"'"
+}
+
+# Install the TypeScript Kimi Code CLI (kimi-code). It is distributed via an
+# official install script that places the binary at ~/.kimi-code/bin/kimi.
+_install_missing_kimi_code_agent_cli() {
+    local vm_name="$1"
+    local description="$2"
+    local package="$3"
+    local binary="$4"
+
+    log_info "Installing missing ${description} in VM '$vm_name'"
+    _ssh_cmd "$vm_name" "bash -lc 'set -euo pipefail; if [[ ! -x \"/root/.kimi-code/bin/$binary\" ]]; then curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash; fi; install -d /usr/local/bin; ln -sf \"/root/.kimi-code/bin/$binary\" \"/usr/local/bin/$binary\"'"
+}
+
 _desired_project_ralph_variant() {
     local agents_config="$1"
 
@@ -479,21 +483,37 @@ _ensure_project_agent_clis() {
     local agents_config="$2"
 
     while IFS= read -r agent; do
-        case "$agent" in
-            "@anthropic-ai/claude-code")
-                if ! _ssh_cmd "$vm_name" "command -v claude >/dev/null 2>&1"; then
-                    _install_missing_npm_agent_cli "$vm_name" "Claude Code CLI" "@anthropic-ai/claude-code" "claude" || return 1
-                fi
+        local agent_type install_method binary package
+        agent_type=$(agent_type_from_agents_json "$agent")
+        install_method=$(agent_install_method "$agent_type")
+        binary=$(agent_binary "$agent_type")
+        package=$(agent_package "$agent_type")
+
+        # Skip agents without an installable CLI (e.g. Ralph is baked into image)
+        if [[ -z "$install_method" || "$install_method" == "ralph" ]]; then
+            continue
+        fi
+        if [[ -z "$binary" || -z "$package" ]]; then
+            log_warn "No install mapping for agent '$agent' (type: $agent_type)"
+            continue
+        fi
+
+        if _ssh_cmd "$vm_name" "command -v '$binary' >/dev/null 2>&1"; then
+            continue
+        fi
+
+        case "$install_method" in
+            npm)
+                _install_missing_npm_agent_cli "$vm_name" "$(agent_display_name "$agent_type")" "$package" "$binary" || return 1
                 ;;
-            "@openai/codex")
-                if ! _ssh_cmd "$vm_name" "command -v codex >/dev/null 2>&1"; then
-                    _install_missing_npm_agent_cli "$vm_name" "OpenAI Codex CLI" "@openai/codex" "codex" || return 1
-                fi
+            uv)
+                _install_missing_uv_agent_cli "$vm_name" "$(agent_display_name "$agent_type")" "$package" "$binary" || return 1
                 ;;
-            "@google/gemini-cli")
-                if ! _ssh_cmd "$vm_name" "command -v gemini >/dev/null 2>&1"; then
-                    _install_missing_npm_agent_cli "$vm_name" "Gemini CLI" "@google/gemini-cli" "gemini" || return 1
-                fi
+            kimi-code)
+                _install_missing_kimi_code_agent_cli "$vm_name" "$(agent_display_name "$agent_type")" "$package" "$binary" || return 1
+                ;;
+            *)
+                log_warn "Unknown install method '$install_method' for agent '$agent'"
                 ;;
         esac
     done < <(jq -r '.agents[]' "$agents_config" 2>/dev/null)
@@ -560,56 +580,44 @@ workspace_init() {
         return 1
     fi
 
-    # Validate agent types
-    local supported_agents=(
-        "$RALPH_CLAUDE_CODE_AGENT"
-        "$RALPH_ORCHESTRATOR_AGENT"
-        "@anthropic-ai/claude-code"
-        "@openai/codex"
-        "@google/gemini-cli"
-    )
+    # Validate agent identifiers
     local invalid_agents=0
-    local ralph_agent_count=0
+    local autonomous_agent_count=0
     local uses_ralph_orchestrator=false
+    local supported_list
+    supported_list=$(agents_json_supported_identifiers)
 
     while IFS= read -r agent; do
-        local supported=false
-        for valid in "${supported_agents[@]}"; do
-            if [[ "$agent" == "$valid" ]]; then
-                supported=true
-                break
-            fi
-        done
-        if [[ "$supported" == "false" ]]; then
+        if ! agents_json_identifier_is_valid "$agent"; then
             log_error "Unsupported agent in agents.json: $agent"
-            log_error "Supported: ${supported_agents[*]}"
+            log_error "Supported: $supported_list"
             invalid_agents=1
+            continue
         fi
 
-        case "$agent" in
-            "$RALPH_CLAUDE_CODE_AGENT")
-                ralph_agent_count=$((ralph_agent_count + 1))
-                ;;
-            "$RALPH_ORCHESTRATOR_AGENT")
-                ralph_agent_count=$((ralph_agent_count + 1))
-                uses_ralph_orchestrator=true
-                ;;
-        esac
+        local agent_type
+        agent_type=$(agent_type_from_agents_json "$agent")
+        if agent_is_autonomous "$agent_type"; then
+            autonomous_agent_count=$((autonomous_agent_count + 1))
+        fi
+        if [[ "$agent_type" == "ralph-orchestrator" ]]; then
+            uses_ralph_orchestrator=true
+        fi
     done <<< "$agents_list"
 
     if [[ $invalid_agents -ne 0 ]]; then
         return 1
     fi
 
-    if [[ $ralph_agent_count -gt 1 ]]; then
-        log_error "agents.json may include at most one Ralph agent per image"
-        log_error "Use either '$RALPH_CLAUDE_CODE_AGENT' or '$RALPH_ORCHESTRATOR_AGENT', not both"
+    if [[ $autonomous_agent_count -gt 1 ]]; then
+        log_error "agents.json may include at most one autonomous agent per image"
+        log_error "Use only one of: frankbria/ralph-claude-code, mikeyobrien/ralph-orchestrator, kimi-cli"
         return 1
     fi
 
-    if [[ $ralph_agent_count -eq 0 ]]; then
-        log_warn "No Ralph agent listed in agents.json"
-        log_warn "Autonomous Ralph commands will be unavailable for this project"
+    if [[ $autonomous_agent_count -eq 0 ]]; then
+        log_warn "No autonomous agent listed in agents.json"
+        log_warn "Autonomous agent commands will be unavailable for this project"
     fi
 
     # Create workspace directory structure
@@ -625,21 +633,9 @@ workspace_init() {
     # Copy agent dotfolders
     log_info "Copying agent configurations..."
     while IFS= read -r agent; do
-        local dotfolder=""
-        case "$agent" in
-            "$RALPH_CLAUDE_CODE_AGENT"|"${RALPH_ORCHESTRATOR_AGENT}")
-                dotfolder=".ralph"
-                ;;
-            "@anthropic-ai/claude-code")
-                dotfolder=".claude"
-                ;;
-            "@openai/codex")
-                dotfolder=".codex"
-                ;;
-            "@google/gemini-cli")
-                dotfolder=".gemini"
-                ;;
-        esac
+        local agent_type dotfolder
+        agent_type=$(agent_type_from_agents_json "$agent")
+        dotfolder=$(agent_dotfolder "$agent_type")
 
         if [[ -n "$dotfolder" && -d "$project_dir/$dotfolder" ]]; then
             log_debug "Copying $dotfolder/ to VM..."
@@ -683,6 +679,7 @@ workspace_init() {
     _cleanup_legacy_ralph_workspace "$vm_name" "$project_dir" "$workspace_path" || return 1
     _ensure_project_ralph_variant "$vm_name" "$agents_config" || return 1
     _ensure_project_agent_clis "$vm_name" "$agents_config" || return 1
+    _sync_foundry_binary_to_vm "$vm_name" || return 1
 
     # Update registry with workspace info
     registry_update "$vm_name" ".workspace" "\"$vm_name\""
@@ -719,10 +716,17 @@ workspace_sync() {
     project_dir=$(_resolve_project_dir "$vm_name" "$project_ref") || return 1
 
     local agents_config="$project_dir/agents.json"
-    local ralph_agent_count
-    ralph_agent_count=$(jq -r "[.agents[] | select(. == \"$RALPH_CLAUDE_CODE_AGENT\" or . == \"$RALPH_ORCHESTRATOR_AGENT\")] | length" "$agents_config" 2>/dev/null || echo "0")
-    if [[ "$ralph_agent_count" -gt 1 ]]; then
-        log_error "agents.json may include at most one Ralph agent per image"
+    local autonomous_agent_count=0
+    local agent_entry
+    while IFS= read -r agent_entry; do
+        local agent_type
+        agent_type=$(agent_type_from_agents_json "$agent_entry")
+        if agent_is_autonomous "$agent_type"; then
+            autonomous_agent_count=$((autonomous_agent_count + 1))
+        fi
+    done < <(jq -r '.agents[]' "$agents_config" 2>/dev/null)
+    if [[ "$autonomous_agent_count" -gt 1 ]]; then
+        log_error "agents.json may include at most one autonomous agent per image"
         log_error "Fix $agents_config before syncing"
         return 1
     fi
@@ -743,7 +747,7 @@ workspace_sync() {
     fi
 
     # Sync agent dotfolders for known agent integrations.
-    local -a dotfolders=(".ralph" ".claude" ".codex" ".gemini")
+    local -a dotfolders=(".ralph" ".kimi" ".claude" ".codex" ".gemini")
     local dotfolder
     for dotfolder in "${dotfolders[@]}"; do
         if [[ -d "$project_dir/$dotfolder" ]]; then
@@ -799,9 +803,10 @@ workspace_sync() {
 
     _ensure_project_ralph_variant "$vm_name" "$agents_config" || return 1
     _ensure_project_agent_clis "$vm_name" "$agents_config" || return 1
+    _sync_foundry_binary_to_vm "$vm_name" || return 1
 
     log_info "Workspace sync complete."
-    log_info "Updated: dotfolders (.ralph/.claude/.codex/.gemini), .ralphrc, top-level *.md, and ralph*.yml files."
+    log_info "Updated: dotfolders (.ralph/.kimi/.claude/.codex/.gemini), .ralphrc, top-level *.md, and ralph*.yml files."
 
     return 0
 }

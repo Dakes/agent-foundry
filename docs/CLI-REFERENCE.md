@@ -54,13 +54,14 @@ foundry agent disable-autostart <vm>
 ```
 
 Agent types:
-- `ralph`
-- `ralph-orchestrator`
-- `claude`
-- `gemini`
-- `codex`
+- `ralph` - ralph-claude-code autonomous agent
+- `ralph-orchestrator` - ralph-orchestrator autonomous agent
+- `kimi-ralph` - Kimi Code CLI autonomous agent in Ralph mode
+- `claude` - Claude Code CLI interactive session
+- `gemini` - Gemini CLI interactive session
+- `codex` - OpenAI Codex CLI interactive session
 
-Note: each VM image should contain only one Ralph-family variant.
+Note: each VM may run only one autonomous agent at a time.
 
 ## GitHub Watcher Commands
 
@@ -85,7 +86,7 @@ foundry workspace template [file]
 ```
 
 Notes:
-- `workspace sync` updates `.ralph/.claude/.codex/.gemini`, `.ralphrc`, top-level `ralph*.yml`, and top-level `*.md` files.
+- `workspace sync` updates `.ralph/.kimi/.claude/.codex/.gemini`, `.ralphrc`, top-level `ralph*.yml`, and top-level `*.md` files.
 - If `[project]` is omitted, Foundry tries to resolve project metadata from VM registry.
 
 ## Template Commands

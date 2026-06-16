@@ -1,0 +1,19 @@
+#!/bin/bash
+# Agent Foundry - Kimi Code CLI (Ralph mode) autonomous agent start script
+# Rendered by lib/agent.sh. Iterations are capped for safety.
+
+# Make sure the Kimi Code CLI binary is found.
+export PATH="/root/.kimi-code/bin:/root/.local/bin:/usr/local/bin:$PATH"
+
+cd "$AGENT_WORKSPACE" || {
+    echo "ERROR: cannot change to workspace $AGENT_WORKSPACE" >&2
+    exit 1
+}
+
+if [[ ! -f "$AGENT_TASK_PROMPT_FILE" ]]; then
+    echo "ERROR: task prompt not found: $AGENT_TASK_PROMPT_FILE" >&2
+    echo "Create the prompt file or trigger the agent from the GitHub watcher." >&2
+    exit 1
+fi
+
+exec kimi --max-ralph-iterations "$AGENT_MAX_ITERATIONS" -p "$(cat "$AGENT_TASK_PROMPT_FILE")" 2>&1 | tee -a "$AGENT_LOG_FILE"

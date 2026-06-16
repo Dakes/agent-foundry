@@ -6,6 +6,7 @@
 # - Claude Code CLI (@anthropic-ai/claude-code)
 # - Gemini CLI (@google/gemini-cli)
 # - OpenAI Codex CLI (@openai/codex)
+# - Kimi Code CLI (kimi-cli)
 # - Ralph agent (ralph-claude-code or ralph-orchestrator)
 #
 
@@ -87,6 +88,18 @@ main() {
     update_npm_cli "Claude Code CLI" "@anthropic-ai/claude-code" "claude"
     update_npm_cli "Gemini CLI" "@google/gemini-cli" "gemini"
     update_npm_cli "OpenAI Codex CLI" "@openai/codex" "codex"
+
+    # Update Kimi Code CLI
+    log_info "Updating Kimi Code CLI..."
+    if command -v uv >/dev/null 2>&1; then
+        uv tool upgrade kimi-cli
+        install -d /usr/local/bin
+        ln -sf "$(command -v kimi)" /usr/local/bin/kimi
+        log_success "Kimi Code CLI updated"
+    else
+        log_error "uv not found; skipping Kimi Code CLI update"
+    fi
+    echo ""
 
     # Update Ralph agent
     log_info "Updating Ralph agent..."

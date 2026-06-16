@@ -15,6 +15,9 @@ LIB_DIR="${ROOT_DIR}/lib"
 # shellcheck source=lib/config.sh
 source "${LIB_DIR}/config.sh"
 
+# shellcheck source=lib/agent-registry.sh
+source "${LIB_DIR}/agent-registry.sh"
+
 usage() {
     cat <<'EOF'
 Usage: build-golden.sh [--packages <path>]
@@ -402,6 +405,13 @@ fi
 EOF
     chmod 644 "$mount_dir/etc/profile.d/local-bin-path.sh"
 
+    log_info "Installing uv (Python package manager)"
+    # Install uv into /usr/local so it is available on PATH for all sessions.
+    chroot "$mount_dir" /bin/bash -c '
+set -euo pipefail
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local sh
+'
+
     log_info "Skipping AI/Ralph CLI installation in golden image"
     log_info "Agent CLIs are installed per-VM from project agents.json during workspace init/sync"
 
@@ -411,12 +421,22 @@ EOF
     log_info "Installing update-ai-deps.sh script"
     install -m 755 "${ROOT_DIR}/templates/update-ai-deps.sh" "$mount_dir/usr/local/bin/update-ai-deps"
 
-    log_info "Installing ralph-gh-watcher script"
+    log_info "Installing GitHub watcher scripts"
     chroot "$mount_dir" mkdir -p /opt/foundry/gh-watcher
-    install -m 755 "${ROOT_DIR}/templates/ralph/ralph_gh_watcher.sh" "$mount_dir/opt/foundry/ralph_gh_watcher.sh"
-    install -m 755 "${ROOT_DIR}/templates/ralph/gh_watcher_common.sh" "$mount_dir/opt/foundry/gh-watcher/gh_watcher_common.sh"
-    install -m 755 "${ROOT_DIR}/templates/ralph/gh_watcher_agent_ralph_claude_code.sh" "$mount_dir/opt/foundry/gh-watcher/gh_watcher_agent_ralph_claude_code.sh"
-    install -m 755 "${ROOT_DIR}/templates/ralph/gh_watcher_agent_ralph_orchestrator.sh" "$mount_dir/opt/foundry/gh-watcher/gh_watcher_agent_ralph_orchestrator.sh"
+    install -m 755 "${ROOT_DIR}/templates/gh-watcher/gh_watcher.sh" "$mount_dir/opt/foundry/gh-watcher/gh_watcher.sh"
+    install -m 755 "${ROOT_DIR}/templates/gh-watcher/gh_watcher.sh" "$mount_dir/opt/foundry/ralph_gh_watcher.sh"
+    install -m 755 "${ROOT_DIR}/templates/gh-watcher/gh_watcher_common.sh" "$mount_dir/opt/foundry/gh-watcher/gh_watcher_common.sh"
+
+    # Install one watcher adapter for every autonomous agent type. This keeps
+    # the golden image generic: adding a new autonomous agent only requires a
+    # registry entry + adapter file following the naming convention.
+    local agent adapter_src adapter_basename
+    for agent in $(agent_autonomous_types); do
+        adapter_src=$(agent_watcher_adapter "$agent")
+        adapter_basename=$(basename "$adapter_src")
+        install -m 755 "$adapter_src" "$mount_dir/opt/foundry/gh-watcher/$adapter_basename"
+    done
+
     rm -f "$mount_dir/opt/foundry/ralph-agent-type"
 
     local host_git_config="${FOUND_HOST_HOME}/.gitconfig"

@@ -10,6 +10,7 @@ Agent Foundry uses project folders to configure VMs. Each project folder contain
 - **Context markdown files**: Project documentation for agents
 - **Deploy keys (optional)**: Per-repo SSH keys for git authentication
 - **.ralph/ folder**: Optional Ralph-specific configuration
+- **.kimi/ folder**: Optional Kimi-specific configuration
 
 ## SSH Key Isolation (Per-VM)
 
@@ -25,7 +26,7 @@ By default, Foundry generates a unique SSH keypair for each VM under:
 projects/
   my-project/
     git-config.json           # Required: Repository configuration
-    agents.json               # Required: selected agents (one Ralph max)
+    agents.json               # Required: selected agents (one autonomous agent max)
     overview.md               # Project context
     architecture.md           # Architecture documentation
     coding-standards.md       # Coding guidelines
@@ -86,7 +87,7 @@ Create `agents.json` to declare which agents this project uses:
 ```json
 {
   "agents": [
-    "frankbria/ralph-claude-code",
+    "kimi-cli",
     "@anthropic-ai/claude-code",
     "@openai/codex",
     "@google/gemini-cli"
@@ -94,9 +95,9 @@ Create `agents.json` to declare which agents this project uses:
 }
 ```
 
-For Ralph Orchestrator projects, replace `frankbria/ralph-claude-code` with `mikeyobrien/ralph-orchestrator`.
+For Ralph projects, replace `kimi-cli` with `frankbria/ralph-claude-code` or `mikeyobrien/ralph-orchestrator`.
 
-Important: include at most one Ralph-family agent per project/image.
+Important: include at most one autonomous agent per project/image.
 
 ### Step 4: Generate Deploy Keys
 
@@ -143,7 +144,7 @@ cat > coding-standards.md << 'EOF'
 EOF
 ```
 
-### Step 6: (Optional) Add Ralph Configuration
+### Step 6: (Optional) Add Agent Configuration
 
 If using Ralph, create `.ralph/` folder:
 
@@ -163,6 +164,38 @@ cat > .ralph/fix_plan.md << 'EOF'
 EOF
 ```
 
+If using Kimi (`kimi-cli`), create `.kimi/` folder:
+
+```bash
+mkdir .kimi
+cat > .kimi/config.toml << 'EOF'
+default_model = "kimi-code/kimi-for-coding"
+default_thinking = true
+
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://api.kimi.com/coding/v1"
+api_key = "YOUR_MOONSHOT_API_KEY"
+
+[loop_control]
+max_steps_per_turn = 1000
+max_retries_per_step = 3
+max_ralph_iterations = 0
+EOF
+
+cat > .kimi/task_prompt.md << 'EOF'
+# Kimi Task Prompt
+
+Describe the task you want Kimi to perform autonomously.
+EOF
+```
+
+The `.kimi/config.toml` is synced to `/root/.kimi/config.toml` and supplies the
+API key for the `kimi` CLI. You can also authenticate interactively once inside
+the VM with `kimi login`. The `.kimi/task_prompt.md` file is used as the prompt
+for manual `foundry agent start <vm> kimi-ralph` runs; the GitHub watcher
+overwrites it for each triggered issue/PR.
+
 ## Using Your Project
 
 ### Create a VM
@@ -178,7 +211,7 @@ This will:
 4. Generate SSH config for per-repo keys
 5. Clone repositories using deploy keys
 6. Copy markdown files to `/work/dev-vm-1/context/`
-7. Copy `.ralph/` folder if it exists
+7. Copy `.ralph/` and `.kimi/` folders if they exist
 8. Copy `ralph.yml` / `ralph.*.yml` if present
 
 ### Create Multiple VMs from Same Project
@@ -194,10 +227,11 @@ All VMs use the same project configuration but are independent instances.
 
 The project folder structure is agent-agnostic:
 
-**Ralph (Autonomous):**
+**Autonomous Agents:**
 - `frankbria/ralph-claude-code`: uses `.ralph/` + optional `.ralphrc`
 - `mikeyobrien/ralph-orchestrator`: uses `ralph.yml` + `PROMPT.md` (+ optional `.ralph/`)
-- Only one Ralph-family agent should be configured per project/image
+- `kimi-cli`: uses `.kimi/` for config and task prompts; capped at 100 Ralph iterations
+- Only one autonomous agent should be configured per project/image
 
 **Claude Code (Interactive):**
 - No `.ralph/` folder needed

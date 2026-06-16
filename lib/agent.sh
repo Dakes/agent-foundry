@@ -5,9 +5,10 @@
 # Functions for managing AI agent sessions in VMs including starting,
 # stopping, attaching to sessions, and viewing logs.
 #
-# Supported agent types:
+# Supported agent types (see lib/agent-registry.sh for the source of truth):
 # - ralph: ralph-claude-code autonomous agent (runs in tmux)
 # - ralph-orchestrator: ralph-orchestrator autonomous agent (runs in tmux)
+# - kimi-ralph: Kimi Code CLI autonomous agent in Ralph mode (runs in tmux)
 # - claude: Claude Code CLI interactive session (runs in screen)
 # - gemini: Gemini CLI interactive session (runs in screen)
 # - codex: OpenAI Codex CLI interactive session (runs in screen)
@@ -26,6 +27,9 @@ fi
 if [[ -f "${SCRIPT_DIR}/vm.sh" ]]; then
     source "${SCRIPT_DIR}/vm.sh"
 fi
+if [[ -f "${SCRIPT_DIR}/agent-registry.sh" ]]; then
+    source "${SCRIPT_DIR}/agent-registry.sh"
+fi
 
 # ============================================================================
 # CONFIGURATION
@@ -42,10 +46,6 @@ if [[ -z "${FOUNDRY_DEFAULT_AGENT:-}" ]]; then
             ;;
     esac
 fi
-
-# Session names
-AGENT_TMUX_SESSION="foundry-agent"
-AGENT_SCREEN_SESSION="foundry-agent"
 
 # Agent paths in VM
 RALPH_PATH="/opt/ralph/ralph"
@@ -65,15 +65,11 @@ AGENT_FOUNDRY_BASE_DIR="${FOUNDRY_BASE_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 _validate_agent_type() {
     local agent_type="$1"
-    case "$agent_type" in
-        ralph|ralph-orchestrator|claude|gemini|codex)
-            return 0
-            ;;
-        *)
-            log_error "Invalid agent type: $agent_type (valid: ralph, ralph-orchestrator, claude, gemini, codex)"
-            return 1
-            ;;
-    esac
+    if agent_is_valid "$agent_type"; then
+        return 0
+    fi
+    log_error "Invalid agent type: $agent_type (valid: $(agent_valid_list))"
+    return 1
 }
 
 _get_vm_ip() {
@@ -189,14 +185,40 @@ _scp_to_vm_path() {
 
 _sync_gh_watcher_scripts() {
     local vm_name="$1"
-    local watcher_root="$AGENT_FOUNDRY_BASE_DIR/templates/ralph"
+    local watcher_root="$AGENT_FOUNDRY_BASE_DIR/templates/gh-watcher"
+    local vm_helper_dir="/opt/foundry/gh-watcher"
+    local chmod_paths=""
 
-    _ssh_cmd "$vm_name" "mkdir -p /opt/foundry/gh-watcher" || return 1
-    _scp_to_vm_path "$vm_name" "$watcher_root/ralph_gh_watcher.sh" "/opt/foundry/ralph_gh_watcher.sh" || return 1
-    _scp_to_vm_path "$vm_name" "$watcher_root/gh_watcher_common.sh" "/opt/foundry/gh-watcher/gh_watcher_common.sh" || return 1
-    _scp_to_vm_path "$vm_name" "$watcher_root/gh_watcher_agent_ralph_claude_code.sh" "/opt/foundry/gh-watcher/gh_watcher_agent_ralph_claude_code.sh" || return 1
-    _scp_to_vm_path "$vm_name" "$watcher_root/gh_watcher_agent_ralph_orchestrator.sh" "/opt/foundry/gh-watcher/gh_watcher_agent_ralph_orchestrator.sh" || return 1
-    _ssh_cmd "$vm_name" "chmod 755 /opt/foundry/ralph_gh_watcher.sh /opt/foundry/gh-watcher/gh_watcher_common.sh /opt/foundry/gh-watcher/gh_watcher_agent_ralph_claude_code.sh /opt/foundry/gh-watcher/gh_watcher_agent_ralph_orchestrator.sh" || return 1
+    _ssh_cmd "$vm_name" "mkdir -p $vm_helper_dir" || return 1
+
+    # Core watcher files. Array entries are "host_src:vm_dst".
+    local files=(
+        "$watcher_root/gh_watcher.sh:$vm_helper_dir/gh_watcher.sh"
+        "$watcher_root/gh_watcher.sh:/opt/foundry/ralph_gh_watcher.sh"
+        "$watcher_root/gh_watcher_common.sh:$vm_helper_dir/gh_watcher_common.sh"
+    )
+
+    # One adapter per autonomous agent type; registry is the source of truth.
+    local agent adapter_src adapter_dst
+    for agent in $(agent_autonomous_types); do
+        adapter_src=$(agent_watcher_adapter "$agent")
+        if [[ -z "$adapter_src" || ! -f "$adapter_src" ]]; then
+            log_debug "No watcher adapter found for agent '$agent', skipping"
+            continue
+        fi
+        adapter_dst="$vm_helper_dir/$(basename "$adapter_src")"
+        files+=("$adapter_src:$adapter_dst")
+    done
+
+    local pair src dst
+    for pair in "${files[@]}"; do
+        src="${pair%%:*}"
+        dst="${pair##*:}"
+        _scp_to_vm_path "$vm_name" "$src" "$dst" || return 1
+        chmod_paths="$chmod_paths $dst"
+    done
+
+    _ssh_cmd "$vm_name" "chmod 755$chmod_paths" || return 1
 }
 
 _check_vm_running() {
@@ -264,20 +286,69 @@ _validate_requested_ralph_variant() {
     return 0
 }
 
-_require_gh_watcher_supported_variant() {
+_get_watcher_agent_type() {
     local vm_name="$1"
+    local project_dir="${2:-}"
+    local agent_type
+
+    # Prefer the agent type currently recorded in the VM registry.
+    agent_type=$(registry_get "$vm_name" ".agent.type" 2>/dev/null || true)
+    agent_type="${agent_type%\"}"
+    agent_type="${agent_type#\"}"
+
+    if agent_is_autonomous "$agent_type" 2>/dev/null; then
+        echo "$agent_type"
+        return 0
+    fi
+
+    # If no agent has been started yet, derive the autonomous agent type from
+    # the project's agents.json. This lets `gh-watcher init` work for a freshly
+    # created/synced VM before the agent has ever been started manually.
+    if [[ -z "$project_dir" ]]; then
+        project_dir=$(registry_get "$vm_name" ".project_dir" 2>/dev/null || true)
+        project_dir="${project_dir%\"}"
+        project_dir="${project_dir#\"}"
+    fi
+
+    if [[ -n "$project_dir" && -f "$project_dir/agents.json" ]]; then
+        local agent_entry
+        while IFS= read -r agent_entry; do
+            agent_type=$(agent_type_from_agents_json "$agent_entry")
+            if agent_is_autonomous "$agent_type" 2>/dev/null; then
+                echo "$agent_type"
+                return 0
+            fi
+        done < <(jq -r '.agents[]' "$project_dir/agents.json" 2>/dev/null)
+    fi
+
+    # Fallback to legacy Ralph variant detection.
     local installed_variant
     installed_variant=$(_get_installed_ralph_variant "$vm_name")
-
     case "$installed_variant" in
-        "$RALPH_VARIANT_CLAUDE_CODE"|"$RALPH_VARIANT_ORCHESTRATOR"|unknown)
-            return 0
+        "$RALPH_VARIANT_ORCHESTRATOR")
+            echo "ralph-orchestrator"
+            ;;
+        "$RALPH_VARIANT_CLAUDE_CODE"|unknown)
+            echo "ralph"
             ;;
         *)
-            log_error "Unsupported Ralph variant for GitHub watcher: $installed_variant"
-            return 1
+            # Final fallback
+            echo "ralph"
             ;;
     esac
+}
+
+_require_gh_watcher_supported_agent() {
+    local vm_name="$1"
+    local agent_type
+    agent_type=$(_get_watcher_agent_type "$vm_name")
+
+    if agent_is_autonomous "$agent_type" 2>/dev/null; then
+        return 0
+    fi
+
+    log_error "Unsupported agent type for GitHub watcher: $agent_type"
+    return 1
 }
 
 _resolve_gh_watcher_project_config_path() {
@@ -439,9 +510,9 @@ EOF
 
 # Start an agent in the VM
 # Usage: agent_start <vm_name> [agent_type]
-# agent_type: ralph (default), ralph-orchestrator, claude, gemini, codex
+# agent_type: ralph (default), ralph-orchestrator, kimi-ralph, claude, gemini, codex
 agent_start() {
-    local vm_name="$1"
+    local vm_name="${1:-}"
     local agent_type="${2:-$FOUNDRY_DEFAULT_AGENT}"
 
     if [[ -z "$vm_name" ]]; then
@@ -463,31 +534,31 @@ agent_start() {
         return 0
     fi
 
-    log_info "Starting $agent_type agent in VM '$vm_name'..."
+    log_info "Starting $(agent_display_name "$agent_type") in VM '$vm_name'..."
 
     local workspace_path="${WORKSPACE_BASE}"
+    local rc=0
 
-    case "$agent_type" in
-        ralph|ralph-orchestrator)
-            _start_ralph "$vm_name" "$workspace_path" "$agent_type"
+    case "$(agent_category "$agent_type")" in
+        autonomous)
+            _start_autonomous_agent "$vm_name" "$workspace_path" "$agent_type"
+            rc=$?
             ;;
-        claude)
-            _start_interactive "$vm_name" "$workspace_path" "claude"
+        interactive)
+            _start_interactive "$vm_name" "$workspace_path" "$agent_type"
+            rc=$?
             ;;
-        gemini)
-            _start_interactive "$vm_name" "$workspace_path" "gemini"
-            ;;
-        codex)
-            _start_interactive "$vm_name" "$workspace_path" "codex"
+        *)
+            log_error "Unknown agent category for '$agent_type'"
+            return 1
             ;;
     esac
 
-    local rc=$?
     if [[ $rc -eq 0 ]]; then
         # Update registry
         registry_update "$vm_name" ".agent.type" "\"$agent_type\""
         registry_update "$vm_name" ".agent.status" "\"running\""
-        registry_update "$vm_name" ".agent.session" "\"$AGENT_TMUX_SESSION\""
+        registry_update "$vm_name" ".agent.session" "\"$(agent_session_name "$agent_type")\""
 
         log_info "Agent started successfully"
         log_info "  Type: $agent_type"
@@ -497,13 +568,90 @@ agent_start() {
     return $rc
 }
 
-# Start Ralph autonomous agent in tmux
-_start_ralph() {
+# Render an autonomous agent start script inside the VM.
+# Usage: _render_autonomous_start_script <vm_name> <workspace_path> <agent_type>
+_render_autonomous_start_script() {
     local vm_name="$1"
     local workspace_path="$2"
     local agent_type="$3"
 
-    log_debug "Starting Ralph in tmux session..."
+    local template_path
+    template_path=$(agent_start_template "$agent_type")
+    if [[ -z "$template_path" || ! -f "$template_path" ]]; then
+        log_error "No start template for agent '$agent_type'"
+        return 1
+    fi
+
+    local binary
+    binary=$(agent_binary "$agent_type")
+
+    local session_name
+    session_name=$(agent_session_name "$agent_type")
+
+    local log_file
+    log_file=$(agent_log_file "$agent_type" "$workspace_path")
+
+    local task_prompt_file
+    task_prompt_file=$(agent_task_prompt_file "$agent_type" "$workspace_path")
+
+    local max_iterations
+    max_iterations=$(agent_max_iterations "$agent_type")
+
+    local timeout_minutes
+    timeout_minutes=$(agent_default_timeout_minutes "$agent_type")
+
+    local ralph_variant="ralph-claude-code"
+    if [[ "$agent_type" == "ralph-orchestrator" ]]; then
+        ralph_variant="ralph-orchestrator"
+    fi
+
+    local start_script="/tmp/start-${agent_type}.sh"
+
+    # Build a header that exports the variables the template references.
+    local header
+    header=$(cat <<EOF
+#!/bin/bash
+# Auto-generated by Agent Foundry for agent: $agent_type
+export AGENT_WORKSPACE="$workspace_path"
+export AGENT_TYPE="$agent_type"
+export AGENT_BINARY="$binary"
+export AGENT_SESSION_NAME="$session_name"
+export AGENT_LOG_FILE="$log_file"
+export AGENT_TASK_PROMPT_FILE="$task_prompt_file"
+export AGENT_MAX_ITERATIONS="$max_iterations"
+export AGENT_TIMEOUT_MINUTES="$timeout_minutes"
+export AGENT_RALPH_VARIANT="$ralph_variant"
+EOF
+)
+
+    # Copy template into place and prepend the variable header.
+    local tmp_template
+    tmp_template=$(mktemp)
+    printf '%s\n' "$header" > "$tmp_template"
+    cat "$template_path" >> "$tmp_template"
+    _scp_to_vm_path "$vm_name" "$tmp_template" "$start_script" || {
+        rm -f "$tmp_template"
+        return 1
+    }
+    rm -f "$tmp_template"
+
+    _ssh_cmd "$vm_name" "chmod +x '$start_script'" || return 1
+    echo "$start_script"
+}
+
+# Start an autonomous agent in a tmux session.
+# Usage: _start_autonomous_agent <vm_name> <workspace_path> <agent_type>
+_start_autonomous_agent() {
+    local vm_name="$1"
+    local workspace_path="$2"
+    local agent_type="$3"
+
+    log_debug "Starting $(agent_display_name "$agent_type") in tmux session..."
+
+    if ! agent_is_autonomous "$agent_type"; then
+        log_error "Agent '$agent_type' is not autonomous"
+        return 1
+    fi
 
     # Test SSH connectivity first
     log_debug "Testing SSH connectivity to VM..."
@@ -516,84 +664,74 @@ _start_ralph() {
     fi
     log_debug "SSH connectivity confirmed: $ssh_test_output"
 
-    # Check if Ralph is installed (checking for binary in PATH)
-    log_debug "Checking for ralph binary in VM..."
-    local ralph_check_output ralph_check_rc
-    ralph_check_output=$(_ssh_cmd "$vm_name" "command -v ralph")
-    ralph_check_rc=$?
-    log_debug "Ralph check output: $ralph_check_output (exit code: $ralph_check_rc)"
+    # Agent-specific preflight checks.
+    case "$agent_type" in
+        ralph|ralph-orchestrator)
+            local installed_variant effective_variant
+            installed_variant=$(_get_installed_ralph_variant "$vm_name")
+            _validate_requested_ralph_variant "$agent_type" "$installed_variant" || return 1
 
-    if [[ $ralph_check_rc -ne 0 ]]; then
-        log_error "Ralph binary not found in VM PATH"
-        log_error "Command output: $ralph_check_output"
-        log_info "Ensure Ralph is installed in the VM image"
-        return 1
-    fi
-    log_debug "Ralph found at: $ralph_check_output"
+            effective_variant="$installed_variant"
+            if [[ "$effective_variant" == "unknown" ]]; then
+                if [[ "$agent_type" == "ralph-orchestrator" ]]; then
+                    effective_variant="$RALPH_VARIANT_ORCHESTRATOR"
+                else
+                    effective_variant="$RALPH_VARIANT_CLAUDE_CODE"
+                fi
+                log_warn "Unable to detect Ralph variant from VM metadata; assuming '$effective_variant'"
+            fi
+            log_info "Using Ralph variant: $effective_variant"
 
-    local installed_variant effective_variant
-    installed_variant=$(_get_installed_ralph_variant "$vm_name")
-    _validate_requested_ralph_variant "$agent_type" "$installed_variant" || return 1
-
-    effective_variant="$installed_variant"
-    if [[ "$effective_variant" == "unknown" ]]; then
-        # Fallback for older templates that predate variant markers.
-        if [[ "$agent_type" == "ralph-orchestrator" ]]; then
-            effective_variant="$RALPH_VARIANT_ORCHESTRATOR"
-        else
-            effective_variant="$RALPH_VARIANT_CLAUDE_CODE"
-        fi
-        log_warn "Unable to detect Ralph variant from VM metadata; assuming '$effective_variant'"
-    fi
-    log_info "Using Ralph variant: $effective_variant"
-
-    # Kill existing session if any
-    _ssh_cmd_tty "$vm_name" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
-
-    # Create logs directory if it doesn't exist
-    _ssh_cmd "$vm_name" "mkdir -p $workspace_path/logs"
-
-    # Create a start script to avoid complex quoting issues with multi-layer shell escaping.
-    _ssh_cmd "$vm_name" "echo '#!/bin/bash' > /tmp/start-ralph.sh"
-    _ssh_cmd "$vm_name" "echo 'cd $workspace_path' >> /tmp/start-ralph.sh"
-
-    case "$effective_variant" in
-        "$RALPH_VARIANT_CLAUDE_CODE")
-            # Check if Ralph workspace is initialized (checking for .ralph directory)
-            log_debug "Checking for .ralph directory at: $workspace_path/.ralph"
-            if ! _ssh_cmd "$vm_name" "test -d '$workspace_path/.ralph'"; then
-                log_error "Ralph configuration directory not found: $workspace_path/.ralph"
-                log_info "Initialize workspace first with: foundry workspace init $vm_name"
+            if [[ "$effective_variant" == "$RALPH_VARIANT_ORCHESTRATOR" ]]; then
+                if ! _ssh_cmd "$vm_name" "test -f '$workspace_path/ralph.yml'"; then
+                    log_error "Ralph Orchestrator config not found: $workspace_path/ralph.yml"
+                    log_info "Add ralph.yml to your project and run: foundry workspace sync $vm_name"
+                    return 1
+                fi
+            else
+                if ! _ssh_cmd "$vm_name" "test -d '$workspace_path/.ralph'"; then
+                    log_error "Ralph configuration directory not found: $workspace_path/.ralph"
+                    log_info "Initialize workspace first with: foundry workspace init $vm_name"
+                    return 1
+                fi
+            fi
+            ;;
+        kimi-ralph)
+            if ! _ssh_cmd "$vm_name" "command -v kimi >/dev/null 2>&1"; then
+                log_error "kimi binary not found in VM PATH"
+                log_info "Ensure kimi is installed (run workspace init/sync)"
                 return 1
             fi
-            log_debug "Ralph workspace directory found"
-
-            _ssh_cmd "$vm_name" "echo '# Reset circuit breaker if it exists (from previous runs)' >> /tmp/start-ralph.sh"
-            _ssh_cmd "$vm_name" "echo 'if [[ -f .ralph/.circuit_breaker_state ]]; then' >> /tmp/start-ralph.sh"
-            _ssh_cmd "$vm_name" "echo '    ralph --reset-circuit >/dev/null 2>&1 || true' >> /tmp/start-ralph.sh"
-            _ssh_cmd "$vm_name" "echo 'fi' >> /tmp/start-ralph.sh"
-            _ssh_cmd "$vm_name" "echo 'exec ralph 2>&1 | tee -a logs/ralph.log' >> /tmp/start-ralph.sh"
-            ;;
-        "$RALPH_VARIANT_ORCHESTRATOR")
-            # Ralph Orchestrator expects project-level config.
-            if ! _ssh_cmd "$vm_name" "test -f '$workspace_path/ralph.yml'"; then
-                log_error "Ralph Orchestrator config not found: $workspace_path/ralph.yml"
-                log_info "Add ralph.yml to your project and run: foundry workspace sync $vm_name"
-                return 1
-            fi
-            _ssh_cmd "$vm_name" "echo 'exec ralph run -c ralph.yml --autonomous 2>&1 | tee -a logs/ralph.log' >> /tmp/start-ralph.sh"
-            ;;
-        *)
-            log_error "Unsupported Ralph variant: $effective_variant"
-            return 1
             ;;
     esac
 
-    _ssh_cmd "$vm_name" "chmod +x /tmp/start-ralph.sh"
+    local binary session_name start_script
+    binary=$(agent_binary "$agent_type")
+    session_name=$(agent_session_name "$agent_type")
+
+    # Verify binary is present.
+    if ! _ssh_cmd "$vm_name" "command -v '$binary' >/dev/null 2>&1"; then
+        log_error "'$binary' binary not found in VM PATH"
+        log_info "Ensure $(agent_display_name "$agent_type") is installed"
+        return 1
+    fi
+
+    # Kill existing session if any
+    _ssh_cmd_tty "$vm_name" "tmux kill-session -t '$session_name' 2>/dev/null || true"
+
+    # Create logs directory if it doesn't exist
+    _ssh_cmd "$vm_name" "mkdir -p '$workspace_path/logs'"
+
+    # Render start script from template.
+    start_script=$(_render_autonomous_start_script "$vm_name" "$workspace_path" "$agent_type")
+    if [[ -z "$start_script" ]]; then
+        log_error "Failed to render start script for '$agent_type'"
+        return 1
+    fi
 
     # Try to start tmux session (use _ssh_cmd_tty for PTY allocation)
     local tmux_output tmux_rc
-    tmux_output=$(_ssh_cmd_tty "$vm_name" "tmux new-session -d -s $AGENT_TMUX_SESSION /tmp/start-ralph.sh 2>&1")
+    tmux_output=$(_ssh_cmd_tty "$vm_name" "tmux new-session -d -s '$session_name' '$start_script' 2>&1")
     tmux_rc=$?
     if [[ $tmux_rc -ne 0 ]]; then
         log_error "Tmux command failed (exit code: $tmux_rc)"
@@ -602,16 +740,15 @@ _start_ralph() {
 
     # Verify session started
     sleep 1
-    if _ssh_cmd_tty "$vm_name" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
-        log_debug "Ralph tmux session started"
+    if _ssh_cmd_tty "$vm_name" "tmux has-session -t '$session_name' 2>/dev/null"; then
+        log_debug "$(agent_display_name "$agent_type") tmux session started"
         return 0
     else
-        log_error "Failed to start Ralph tmux session"
-        # Try to get error details
+        log_error "Failed to start $(agent_display_name "$agent_type") tmux session"
         log_debug "Checking for tmux server..."
         _ssh_cmd_tty "$vm_name" "tmux list-sessions 2>&1" || log_debug "No tmux sessions found"
-        log_debug "Checking Ralph process..."
-        _ssh_cmd "$vm_name" "pgrep -a ralph" || log_debug "No ralph process found"
+        log_debug "Checking $binary process..."
+        _ssh_cmd "$vm_name" "pgrep -a '$binary'" || log_debug "No $binary process found"
         return 1
     fi
 }
@@ -620,7 +757,10 @@ _start_ralph() {
 _start_interactive() {
     local vm_name="$1"
     local workspace_path="$2"
-    local cli_name="$3"
+    local agent_type="$3"
+    local cli_name session_name
+    cli_name=$(agent_binary "$agent_type")
+    session_name=$(agent_session_name "$agent_type")
 
     log_debug "Starting $cli_name in screen session..."
 
@@ -631,14 +771,14 @@ _start_interactive() {
     fi
 
     # Kill existing session if any
-    _ssh_cmd_tty "$vm_name" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
+    _ssh_cmd_tty "$vm_name" "screen -S '$session_name' -X quit 2>/dev/null || true"
 
     # Start CLI in screen session
-    _ssh_cmd_tty "$vm_name" "cd '$workspace_path' && screen -dmS $AGENT_SCREEN_SESSION $cli_name"
+    _ssh_cmd_tty "$vm_name" "cd '$workspace_path' && screen -dmS '$session_name' '$cli_name'"
 
     # Verify session started
     sleep 1
-    if _ssh_cmd_tty "$vm_name" "screen -list | grep -q $AGENT_SCREEN_SESSION"; then
+    if _ssh_cmd_tty "$vm_name" "screen -list | grep -q '$session_name'"; then
         log_debug "$cli_name screen session started"
         return 0
     else
@@ -672,13 +812,16 @@ agent_stop() {
         return 0
     fi
 
-    log_info "Stopping $agent_type agent in VM '$vm_name'..."
+    log_info "Stopping $(agent_display_name "$agent_type") in VM '$vm_name'..."
 
-    # Kill tmux session (for Ralph)
-    _ssh_cmd_tty "$vm_name" "tmux kill-session -t $AGENT_TMUX_SESSION 2>/dev/null || true"
+    local session_name
+    session_name=$(agent_session_name "$agent_type")
+
+    # Kill tmux session (for autonomous agents)
+    _ssh_cmd_tty "$vm_name" "tmux kill-session -t '$session_name' 2>/dev/null || true"
 
     # Kill screen session (for interactive agents)
-    _ssh_cmd_tty "$vm_name" "screen -S $AGENT_SCREEN_SESSION -X quit 2>/dev/null || true"
+    _ssh_cmd_tty "$vm_name" "screen -S '$session_name' -X quit 2>/dev/null || true"
 
     # Update registry
     registry_update "$vm_name" ".agent.status" "\"stopped\""
@@ -755,19 +898,20 @@ agent_attach() {
     log_info "Attaching to $agent_type session in VM '$vm_name'..."
     log_info "Detach with: Ctrl+b d (tmux) or Ctrl+a d (screen)"
 
-    case "$agent_type" in
-        ralph|ralph-orchestrator)
-            # Attach to tmux
+    local session_name
+    session_name=$(agent_session_name "$agent_type")
+
+    case "$(agent_session_backend "$agent_type")" in
+        tmux)
             exec ssh -t $ssh_key_opt $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" \
-                "tmux attach-session -t $AGENT_TMUX_SESSION"
+                "tmux attach-session -t '$session_name'"
             ;;
-        claude|gemini|codex)
-            # Attach to screen
+        screen)
             exec ssh -t $ssh_key_opt $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" \
-                "screen -r $AGENT_SCREEN_SESSION"
+                "screen -r '$session_name'"
             ;;
         *)
-            log_error "Unknown agent type: $agent_type"
+            log_error "Unknown session backend for agent type: $agent_type"
             return 1
             ;;
     esac
@@ -808,21 +952,27 @@ agent_status() {
         echo ""
         echo "Session Status (live check):"
 
-        # Check tmux
-        if _ssh_cmd_tty "$vm_name" "tmux has-session -t $AGENT_TMUX_SESSION 2>/dev/null"; then
-            echo "  tmux ($AGENT_TMUX_SESSION): running"
-            _ssh_cmd_tty "$vm_name" "tmux list-windows -t $AGENT_TMUX_SESSION 2>/dev/null" | \
-                sed 's/^/    /'
-        else
-            echo "  tmux ($AGENT_TMUX_SESSION): not running"
-        fi
+        local session_name
+        session_name=$(agent_session_name "$agent_type")
 
-        # Check screen
-        if _ssh_cmd_tty "$vm_name" "screen -list | grep -q $AGENT_SCREEN_SESSION 2>/dev/null"; then
-            echo "  screen ($AGENT_SCREEN_SESSION): running"
-        else
-            echo "  screen ($AGENT_SCREEN_SESSION): not running"
-        fi
+        case "$(agent_session_backend "$agent_type")" in
+            tmux)
+                if _ssh_cmd_tty "$vm_name" "tmux has-session -t '$session_name' 2>/dev/null"; then
+                    echo "  tmux ($session_name): running"
+                    _ssh_cmd_tty "$vm_name" "tmux list-windows -t '$session_name' 2>/dev/null" | \
+                        sed 's/^/    /'
+                else
+                    echo "  tmux ($session_name): not running"
+                fi
+                ;;
+            screen)
+                if _ssh_cmd_tty "$vm_name" "screen -list | grep -q '$session_name' 2>/dev/null"; then
+                    echo "  screen ($session_name): running"
+                else
+                    echo "  screen ($session_name): not running"
+                fi
+                ;;
+        esac
     fi
 
     return 0
@@ -834,9 +984,33 @@ agent_status() {
 
 _resolve_agent_log_path() {
     local vm_name="$1"
-    local primary_log="${WORKSPACE_BASE}/logs/ralph.log"
+    local agent_type="${2:-}"
+
+    if [[ -z "$agent_type" || "$agent_type" == "null" ]]; then
+        agent_type=$(registry_get "$vm_name" ".agent.type" 2>/dev/null || true)
+    fi
+
+    local primary_log
+    if agent_is_valid "$agent_type" 2>/dev/null; then
+        primary_log=$(agent_log_file "$agent_type" "$WORKSPACE_BASE")
+    else
+        primary_log="${WORKSPACE_BASE}/logs/ralph.log"
+    fi
+
+    # Watcher-driven autonomous runs log to a separate file.
     local watcher_log="${WORKSPACE_BASE}/logs/ralph-watcher.log"
 
+    # Prefer the log that matches the currently active agent session.
+    if _ssh_cmd "$vm_name" "tmux has-session -t ralph-loop 2>/dev/null"; then
+        echo "$watcher_log"
+        return 0
+    fi
+    if _ssh_cmd "$vm_name" "tmux has-session -t foundry-agent 2>/dev/null"; then
+        echo "$primary_log"
+        return 0
+    fi
+
+    # No active session: return whichever log file exists, defaulting to primary.
     if _ssh_cmd "$vm_name" "test -f '$primary_log'"; then
         echo "$primary_log"
         return 0
@@ -940,23 +1114,41 @@ agent_enable_autostart() {
         return 1
     fi
 
-    log_info "Enabling autostart for $agent_type in VM '$vm_name'..."
+    if ! agent_is_autonomous "$agent_type"; then
+        log_error "Autostart is only supported for autonomous agents (got: $agent_type)"
+        return 1
+    fi
+
+    log_info "Enabling autostart for $(agent_display_name "$agent_type") in VM '$vm_name'..."
 
     local workspace_path="${WORKSPACE_BASE}"
+    local session_name start_script
+    session_name=$(agent_session_name "$agent_type")
+    start_script="/tmp/start-${agent_type}.sh"
+
+    # The start script must already exist from a previous agent_start, or we
+    # render it now so the service has something stable to run.
+    if ! _ssh_cmd "$vm_name" "test -x '$start_script'"; then
+        start_script=$(_render_autonomous_start_script "$vm_name" "$workspace_path" "$agent_type")
+        if [[ -z "$start_script" ]]; then
+            log_error "Failed to render start script for autostart"
+            return 1
+        fi
+    fi
 
     # Create systemd service
     local service_content
     service_content=$(cat <<EOF
 [Unit]
-Description=Agent Foundry - $agent_type Agent
+Description=Agent Foundry - $(agent_display_name "$agent_type")
 After=network.target
 
 [Service]
 Type=forking
 User=root
 WorkingDirectory=$workspace_path
-ExecStart=/usr/bin/tmux new-session -d -s $AGENT_TMUX_SESSION /tmp/start-ralph.sh
-ExecStop=/usr/bin/tmux kill-session -t $AGENT_TMUX_SESSION
+ExecStart=/usr/bin/tmux new-session -d -s $session_name $start_script
+ExecStop=/usr/bin/tmux kill-session -t $session_name
 RemainAfterExit=yes
 
 [Install]
@@ -1022,7 +1214,7 @@ agent_gh_watcher_init() {
     fi
 
     _check_vm_running "$vm_name" || return 1
-    _require_gh_watcher_supported_variant "$vm_name" || return 1
+    _require_gh_watcher_supported_agent "$vm_name" || return 1
 
     log_info "Initializing GitHub watcher for VM '$vm_name'..."
     project_config=$(_resolve_gh_watcher_project_config_path "$vm_name" || true)
@@ -1071,6 +1263,13 @@ agent_gh_watcher_init() {
         fi
     fi
 
+    local watcher_agent_type watcher_display_name project_dir
+    if [[ -n "$project_config" ]]; then
+        project_dir=$(dirname "$project_config")
+    fi
+    watcher_agent_type=$(_get_watcher_agent_type "$vm_name" "$project_dir")
+    watcher_display_name=$(agent_display_name "$watcher_agent_type")
+
     # Create config file
     local config_content
     config_content=$(cat <<EOF
@@ -1088,7 +1287,14 @@ WATCHED_REPOS="$watched_repos"
 # GitHub token location
 GITHUB_TOKEN_FILE="/root/.config/gh/token"
 
-# Ralph execution timeout in minutes (max 120 per Ralph's limit)
+# Agent execution timeout in minutes
+AGENT_TIMEOUT=$ralph_timeout
+
+# Autonomous agent type that will handle triggered tasks
+AGENT_TYPE="$watcher_agent_type"
+AGENT_DISPLAY_NAME="$watcher_display_name"
+
+# Legacy Ralph timeout (kept for backward compatibility)
 RALPH_TIMEOUT=$ralph_timeout
 
 # Post error comments on failure
@@ -1098,9 +1304,14 @@ EOF
 
     _write_gh_watcher_vm_files "$vm_name" "$config_content" "$github_token"
 
+    # Mark all existing trigger mentions as processed so the first start does
+    # not immediately begin working through historical issues/PRs.
+    agent_gh_watcher_mark_all "$vm_name" || return 1
+
     log_info "GitHub watcher initialized successfully"
     log_info "  Watching: $watched_repos"
-    log_info "  Ralph workspace: /root"
+    log_info "  Agent type: $watcher_agent_type"
+    log_info "  Agent workspace: /root"
     if [[ -n "$project_config" ]]; then
         log_info "  Config source: $project_config"
     fi
@@ -1123,7 +1334,7 @@ agent_gh_watcher_start() {
     fi
 
     _check_vm_running "$vm_name" || return 1
-    _require_gh_watcher_supported_variant "$vm_name" || return 1
+    _require_gh_watcher_supported_agent "$vm_name" || return 1
 
     # Check if config exists
     if ! _ssh_cmd "$vm_name" "test -f /root/.config/gh-watcher/config.conf"; then
@@ -1140,8 +1351,11 @@ agent_gh_watcher_start() {
 
     log_info "Starting GitHub watcher in VM '$vm_name'..."
 
+    # Sync latest watcher scripts before starting
+    _sync_gh_watcher_scripts "$vm_name" || return 1
+
     # Start watcher in tmux session
-    _ssh_cmd_tty "$vm_name" "tmux new-session -d -s ralph-gh-watcher '/opt/foundry/ralph_gh_watcher.sh start $flags'"
+    _ssh_cmd_tty "$vm_name" "tmux new-session -d -s ralph-gh-watcher '/opt/foundry/gh-watcher/gh_watcher.sh start $flags'"
 
     # Verify session started
     sleep 1
@@ -1168,7 +1382,7 @@ agent_gh_watcher_mark_all() {
     fi
 
     _check_vm_running "$vm_name" || return 1
-    _require_gh_watcher_supported_variant "$vm_name" || return 1
+    _require_gh_watcher_supported_agent "$vm_name" || return 1
 
     if _ssh_cmd "$vm_name" "tmux has-session -t ralph-gh-watcher" >/dev/null 2>&1; then
         watcher_was_running=true
@@ -1179,8 +1393,8 @@ agent_gh_watcher_mark_all() {
     log_info "Syncing local GitHub watcher scripts into VM '$vm_name'..."
     _sync_gh_watcher_scripts "$vm_name" || return 1
 
-    log_info "Marking all existing !ralph mentions as processed in VM '$vm_name'..."
-    if ! _ssh_cmd "$vm_name" "/opt/foundry/ralph_gh_watcher.sh mark-all"; then
+    log_info "Marking all existing trigger mentions as processed in VM '$vm_name'..."
+    if ! _ssh_cmd "$vm_name" "/opt/foundry/gh-watcher/gh_watcher.sh mark-all"; then
         log_error "GitHub watcher mark-all failed"
         return 1
     fi
@@ -1244,8 +1458,9 @@ agent_gh_watcher_status() {
         echo "Configuration: Not found"
     fi
 
-    variant=$(_get_installed_ralph_variant "$vm_name")
-    echo "  Ralph agent variant: $variant"
+    local watcher_agent_type
+    watcher_agent_type=$(_get_watcher_agent_type "$vm_name")
+    echo "  Agent type: $watcher_agent_type"
     echo ""
 
     if _ssh_cmd "$vm_name" "tmux has-session -t ralph-gh-watcher 2>/dev/null"; then

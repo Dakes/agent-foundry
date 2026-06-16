@@ -159,7 +159,7 @@ ACTIONS:
     copy <source> <dest>       Copy a VM
     rename <old> <new>         Rename a VM
     snapshot <name> <snap>     Create snapshot as template
-    update <name>              Update AI dependencies (claude, gemini, codex, ralph)
+    update <name>              Update AI dependencies (claude, gemini, codex, ralph, kimi)
 
 EXAMPLES:
     foundry vm create my-project
@@ -182,7 +182,7 @@ USAGE:
     foundry agent <action> [args...]
 
 ACTIONS:
-    start <vm> [type]          Start agent (type: ralph, ralph-orchestrator, claude, gemini, codex)
+    start <vm> [type]          Start agent (type: ralph, ralph-orchestrator, kimi-ralph, claude, gemini, codex)
     stop <vm>                  Stop agent
     restart <vm>               Restart agent
     attach <vm>                Attach to agent session
@@ -195,6 +195,7 @@ ACTIONS:
 AGENT TYPES:
     ralph   - ralph-claude-code autonomous agent (default, runs in tmux)
     ralph-orchestrator - ralph-orchestrator autonomous agent (runs in tmux)
+    kimi-ralph - Kimi Code CLI autonomous agent in Ralph mode (runs in tmux)
     claude  - Claude Code CLI interactive session (runs in screen)
     gemini  - Gemini CLI interactive session (runs in screen)
     codex   - OpenAI Codex CLI interactive session (runs in screen)
@@ -219,9 +220,9 @@ USAGE:
 
 DESCRIPTION:
     The GitHub watcher monitors repositories for !ralph mentions in issues
-    and pull requests, automatically triggers Ralph to work on tasks, and
-    creates pull requests when complete.
-    It supports both Ralph variants and generates agent-specific task files.
+    and pull requests, automatically triggers the configured autonomous agent
+    (Ralph or kimi-ralph) to work on tasks, and creates pull requests when
+    complete. It supports multiple autonomous agent backends via adapter files.
 
 ACTIONS:
     init <vm>              Initialize GitHub watcher (uses project gh-watcher.json if present, otherwise prompts)
@@ -290,7 +291,7 @@ USAGE:
 
 ACTIONS:
     init <vm> <config.json>    Initialize workspace from config file
-    sync <vm> [project]        Sync latest project files (.ralph/.claude/.codex/.gemini, .ralphrc, ralph*.yml, *.md) into VM
+    sync <vm> [project]        Sync latest project files (.ralph/.kimi/.claude/.codex/.gemini, .ralphrc, ralph*.yml, *.md) into VM
     init-ralph <vm>            Initialize Ralph structure (PROMPT.md, fix_plan.md, AGENT.md)
     edit <vm> <file>           Edit workspace file in $EDITOR
     info <vm>                  Show workspace information

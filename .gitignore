@@ -9,6 +9,7 @@ firecracker-getting-started.md
 skills/claude/*
 skills/codex/*
 skills/gemini/*
+skills/kimi/*
 !skills/*/.gitkeep
 
 # VM images and runtime data
@@ -74,3 +75,5 @@ bin/*-release
 projects/*
 !projects/example-project/
 !projects/example-project-orchestrator/
+
+repomix-output*
