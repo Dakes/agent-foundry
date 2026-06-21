@@ -1,4 +1,4 @@
-Never spawn Agents using your native "Task" feature. always spawn agents using the gemini and codex skills. This is to conserve tokens used.
+Never spawn Agents using your native "Task" feature. always spawn agents using the gemini skill. This is to conserve tokens used.
 
 read AGENTS.md
 

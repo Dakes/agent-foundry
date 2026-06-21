@@ -1908,7 +1908,14 @@ agent_forgejo_watcher_init() {
     fi
 
     if [[ -z "$webhook_url" ]]; then
-        read -r -p "Webhook URL where Forgejo can reach this VM (e.g., https://foundry-vm.example.com:8080/webhook): " webhook_url
+        local vm_ip
+        vm_ip=$(_get_vm_ip "$vm_name" 2>/dev/null || true)
+        if [[ -n "$vm_ip" ]]; then
+            webhook_url="http://${vm_ip}:${listen_port}/webhook"
+            log_info "Auto-derived webhook URL: $webhook_url"
+        else
+            read -r -p "Webhook URL where Forgejo can reach this VM (e.g., https://foundry-vm.example.com:8080/webhook): " webhook_url
+        fi
     fi
 
     if [[ -z "$webhook_secret" ]]; then

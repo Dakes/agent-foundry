@@ -43,7 +43,6 @@ Minimal example:
   "watched_repos": ["myorg/backend", "myorg/frontend"],
   "token_file": "./secrets/forgejo-token.txt",
   "webhook_secret_file": "./secrets/forgejo-webhook-secret.txt",
-  "webhook_url": "https://foundry-vm.example.com:8080/webhook",
   "listen_port": 8080,
   "agent_type": "ralph",
   "default_branch": "main",
@@ -52,6 +51,8 @@ Minimal example:
   "enabled": true
 }
 ```
+
+The `webhook_url` field is optional. If omitted, `init` automatically derives it from the VM's IP and `listen_port` (`http://<vm-ip>:<listen_port>/webhook`). Set it explicitly only if you use a reverse proxy, HTTPS, or a different path.
 
 Supported token sources in `forgejo-watcher.json`:
 - `token_file`
@@ -150,6 +151,8 @@ WATCHED_REPOS="owner/repo1,owner/repo2"
 FORGEJO_TOKEN_FILE="/root/.config/forgejo-watcher/token"
 
 # Webhook URL where Forgejo delivers events
+# Optional: if omitted, init auto-derives it from the VM IP and RECEIVER_PORT.
+# Set explicitly for HTTPS, reverse proxies, or a custom path.
 WEBHOOK_URL="https://foundry-vm.example.com:8080/webhook"
 
 # Webhook secret for HMAC-SHA256 verification
