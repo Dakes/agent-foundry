@@ -1801,11 +1801,12 @@ _write_forgejo_watcher_vm_files() {
     tmp_admin_token=""
 
     cleanup_vm_files() {
-        [[ -n "$tmp_config" ]] && rm -f "$tmp_config"
-        [[ -n "$tmp_processed" ]] && rm -f "$tmp_processed"
-        [[ -n "$tmp_token" ]] && rm -f "$tmp_token"
-        [[ -n "$tmp_secret" ]] && rm -f "$tmp_secret"
-        [[ -n "$tmp_admin_token" ]] && rm -f "$tmp_admin_token"
+        [[ -n "$tmp_config" ]] && rm -f "$tmp_config" || true
+        [[ -n "$tmp_processed" ]] && rm -f "$tmp_processed" || true
+        [[ -n "$tmp_token" ]] && rm -f "$tmp_token" || true
+        [[ -n "$tmp_secret" ]] && rm -f "$tmp_secret" || true
+        [[ -n "$tmp_admin_token" ]] && rm -f "$tmp_admin_token" || true
+        return 0
     }
     trap cleanup_vm_files EXIT
 
@@ -1847,6 +1848,7 @@ EOF
 
     trap - EXIT
     cleanup_vm_files
+    return 0
 }
 
 agent_forgejo_watcher_init() {
