@@ -50,6 +50,18 @@ Examples:
 
 If a user has to run more than one command to make a configured feature work, the design is probably wrong.
 
+# Sanity Checks
+
+Validate inputs and configuration early. A command that will obviously fail should fail immediately with a clear message, not half-run and leave the user with a cryptic downstream error.
+
+Examples:
+
+- If a config file references `token_file` or `admin_token_file`, verify the file exists and is non-empty before doing anything else.
+- If a required external service credential is missing, stop before creating VMs, writing config, or making API calls.
+- If a URL or network setting is malformed, reject it at load time.
+
+Sanity checks prevent silent misconfiguration and save debugging time. When a check fails, tell the user exactly which file, value, or setting is wrong and what to do about it.
+
 # Watcher Lifecycle
 
 When a watcher daemon starts, it should not immediately process a large backlog of old events. Restarts happen for updates, maintenance, and configuration changes, and the backlog may already have been handled.

@@ -1692,6 +1692,7 @@ _load_forgejo_watcher_config() {
     local watcher_enabled_var="${10}"
     local default_branch_var="${11:-}"
     local trigger_keyword_var="${12:-}"
+    local admin_token_var="${13:-}"
 
     if ! jq -e . "$config_path" >/dev/null 2>&1; then
         log_error "Invalid forgejo-watcher config JSON: $config_path"
@@ -1737,8 +1738,16 @@ _load_forgejo_watcher_config() {
             return 1
         fi
         cfg_token="$(<"$token_path")"
+        if [[ -z "$cfg_token" ]]; then
+            log_error "Forgejo token file is empty: $token_path"
+            return 1
+        fi
     elif [[ -n "$cfg_token_env" ]]; then
         cfg_token="${!cfg_token_env:-}"
+        if [[ -z "$cfg_token" ]]; then
+            log_error "Forgejo token environment variable is empty: $cfg_token_env"
+            return 1
+        fi
     fi
 
     if [[ -n "$cfg_admin_token_file" ]]; then
@@ -1748,6 +1757,10 @@ _load_forgejo_watcher_config() {
             return 1
         fi
         cfg_admin_token="$(<"$admin_token_path")"
+        if [[ -z "$cfg_admin_token" ]]; then
+            log_error "Forgejo admin token file is empty: $admin_token_path"
+            return 1
+        fi
     fi
 
     if [[ -n "$cfg_webhook_secret_file" ]]; then
