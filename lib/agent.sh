@@ -1702,7 +1702,7 @@ _load_forgejo_watcher_config() {
     local cfg_webhook_secret cfg_webhook_secret_file cfg_webhook_url
     local cfg_listen_port cfg_agent_type cfg_post_error_comments cfg_watcher_enabled
     local cfg_default_branch cfg_trigger_keyword
-    local token secret
+    local token_path secret_path
 
     cfg_instance_url=$(jq -r '.instance_url // empty' "$config_path")
     cfg_watched_repos=$(jq -r '
@@ -1728,23 +1728,23 @@ _load_forgejo_watcher_config() {
     cfg_trigger_keyword=$(jq -r '.trigger_keyword // "!ralph"' "$config_path")
 
     if [[ -n "$cfg_token_file" ]]; then
-        token=$(_resolve_host_path_from_project_file "$config_path" "$cfg_token_file")
-        if [[ ! -f "$token" ]]; then
-            log_error "Forgejo token file from config not found: $token"
+        token_path=$(_resolve_host_path_from_project_file "$config_path" "$cfg_token_file")
+        if [[ ! -f "$token_path" ]]; then
+            log_error "Forgejo token file from config not found: $token_path"
             return 1
         fi
-        cfg_token="$(<"$token")"
+        cfg_token="$(<"$token_path")"
     elif [[ -n "$cfg_token_env" ]]; then
         cfg_token="${!cfg_token_env:-}"
     fi
 
     if [[ -n "$cfg_webhook_secret_file" ]]; then
-        secret=$(_resolve_host_path_from_project_file "$config_path" "$cfg_webhook_secret_file")
-        if [[ ! -f "$secret" ]]; then
-            log_error "Webhook secret file from config not found: $secret"
+        secret_path=$(_resolve_host_path_from_project_file "$config_path" "$cfg_webhook_secret_file")
+        if [[ ! -f "$secret_path" ]]; then
+            log_error "Webhook secret file from config not found: $secret_path"
             return 1
         fi
-        cfg_webhook_secret="$(<"$secret")"
+        cfg_webhook_secret="$(<"$secret_path")"
     fi
 
     if [[ -z "$cfg_instance_url" ]]; then

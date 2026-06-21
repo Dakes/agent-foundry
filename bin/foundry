@@ -875,8 +875,10 @@ cmd_config() {
         show|list)
             config_load
             echo "=== Configuration ==="
-            if [[ -f "${FOUNDRY_CONFIG_DIR:-$HOME/.config/foundry}/config.conf" ]]; then
-                cat "${FOUNDRY_CONFIG_DIR:-$HOME/.config/foundry}/config.conf"
+            local _config_home
+            _config_home="$(resolve_host_home)"
+            if [[ -f "${FOUNDRY_CONFIG_DIR:-${_config_home}/.config/foundry}/config.conf" ]]; then
+                cat "${FOUNDRY_CONFIG_DIR:-${_config_home}/.config/foundry}/config.conf"
             else
                 echo "No user configuration (using defaults)"
             fi
@@ -899,7 +901,9 @@ cmd_template() {
     case "$action" in
         list|ls)
             echo "=== Available Templates ==="
-            local templates_dir="${FOUNDRY_DATA_DIR:-$HOME/.local/share/foundry}/vms/templates"
+            local _data_home
+            _data_home="$(resolve_host_home)"
+            local templates_dir="${FOUNDRY_DATA_DIR:-${_data_home}/.local/share/foundry}/vms/templates"
             if [[ -d "$templates_dir" ]]; then
                 ls -lh "$templates_dir"/*.ext4 2>/dev/null || echo "No templates found"
             else
