@@ -1699,10 +1699,11 @@ _load_forgejo_watcher_config() {
     fi
 
     local cfg_instance_url cfg_watched_repos cfg_token cfg_token_file cfg_token_env
+    local cfg_admin_token cfg_admin_token_file
     local cfg_webhook_secret cfg_webhook_secret_file cfg_webhook_url
     local cfg_listen_port cfg_agent_type cfg_post_error_comments cfg_watcher_enabled
     local cfg_default_branch cfg_trigger_keyword
-    local token_path secret_path
+    local token_path secret_path admin_token_path
 
     cfg_instance_url=$(jq -r '.instance_url // empty' "$config_path")
     cfg_watched_repos=$(jq -r '
@@ -1717,6 +1718,8 @@ _load_forgejo_watcher_config() {
     cfg_token=$(jq -r '.token // empty' "$config_path")
     cfg_token_file=$(jq -r '.token_file // empty' "$config_path")
     cfg_token_env=$(jq -r '.token_env // empty' "$config_path")
+    cfg_admin_token=$(jq -r '.admin_token // empty' "$config_path")
+    cfg_admin_token_file=$(jq -r '.admin_token_file // empty' "$config_path")
     cfg_webhook_secret=$(jq -r '.webhook_secret // empty' "$config_path")
     cfg_webhook_secret_file=$(jq -r '.webhook_secret_file // empty' "$config_path")
     cfg_webhook_url=$(jq -r '.webhook_url // empty' "$config_path")
@@ -1736,6 +1739,15 @@ _load_forgejo_watcher_config() {
         cfg_token="$(<"$token_path")"
     elif [[ -n "$cfg_token_env" ]]; then
         cfg_token="${!cfg_token_env:-}"
+    fi
+
+    if [[ -n "$cfg_admin_token_file" ]]; then
+        admin_token_path=$(_resolve_host_path_from_project_file "$config_path" "$cfg_admin_token_file")
+        if [[ ! -f "$admin_token_path" ]]; then
+            log_error "Forgejo admin token file from config not found: $admin_token_path"
+            return 1
+        fi
+        cfg_admin_token="$(<"$admin_token_path")"
     fi
 
     if [[ -n "$cfg_webhook_secret_file" ]]; then
@@ -1779,18 +1791,21 @@ _write_forgejo_watcher_vm_files() {
     local config_content="$2"
     local forgejo_token="$3"
     local webhook_secret="${4:-}"
-    local tmp_config tmp_processed tmp_token tmp_secret vm_ip ssh_key
+    local admin_token="${5:-}"
+    local tmp_config tmp_processed tmp_token tmp_secret tmp_admin_token vm_ip ssh_key
 
     tmp_config=""
     tmp_processed=""
     tmp_token=""
     tmp_secret=""
+    tmp_admin_token=""
 
     cleanup_vm_files() {
         [[ -n "$tmp_config" ]] && rm -f "$tmp_config"
         [[ -n "$tmp_processed" ]] && rm -f "$tmp_processed"
         [[ -n "$tmp_token" ]] && rm -f "$tmp_token"
         [[ -n "$tmp_secret" ]] && rm -f "$tmp_secret"
+        [[ -n "$tmp_admin_token" ]] && rm -f "$tmp_admin_token"
     }
     trap cleanup_vm_files EXIT
 
@@ -1822,7 +1837,13 @@ EOF
         _scp_to_vm "$vm_ip" "$ssh_key" "$tmp_secret" "/root/.config/forgejo-watcher/webhook-secret"
     fi
 
-    _ssh_cmd "$vm_name" "chmod 600 /root/.config/forgejo-watcher/token /root/.config/forgejo-watcher/webhook-secret 2>/dev/null; touch /root/.config/forgejo-watcher/watcher.log"
+    if [[ -n "$admin_token" ]]; then
+        tmp_admin_token=$(mktemp)
+        printf '%s\n' "$admin_token" > "$tmp_admin_token"
+        _scp_to_vm "$vm_ip" "$ssh_key" "$tmp_admin_token" "/root/.config/forgejo-watcher/admin-token"
+    fi
+
+    _ssh_cmd "$vm_name" "chmod 600 /root/.config/forgejo-watcher/token /root/.config/forgejo-watcher/webhook-secret /root/.config/forgejo-watcher/admin-token 2>/dev/null; touch /root/.config/forgejo-watcher/watcher.log"
 
     trap - EXIT
     cleanup_vm_files
@@ -1841,6 +1862,7 @@ agent_forgejo_watcher_init() {
     local watcher_enabled="true"
     local default_branch="main"
     local trigger_keyword="!ralph"
+    local admin_token=""
     local project_config=""
 
     if [[ -z "$vm_name" ]]; then
@@ -1866,7 +1888,8 @@ agent_forgejo_watcher_init() {
             post_error_comments \
             watcher_enabled \
             default_branch \
-            trigger_keyword || return 1
+            trigger_keyword \
+            admin_token || return 1
     fi
 
     if [[ -z "$instance_url" ]]; then
@@ -1956,10 +1979,11 @@ AGENT_DISPLAY_NAME="$watcher_display_name"
 POST_ERROR_COMMENTS=$post_error_comments
 TRIGGER_KEYWORD="$trigger_keyword"
 DEFAULT_BRANCH="$default_branch"
+FORGEJO_ADMIN_TOKEN_FILE="/root/.config/forgejo-watcher/admin-token"
 EOF
 )
 
-    _write_forgejo_watcher_vm_files "$vm_name" "$config_content" "$token" "$webhook_secret"
+    _write_forgejo_watcher_vm_files "$vm_name" "$config_content" "$token" "$webhook_secret" "$admin_token"
 
     log_info "Forgejo watcher initialized successfully"
     log_info "  Instance: $instance_url"

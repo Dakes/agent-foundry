@@ -112,10 +112,26 @@ The watcher will detect these events and start the configured autonomous agent a
 3. Click `Generate New Token`
 4. Name it (e.g., "Agent Foundry - VM Name")
 5. Select scopes:
-   - **repository**: write (to manage webhooks)
+   - **repository**: write
    - **issue**: write
    - **pull_request**: write
 6. Generate and copy the token
+
+### Two-token setup (recommended for bot accounts)
+
+If the watcher runs under a dedicated bot account, that account may not have repo admin rights required for webhook management. In that case, use two tokens:
+
+- **Regular token** (`token_file`): belongs to the bot account. Used for normal watcher operations.
+  - Scopes: **repository**: read, **issue**: write, **pull_request**: write
+- **Admin token** (`admin_token_file`): belongs to a repo admin. Used only for `register-hooks` / `unregister-hooks`.
+  - Scope: **repository**: write (this is the minimum required for webhook management)
+
+```json
+{
+  "token_file": "./secrets/forgejo-token.txt",
+  "admin_token_file": "./secrets/forgejo-admin-token.txt"
+}
+```
 
 ### Security Best Practices
 
@@ -131,9 +147,62 @@ The Forgejo instance must be able to reach the VM on the configured receiver por
 
 Common setups:
 
-- **Forgejo and VM on the same network**: direct access to VM IP:port
+- **Forgejo and VM on the same host (bare metal / VM host)**: direct access to VM IP:port
+- **Forgejo running in Docker on the same host**: see [Docker networking](#docker-networking) below
 - **Forgejo on the public internet, VM behind NAT**: configure port forwarding on the host
 - **TLS termination**: configure a reverse proxy in front of the receiver; the `webhook_url` should use HTTPS
+
+### Docker Networking
+
+If Forgejo runs in a container and the watcher VM runs on the same host, the container is probably isolated from the host's Firecracker TAP network (`172.16.0.0/24`). Symptoms:
+
+- Forgejo webhooks show delivery failures/timeouts.
+- `foundry agent forgejo-watcher logs <vm>` shows no incoming events.
+
+Choose one fix:
+
+#### Option A: Use the host network (simplest)
+
+Run the Forgejo container with `--network host` so it can reach `172.16.0.x` directly:
+
+```bash
+docker run --network host ... codeberg/forgejo
+```
+
+Then `register-hooks` can use the auto-derived VM IP (`http://172.16.0.x:8080/webhook`).
+
+#### Option B: Use the Docker bridge gateway
+
+From inside a Docker container, the host is reachable at the docker bridge gateway (usually `172.17.0.1`). Set the webhook URL manually to:
+
+```json
+"webhook_url": "http://172.17.0.1:8080/webhook"
+```
+
+Then forward host port `8080` to the VM:
+
+```bash
+# Get the VM IP
+foundry vm ip <vm-name>
+
+# Forward host 8080 to VM 8080
+doas iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to-destination <vm-ip>:8080
+doas iptables -t nat -A POSTROUTING -p tcp -d <vm-ip> --dport 8080 -j MASQUERADE
+```
+
+#### Option C: Add the container to the foundry bridge
+
+Create a macvlan/bridge network that includes the host's `foundry-br0` interface, or attach the Forgejo container to a network that can route to `172.16.0.0/24`. This is more complex; Option A is recommended for single-host setups.
+
+### Verifying connectivity
+
+From the Forgejo host/container:
+
+```bash
+curl -X POST http://<vm-ip-or-host-ip>:8080/webhook -d '{}'
+```
+
+The receiver should respond with `200 OK`. If it times out or returns "No route to host", the network path is wrong.
 
 ## Configuration
 

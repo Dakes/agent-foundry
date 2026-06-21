@@ -15,6 +15,7 @@ HOOKS_FILE="${HOOKS_FILE:-$CONFIG_DIR/hooks.json}"
 FORGEJO_INSTANCE_URL="${FORGEJO_INSTANCE_URL:-}"
 FORGEJO_TOKEN_FILE="${FORGEJO_TOKEN_FILE:-$CONFIG_DIR/token}"
 FORGEJO_TOKEN="${FORGEJO_TOKEN:-}"
+FORGEJO_ADMIN_TOKEN_FILE="${FORGEJO_ADMIN_TOKEN_FILE:-$CONFIG_DIR/admin-token}"
 WATCHED_REPOS="${WATCHED_REPOS:-}"
 WEBHOOK_URL="${WEBHOOK_URL:-}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-}"
@@ -49,6 +50,13 @@ load_config() {
 
     if [[ -z "${FORGEJO_TOKEN:-}" && -f "$FORGEJO_TOKEN_FILE" ]]; then
         FORGEJO_TOKEN=$(cat "$FORGEJO_TOKEN_FILE")
+    fi
+
+    # Webhook management (register/unregister/list) requires repo admin.
+    # Use a dedicated admin token if provided, otherwise fall back to the
+    # regular token.
+    if [[ -f "$FORGEJO_ADMIN_TOKEN_FILE" ]]; then
+        FORGEJO_TOKEN=$(cat "$FORGEJO_ADMIN_TOKEN_FILE")
     fi
 
     if [[ -z "${WEBHOOK_SECRET:-}" && -f "$WEBHOOK_SECRET_FILE" ]]; then
@@ -104,7 +112,11 @@ forgejo_api_call() {
     fi
 
     if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
-        log_error "Forgejo API error $status for $url: $body"
+        if [[ "$status" == "403" ]]; then
+            log_error "Forgejo API permission denied ($status) for $url. The token likely lacks admin access to this repository. If using a bot account, set admin_token_file in the project config. Response: $body"
+        else
+            log_error "Forgejo API error $status for $url: $body"
+        fi
         return 1
     fi
 
@@ -182,6 +194,7 @@ cmd_register() {
     fi
 
     local config_secret="$WEBHOOK_SECRET"
+    local failed=0
 
     local repo
     while IFS= read -r repo; do
@@ -217,6 +230,7 @@ cmd_register() {
         local response
         response=$(printf '%s\n' "$payload" | forgejo_post "repos/$owner/$part/hooks") || {
             log_error "Failed to register webhook for $repo"
+            failed=1
             continue
         }
 
@@ -229,6 +243,11 @@ cmd_register() {
             log_warn "Webhook registered but no ID returned for $repo"
         fi
     done < <(echo "$WATCHED_REPOS" | tr ',' '\n')
+
+    if [[ "$failed" -ne 0 ]]; then
+        log_error "One or more webhooks could not be registered"
+        return 1
+    fi
 }
 
 cmd_unregister() {
@@ -244,6 +263,7 @@ cmd_unregister() {
         return 0
     fi
 
+    local failed=0
     local repo
     while IFS= read -r repo; do
         [[ -z "$repo" ]] && continue
@@ -264,8 +284,14 @@ cmd_unregister() {
             log_info "Unregistered webhook for $repo"
         else
             log_error "Failed to unregister webhook for $repo"
+            failed=1
         fi
     done <<< "$repos"
+
+    if [[ "$failed" -ne 0 ]]; then
+        log_error "One or more webhooks could not be unregistered"
+        return 1
+    fi
 }
 
 cmd_list() {
