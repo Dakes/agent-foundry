@@ -284,19 +284,7 @@ parent_task_id() {
 is_processed() {
     local task_id="$1"
     ensure_processed_file_valid
-    if jq -e ".processed.\"$task_id\"" "$PROCESSED_FILE" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    # Fall back to parent issue/PR marker (e.g. issue_N suppresses issue_N_comment_C).
-    local parent
-    parent=$(parent_task_id "$task_id")
-    if [[ "$parent" != "$task_id" ]]; then
-        jq -e ".processed.\"$parent\"" "$PROCESSED_FILE" >/dev/null 2>&1
-        return
-    fi
-
-    return 1
+    jq -e ".processed.\"$task_id\"" "$PROCESSED_FILE" >/dev/null 2>&1
 }
 
 mark_processed() {
