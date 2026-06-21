@@ -2,6 +2,8 @@
 
 The GitHub Watcher enables fully autonomous development by monitoring GitHub repositories for `!ralph` mentions, automatically triggering the configured autonomous agent to work on tasks, and creating pull requests when complete.
 
+> **Using a self-hosted Forgejo instance?** See the [Forgejo Watcher](./FORGEJO-WATCHER.md) for a webhook-driven integration instead of polling.
+
 It supports `ralph-claude-code`, `ralph-orchestrator`, and `kimi-ralph`. The watcher reads the configured agent type from `/root/.config/gh-watcher/config.conf` (or falls back to legacy Ralph variant detection) and loads the matching adapter.
 
 ## Overview

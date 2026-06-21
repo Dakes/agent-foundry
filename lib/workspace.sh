@@ -630,6 +630,9 @@ workspace_init() {
     # Clone repositories
     _clone_repositories "$vm_name" "$workspace_path" "$config_file"
 
+    # Configure git identity if specified in git-config.json
+    _configure_git_identity "$vm_name" "$config_file"
+
     # Copy agent dotfolders
     log_info "Copying agent configurations..."
     while IFS= read -r agent; do
@@ -797,6 +800,9 @@ workspace_sync() {
         done <<< "$md_files"
     fi
 
+    # Re-apply git identity if specified in git-config.json
+    _configure_git_identity "$vm_name" "$project_dir/git-config.json"
+
     # Refresh metadata for future sync auto-detection.
     registry_update "$vm_name" ".project_dir" "\"$project_dir\""
     registry_update "$vm_name" ".project_name" "\"$(basename "$project_dir")\""
@@ -856,6 +862,32 @@ _clone_repositories() {
 
         i=$((i + 1))
     done
+}
+
+# Configure global git identity from optional git_user_name / git_user_email fields.
+_configure_git_identity() {
+    local vm_name="$1"
+    local config_file="$2"
+
+    local git_user_name git_user_email
+    git_user_name=$(jq -r '.git_user_name // empty' "$config_file" 2>/dev/null || true)
+    git_user_email=$(jq -r '.git_user_email // empty' "$config_file" 2>/dev/null || true)
+
+    if [[ -n "$git_user_name" ]]; then
+        _ssh_cmd "$vm_name" "git config --global user.name '$git_user_name'" || {
+            log_warn "Failed to set git user.name"
+        }
+    fi
+
+    if [[ -n "$git_user_email" ]]; then
+        _ssh_cmd "$vm_name" "git config --global user.email '$git_user_email'" || {
+            log_warn "Failed to set git user.email"
+        }
+    fi
+
+    if [[ -n "$git_user_name" || -n "$git_user_email" ]]; then
+        log_info "Configured git identity: ${git_user_name:-<unset>} <${git_user_email:-<unset>}>"
+    fi
 }
 
 # Copy context files from templates

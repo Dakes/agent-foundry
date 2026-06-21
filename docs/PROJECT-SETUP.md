@@ -57,6 +57,8 @@ Create `git-config.json` with your repositories:
 
 ```json
 {
+  "git_user_name": "ci-bot",
+  "git_user_email": "ci-bot@example.com",
   "repositories": [
     {
       "name": "backend",
@@ -75,6 +77,8 @@ Create `git-config.json` with your repositories:
 ```
 
 **Fields:**
+- `git_user_name` (optional): Global `user.name` set in the VM, so commits are authored as this identity.
+- `git_user_email` (optional): Global `user.email` set in the VM.
 - `name`: Directory name in VM (`/work/<vm>/repos/<name>/`)
 - `url`: Standard git SSH URL
 - `branch`: Branch to checkout (default: "main")

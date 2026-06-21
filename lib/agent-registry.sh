@@ -174,20 +174,49 @@ agent_start_template() {
 
 # Echoes the host-side GitHub watcher adapter path.
 agent_watcher_adapter() {
+    agent_watcher_adapter_for "$1" "gh"
+}
+
+# Echoes the host-side watcher adapter path for a specific watcher type.
+# Usage: agent_watcher_adapter_for <agent> <watcher_type>
+# Supported watcher_type values: gh, forgejo
+agent_watcher_adapter_for() {
     local agent="$1"
+    local watcher_type="${2:-gh}"
     local base_dir="${AGENT_FOUNDRY_BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-    case "$agent" in
-        ralph)
-            echo "$base_dir/templates/ralph/gh_watcher_agent_ralph.sh"
+
+    case "$watcher_type" in
+        forgejo)
+            case "$agent" in
+                ralph)
+                    echo "$base_dir/templates/ralph/forgejo_watcher_agent_ralph.sh"
+                    ;;
+                ralph-orchestrator)
+                    echo "$base_dir/templates/ralph/forgejo_watcher_agent_ralph-orchestrator.sh"
+                    ;;
+                kimi-ralph)
+                    echo "$base_dir/templates/kimi/forgejo_watcher_agent_kimi-ralph.sh"
+                    ;;
+                *)
+                    echo ""
+                    ;;
+            esac
             ;;
-        ralph-orchestrator)
-            echo "$base_dir/templates/ralph/gh_watcher_agent_ralph-orchestrator.sh"
-            ;;
-        kimi-ralph)
-            echo "$base_dir/templates/kimi/gh_watcher_agent_kimi-ralph.sh"
-            ;;
-        *)
-            echo ""
+        gh|*)
+            case "$agent" in
+                ralph)
+                    echo "$base_dir/templates/ralph/gh_watcher_agent_ralph.sh"
+                    ;;
+                ralph-orchestrator)
+                    echo "$base_dir/templates/ralph/gh_watcher_agent_ralph-orchestrator.sh"
+                    ;;
+                kimi-ralph)
+                    echo "$base_dir/templates/kimi/gh_watcher_agent_kimi-ralph.sh"
+                    ;;
+                *)
+                    echo ""
+                    ;;
+            esac
             ;;
     esac
 }

@@ -336,7 +336,7 @@ EOF
         bat tree vim neovim nano tmux screen
 
         # Networking
-        httpie curl wget iputils-ping net-tools
+        httpie curl wget iputils-ping net-tools socat
 
         # Build & Dev Tools
         build-essential shellcheck
@@ -435,6 +435,25 @@ curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local sh
         adapter_src=$(agent_watcher_adapter "$agent")
         adapter_basename=$(basename "$adapter_src")
         install -m 755 "$adapter_src" "$mount_dir/opt/foundry/gh-watcher/$adapter_basename"
+    done
+
+    log_info "Installing Forgejo watcher scripts"
+    chroot "$mount_dir" mkdir -p /opt/foundry/forgejo
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_watcher.sh" "$mount_dir/opt/foundry/forgejo/forgejo_watcher.sh"
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_watcher_common.sh" "$mount_dir/opt/foundry/forgejo/forgejo_watcher_common.sh"
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_receiver.sh" "$mount_dir/opt/foundry/forgejo/forgejo_receiver.sh"
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_hook_manager.sh" "$mount_dir/opt/foundry/forgejo/forgejo_hook_manager.sh"
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_mark_all.sh" "$mount_dir/opt/foundry/forgejo/forgejo_mark_all.sh"
+
+    # Install Forgejo watcher adapters for every autonomous agent type.
+    for agent in $(agent_autonomous_types); do
+        adapter_src=$(agent_watcher_adapter_for "$agent" forgejo)
+        if [[ -z "$adapter_src" || ! -f "$adapter_src" ]]; then
+            log_debug "No Forgejo watcher adapter found for agent '$agent', skipping"
+            continue
+        fi
+        adapter_basename=$(basename "$adapter_src")
+        install -m 755 "$adapter_src" "$mount_dir/opt/foundry/forgejo/$adapter_basename"
     done
 
     rm -f "$mount_dir/opt/foundry/ralph-agent-type"

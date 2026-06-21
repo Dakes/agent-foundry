@@ -74,6 +74,24 @@ foundry agent gh-watcher logs <vm> [--follow]
 foundry agent gh-watcher reset <vm>
 ```
 
+## Forgejo Watcher Commands
+
+```bash
+foundry agent forgejo-watcher init <vm>
+foundry agent forgejo-watcher register-hooks <vm>
+foundry agent forgejo-watcher start <vm>
+foundry agent forgejo-watcher stop <vm>
+foundry agent forgejo-watcher status <vm>
+foundry agent forgejo-watcher logs <vm> [--follow]
+foundry agent forgejo-watcher reset <vm>
+foundry agent forgejo-watcher unregister-hooks <vm>
+```
+
+Notes:
+- The Forgejo watcher is webhook-driven and requires the Forgejo instance to reach the VM on the configured receiver port.
+- Use `register-hooks` after `init` to create webhooks on the watched repositories.
+- See `docs/FORGEJO-WATCHER.md` for setup details.
+
 ## Workspace Commands
 
 ```bash
