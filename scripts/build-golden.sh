@@ -324,7 +324,7 @@ EOF
 
     local core_packages=(
         # Base
-        ca-certificates git python3 python3-pip jq
+        ca-certificates git python3 python3-pip jq yq zip unzip sqlite3
 
         # System Monitoring
         htop btop ncdu lsof
@@ -427,10 +427,26 @@ curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local sh
 '
 
     log_info "Installing bun (JavaScript runtime)"
-    install_packages "$mount_dir" unzip
     chroot "$mount_dir" /bin/bash -c '
 set -euo pipefail
 curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
+'
+
+    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
+    log_info "Installing yq (YAML processor)"
+    chroot "$mount_dir" /bin/bash -c '
+set -euo pipefail
+curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" -o /usr/local/bin/yq
+chmod +x /usr/local/bin/yq
+'
+
+    log_info "Installing forgejo-cli"
+    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
+    chroot "$mount_dir" /bin/bash -c '
+set -euo pipefail
+latest=$(curl -fsSL "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases?limit=1" | jq -r ".[0].tag_name")
+curl -fsSL "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/${latest}/forgejo-cli-linux-amd64" -o /usr/local/bin/forgejo-cli
+chmod +x /usr/local/bin/forgejo-cli
 '
 
     log_info "Skipping AI/Ralph CLI installation in golden image"

@@ -572,6 +572,55 @@ foundry vm ssh <vm-name> "echo 'new_token' > /root/.config/forgejo-watcher/token
    - When retrying failed tasks
    - Use `foundry agent forgejo-watcher reset`
 
+## forgejo-cli in the VM
+
+`forgejo-cli` is pre-installed in the VM as a companion tool for agents that need to interact with Forgejo beyond what the watcher handles (e.g., creating releases, listing tags, fetching repo metadata).
+
+### Authentication
+
+`forgejo-cli` supports OAuth login via:
+
+```bash
+forgejo-cli auth login
+```
+
+This opens an authorization page in a browser. **This does not work in headless VMs** — the agent has no browser.
+
+Instead, agents should use the Forgejo REST API directly via `curl` with the token that is already present in the VM:
+
+```bash
+FORGEJO_TOKEN=$(cat /root/.config/forgejo-watcher/token)
+FORGEJO_URL=$(grep '^FORGEJO_INSTANCE_URL=' /root/.config/forgejo-watcher/config.conf | cut -d'"' -f2)
+
+# Example: list open issues
+curl -s -H "Authorization: token $FORGEJO_TOKEN" \
+    "$FORGEJO_URL/api/v1/repos/owner/repo/issues?state=open"
+```
+
+The watcher config at `/root/.config/forgejo-watcher/config.conf` always contains the instance URL and the token file path, so agents can source both from there.
+
+### Available instance support
+
+The set of Forgejo instances that support OAuth via `forgejo-cli auth login` depends on the installation. In practice, agents in foundry VMs should avoid `auth login` entirely and use the API token approach above, which works on all instances and requires no browser interaction.
+
+### Common operations via API
+
+```bash
+# Post a comment on an issue
+curl -s -X POST -H "Authorization: token $FORGEJO_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"body\": \"Comment text\"}" \
+    "$FORGEJO_URL/api/v1/repos/owner/repo/issues/1/comments"
+
+# Create a release
+curl -s -X POST -H "Authorization: token $FORGEJO_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"tag_name\": \"v1.0.0\", \"name\": \"v1.0.0\"}" \
+    "$FORGEJO_URL/api/v1/repos/owner/repo/releases"
+```
+
+The full API reference is at `<your-forgejo-instance>/api/swagger`.
+
 ## Architecture
 
 For detailed architecture and design decisions, see:
