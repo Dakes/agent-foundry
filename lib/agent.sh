@@ -1784,6 +1784,9 @@ _load_forgejo_watcher_config() {
     if [[ -n "$trigger_keyword_var" ]]; then
         printf -v "$trigger_keyword_var" '%s' "$cfg_trigger_keyword"
     fi
+    if [[ -n "$admin_token_var" ]]; then
+        printf -v "$admin_token_var" '%s' "$cfg_admin_token"
+    fi
 }
 
 _write_forgejo_watcher_vm_files() {
