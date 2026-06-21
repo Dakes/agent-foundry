@@ -2287,10 +2287,12 @@ agent_forgejo_watcher_register_hooks() {
     _sync_forgejo_watcher_scripts "$vm_name" || return 1
 
     log_info "Registering Forgejo webhooks for VM '$vm_name'..."
-    _ssh_cmd "$vm_name" "/opt/foundry/forgejo/forgejo_hook_manager.sh register" || {
+    if ! _ssh_cmd "$vm_name" "/opt/foundry/forgejo/forgejo_hook_manager.sh register"; then
         log_error "Failed to register Forgejo webhooks"
+        log_info "Hook manager log:"
+        _ssh_cmd "$vm_name" "cat /root/.config/forgejo-watcher/hook-manager.log" || true
         return 1
-    }
+    fi
 
     log_info "Forgejo webhooks registered"
 }
@@ -2308,10 +2310,12 @@ agent_forgejo_watcher_unregister_hooks() {
     _sync_forgejo_watcher_scripts "$vm_name" || return 1
 
     log_info "Unregistering Forgejo webhooks for VM '$vm_name'..."
-    _ssh_cmd "$vm_name" "/opt/foundry/forgejo/forgejo_hook_manager.sh unregister" || {
+    if ! _ssh_cmd "$vm_name" "/opt/foundry/forgejo/forgejo_hook_manager.sh unregister"; then
         log_error "Failed to unregister Forgejo webhooks"
+        log_info "Hook manager log:"
+        _ssh_cmd "$vm_name" "cat /root/.config/forgejo-watcher/hook-manager.log" || true
         return 1
-    }
+    fi
 
     log_info "Forgejo webhooks unregistered"
 }

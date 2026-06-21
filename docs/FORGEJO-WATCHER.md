@@ -125,6 +125,7 @@ If the watcher runs under a dedicated bot account, that account may not have rep
   - Scopes: **repository**: read, **issue**: write, **pull_request**: write
 - **Admin token** (`admin_token_file`): belongs to a repo admin. Used only for `register-hooks` / `unregister-hooks`.
   - Scope: **repository**: write (this is the minimum required for webhook management)
+  - **Important**: do **not** scope the admin token to a single repository. Forgejo requires a global `repository: write` token to manage webhooks. A repo-scoped token will fail with `403 Forbidden` even if it has write access to the target repository.
 
 ```json
 {

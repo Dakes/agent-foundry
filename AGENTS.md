@@ -67,3 +67,9 @@ Examples:
 - A `status` command that cannot contact the daemon must say so, not print stale "running" output.
 
 Err on the side of being too noisy. Users can ignore a clear error; they cannot fix a silent failure.
+
+## Surface Remote Errors in the CLI
+
+When a command runs a helper inside a VM or container, the **host CLI must print the actual error**, not just "command failed". Remote log files are useful for debugging, but they are not a substitute for immediate console output.
+
+If a remote helper writes a detailed error to `/root/.config/.../some.log`, the host CLI should tail or cat that log when the helper exits non-zero, so the user sees the root cause in the same terminal where they ran the command.
