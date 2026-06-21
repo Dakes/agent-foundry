@@ -31,6 +31,25 @@ Rules:
 3. Inside VM scripts (running as `root` in the VM), `$HOME` is `/root` and may be used normally.
 4. Help text and comments may use `~` for readability; runtime code must not.
 
+# Config-Driven Automation
+
+Agent Foundry is **config-driven**: if a piece of information or behavior is present in the project configuration, the CLI should act on it automatically instead of requiring the user to run additional commands.
+
+Principles:
+
+1. **One command to activate**: Running a top-level command (e.g. `foundry agent forgejo-watcher init <vm>`) should apply the full configuration. If the config says register hooks, register them. If it says watch repos, watch them.
+2. **Auto-derive what you can**: IP addresses, URLs, ports, and other runtime values should be derived from the environment whenever possible. Only prompt or require explicit input when derivation is impossible.
+3. **Opt-out, not opt-in**: Prefer automatic behavior with a flag to disable it (e.g. `--no-register-hooks`, `--no-mark-all`) over requiring a separate command to enable it.
+4. **Keep escape hatches**: Always provide explicit manual commands and opt-out flags for power users and debugging.
+
+Examples:
+
+- `forgejo-watcher init` auto-registers webhooks because `watched_repos` and `webhook_url` are in the config.
+- `forgejo-watcher start` auto-runs `mark-all` because the default lifecycle expectation is "don't reprocess old events on restart".
+- `webhook_url` is auto-derived from the VM IP because the VM already knows its own address.
+
+If a user has to run more than one command to make a configured feature work, the design is probably wrong.
+
 # Watcher Lifecycle
 
 When a watcher daemon starts, it should not immediately process a large backlog of old events. Restarts happen for updates, maintenance, and configuration changes, and the backlog may already have been handled.

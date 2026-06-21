@@ -1850,7 +1850,8 @@ EOF
 }
 
 agent_forgejo_watcher_init() {
-    local vm_name="${1:-}"
+    local vm_name=""
+    local no_register_hooks="false"
     local instance_url=""
     local watched_repos=""
     local token=""
@@ -1864,6 +1865,27 @@ agent_forgejo_watcher_init() {
     local trigger_keyword="!ralph"
     local admin_token=""
     local project_config=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-register-hooks)
+                no_register_hooks="true"
+                ;;
+            --*)
+                log_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                if [[ -z "$vm_name" ]]; then
+                    vm_name="$1"
+                else
+                    log_error "Unexpected argument: $1"
+                    return 1
+                fi
+                ;;
+        esac
+        shift
+    done
 
     if [[ -z "$vm_name" ]]; then
         log_error "VM name required"
@@ -1993,9 +2015,22 @@ EOF
     if [[ -n "$project_config" ]]; then
         log_info "  Config source: $project_config"
     fi
+
+    if [[ "$no_register_hooks" != "true" ]]; then
+        log_info ""
+        log_info "Registering webhooks automatically..."
+        if ! agent_forgejo_watcher_register_hooks "$vm_name"; then
+            log_error "Webhook registration failed. You can retry with: foundry agent forgejo-watcher register-hooks $vm_name"
+            return 1
+        fi
+    else
+        log_info ""
+        log_info "Skipped automatic webhook registration."
+        log_info "Register manually with: foundry agent forgejo-watcher register-hooks $vm_name"
+    fi
+
     log_info ""
-    log_info "Register webhooks with: foundry agent forgejo-watcher register-hooks $vm_name"
-    log_info "Start watcher with:     foundry agent forgejo-watcher start $vm_name"
+    log_info "Start watcher with: foundry agent forgejo-watcher start $vm_name"
 
     return 0
 }

@@ -63,15 +63,13 @@ Supported webhook secret sources:
 - `webhook_secret_file`
 - `webhook_secret`
 
-**2. Register webhooks on Forgejo:**
+`init` also registers webhooks automatically. To skip registration (e.g. if you manage hooks manually):
 
 ```bash
-foundry agent forgejo-watcher register-hooks <vm-name>
+foundry agent forgejo-watcher init <vm-name> --no-register-hooks
 ```
 
-This creates a webhook on each watched repository pointing to your configured `webhook_url`.
-
-**3. Start the watcher:**
+**2. Start the watcher:**
 
 ```bash
 foundry agent forgejo-watcher start <vm-name>
@@ -271,10 +269,10 @@ WATCHED_REPOS="myorg/backend,myorg/frontend,myorg/shared-lib"
 ### Initialize Watcher
 
 ```bash
-foundry agent forgejo-watcher init <vm-name>
+foundry agent forgejo-watcher init <vm-name> [--no-register-hooks]
 ```
 
-Loads `forgejo-watcher.json` when present, otherwise prompts for configuration.
+Loads `forgejo-watcher.json` when present, otherwise prompts for configuration. Automatically registers webhooks unless `--no-register-hooks` is given.
 
 ### Register Webhooks
 
@@ -282,7 +280,7 @@ Loads `forgejo-watcher.json` when present, otherwise prompts for configuration.
 foundry agent forgejo-watcher register-hooks <vm-name>
 ```
 
-Creates webhooks on all watched repositories via the Forgejo API.
+Creates webhooks on all watched repositories via the Forgejo API. Usually called automatically by `init`.
 
 ### Start Watcher
 
