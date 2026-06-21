@@ -324,7 +324,7 @@ EOF
 
     local core_packages=(
         # Base
-        ca-certificates git python3 python3-pip docker.io jq
+        ca-certificates git python3 python3-pip jq
 
         # System Monitoring
         htop btop ncdu lsof
@@ -354,6 +354,20 @@ EOF
 deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main
 EOF
     install_packages "$mount_dir" gh
+
+    log_info "Adding Docker official repository"
+    mkdir -p "$mount_dir/etc/apt/keyrings"
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "$mount_dir/etc/apt/keyrings/docker.asc"
+    chmod a+r "$mount_dir/etc/apt/keyrings/docker.asc"
+    local docker_codename
+    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
+    docker_codename=$(chroot "$mount_dir" /bin/bash -c '. /etc/os-release && echo "$VERSION_CODENAME"')
+    cat > "$mount_dir/etc/apt/sources.list.d/docker.list" <<EOF
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${docker_codename} stable
+EOF
+    chroot "$mount_dir" apt-mark hold systemd
+    install_packages "$mount_dir" docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    chroot "$mount_dir" apt-mark unhold systemd
 
     log_info "Installing nvm and Node.js 24"
     # Install nvm
@@ -410,6 +424,13 @@ EOF
     chroot "$mount_dir" /bin/bash -c '
 set -euo pipefail
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local sh
+'
+
+    log_info "Installing bun (JavaScript runtime)"
+    install_packages "$mount_dir" unzip
+    chroot "$mount_dir" /bin/bash -c '
+set -euo pipefail
+curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 '
 
     log_info "Skipping AI/Ralph CLI installation in golden image"
