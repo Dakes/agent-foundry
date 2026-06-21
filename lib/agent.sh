@@ -998,7 +998,7 @@ _resolve_agent_log_path() {
     fi
 
     # Watcher-driven autonomous runs log to a separate file.
-    local watcher_log="${WORKSPACE_BASE}/logs/ralph-watcher.log"
+    local watcher_log="${WORKSPACE_BASE}/logs/agent-watcher.log"
 
     # Prefer the log that matches the currently active agent session.
     if _ssh_cmd "$vm_name" "tmux has-session -t ralph-loop 2>/dev/null"; then
