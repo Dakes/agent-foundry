@@ -30,3 +30,15 @@ Rules:
 2. Do not declare local variables named `token`, `secret`, or any other name that matches a caller-passed variable name when using `printf -v "$var_name"`; it will write to the local shadow instead of the caller's variable.
 3. Inside VM scripts (running as `root` in the VM), `$HOME` is `/root` and may be used normally.
 4. Help text and comments may use `~` for readability; runtime code must not.
+
+# Watcher Lifecycle
+
+When a watcher daemon starts, it should not immediately process a large backlog of old events. Restarts happen for updates, maintenance, and configuration changes, and the backlog may already have been handled.
+
+For webhook-driven watchers (e.g. Forgejo):
+
+- `start` should automatically mark existing open issues/PRs as processed before beginning event processing.
+- Provide an explicit opt-out flag (e.g. `--no-mark-all`) for users who genuinely want to process the backlog.
+- Keep `mark-all` as a separate command so users can run it independently.
+
+This prevents the agent from re-triggering on stale events every time the service restarts.

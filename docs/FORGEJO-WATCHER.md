@@ -77,6 +77,14 @@ This creates a webhook on each watched repository pointing to your configured `w
 foundry agent forgejo-watcher start <vm-name>
 ```
 
+By default, `start` first marks all currently open issues and PRs as processed so the watcher does not backfill old events after a restart. This is usually what you want when restarting for updates or maintenance.
+
+To skip this and process the existing backlog instead:
+
+```bash
+foundry agent forgejo-watcher start <vm-name> --no-mark-all
+```
+
 **4. Verify it's running:**
 
 ```bash
@@ -209,10 +217,12 @@ Creates webhooks on all watched repositories via the Forgejo API.
 ### Start Watcher
 
 ```bash
-foundry agent forgejo-watcher start <vm-name>
+foundry agent forgejo-watcher start <vm-name> [--no-mark-all]
 ```
 
 Starts the watcher daemon and webhook receiver in tmux sessions.
+
+Before starting, it runs `mark-all` to suppress the existing open issue/PR backlog. Use `--no-mark-all` to process the backlog instead.
 
 ### Stop Watcher
 

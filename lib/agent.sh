@@ -1977,7 +1977,29 @@ EOF
 }
 
 agent_forgejo_watcher_start() {
-    local vm_name="${1:-}"
+    local vm_name=""
+    local no_mark_all="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-mark-all)
+                no_mark_all="true"
+                ;;
+            --*)
+                log_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                if [[ -z "$vm_name" ]]; then
+                    vm_name="$1"
+                else
+                    log_error "Unexpected argument: $1"
+                    return 1
+                fi
+                ;;
+        esac
+        shift
+    done
 
     if [[ -z "$vm_name" ]]; then
         log_error "VM name required"
@@ -1995,6 +2017,13 @@ agent_forgejo_watcher_start() {
     if _ssh_cmd_tty "$vm_name" "tmux has-session -t forgejo-watcher 2>/dev/null"; then
         log_warn "Forgejo watcher already running in VM '$vm_name'"
         return 0
+    fi
+
+    if [[ "$no_mark_all" != "true" ]]; then
+        log_info "Marking existing open issues/PRs as processed before start..."
+        agent_forgejo_watcher_mark_all "$vm_name" || {
+            log_warn "mark-all failed, continuing with start anyway"
+        }
     fi
 
     log_info "Starting Forgejo watcher in VM '$vm_name'..."
