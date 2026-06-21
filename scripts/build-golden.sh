@@ -444,9 +444,23 @@ chmod +x /usr/local/bin/yq
     # shellcheck disable=SC2016  # Variables should expand in chroot, not host
     chroot "$mount_dir" /bin/bash -c '
 set -euo pipefail
-latest=$(curl -fsSL "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases?limit=1" | jq -r ".[0].tag_name")
-curl -fsSL "https://codeberg.org/forgejo-contrib/forgejo-cli/releases/download/${latest}/forgejo-cli-linux-amd64" -o /usr/local/bin/forgejo-cli
-chmod +x /usr/local/bin/forgejo-cli
+download_url=$(curl -fsSL "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases?limit=1" \
+    | jq -r ".[0].assets[] | select(.name | test(\"x86_64-linux\")) | .browser_download_url" \
+    | head -1)
+if [[ -z "$download_url" ]]; then
+    echo "Could not find forgejo-cli x86_64-linux asset" >&2
+    exit 1
+fi
+tmp=$(mktemp -d)
+curl -fsSL "$download_url" | tar -xz -C "$tmp"
+binary=$(find "$tmp" -type f -name "fj" | head -1)
+if [[ -z "$binary" ]]; then
+    echo "Could not find fj binary in archive" >&2
+    rm -rf "$tmp"
+    exit 1
+fi
+install -m 755 "$binary" /usr/local/bin/fj
+rm -rf "$tmp"
 '
 
     log_info "Skipping AI/Ralph CLI installation in golden image"

@@ -574,14 +574,14 @@ foundry vm ssh <vm-name> "echo 'new_token' > /root/.config/forgejo-watcher/token
 
 ## forgejo-cli in the VM
 
-`forgejo-cli` is pre-installed in the VM as a companion tool for agents that need to interact with Forgejo beyond what the watcher handles (e.g., creating releases, listing tags, fetching repo metadata).
+`forgejo-cli` is pre-installed in the VM as `fj`. It is a companion tool for agents that need to interact with Forgejo beyond what the watcher handles (e.g., creating releases, listing tags, fetching repo metadata).
 
 ### Authentication
 
-`forgejo-cli` supports OAuth login via:
+`fj` supports OAuth login via:
 
 ```bash
-forgejo-cli auth login
+fj auth login
 ```
 
 This opens an authorization page in a browser. **This does not work in headless VMs** — the agent has no browser.
@@ -601,7 +601,7 @@ The watcher config at `/root/.config/forgejo-watcher/config.conf` always contain
 
 ### Available instance support
 
-The set of Forgejo instances that support OAuth via `forgejo-cli auth login` depends on the installation. In practice, agents in foundry VMs should avoid `auth login` entirely and use the API token approach above, which works on all instances and requires no browser interaction.
+The set of Forgejo instances that support OAuth via `fj auth login` depends on the installation. In practice, agents in foundry VMs should avoid `auth login` entirely and use the API token approach above, which works on all instances and requires no browser interaction.
 
 ### Common operations via API
 
