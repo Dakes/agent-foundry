@@ -324,7 +324,7 @@ EOF
 
     local core_packages=(
         # Base
-        ca-certificates git python3 python3-pip jq yq zip unzip sqlite3
+        ca-certificates git python3 python3-pip jq zip unzip sqlite3
 
         # System Monitoring
         htop btop ncdu lsof
