@@ -87,11 +87,18 @@ $(jq -r '.conversation' "$context_file")
 
 - Navigate to /root/repos/$(jq -r '.repo_name' "$context_file").
 - Fetch and checkout branch \`$(jq -r '.branch' "$context_file")\`.
-- Address all relevant PR feedback.
-- Make the necessary code changes.
-- Run relevant tests and verify all pass.
-- Push fixes back to branch \`$(jq -r '.branch' "$context_file")\`.
-- Comment on the PR with a summary of changes. Start the comment with "## Kimi - Task Completed".
+- Determine the user's intent from the trigger comment/body.
+- If the user asked for a **review** (e.g. "review this", "please review", "code review", "@touya review"):
+  - Review the diff only.
+  - Leave review comments on specific lines where helpful.
+  - Summarize your review in a PR comment.
+  - **Do not push commits or open a new PR.**
+- If the user explicitly asked for changes/fixes:
+  - Make the minimal necessary code changes.
+  - Run relevant tests and verify all pass.
+  - Push fixes back to branch \`$(jq -r '.branch' "$context_file")\`.
+  - Comment on the PR with a summary of changes. Start the comment with "## Kimi - Task Completed".
+- If intent is unclear, default to a review only.
 EOF
             ;;
         pipeline_failure)

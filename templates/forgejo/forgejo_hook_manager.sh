@@ -180,6 +180,18 @@ get_hook_id() {
 # COMMANDS
 # ============================================================================
 
+find_existing_hook() {
+    local owner="$1"
+    local part="$2"
+    local webhook_url="$3"
+
+    local hooks
+    hooks=$(forgejo_get "repos/$owner/$part/hooks?limit=50") || return 1
+    printf '%s\n' "$hooks" | jq -r \
+        --arg url "$webhook_url" \
+        '.[] | select(.config.url == $url) | .id' | head -1
+}
+
 cmd_register() {
     load_config
 
@@ -200,10 +212,23 @@ cmd_register() {
     while IFS= read -r repo; do
         [[ -z "$repo" ]] && continue
 
-        log_info "Registering webhook for $repo"
-
         local owner part
         read -r owner part <<< "$(split_repo "$repo")"
+
+        local existing_id
+        existing_id=$(find_existing_hook "$owner" "$part" "$WEBHOOK_URL") || {
+            log_error "Failed to list hooks for $repo"
+            failed=1
+            continue
+        }
+
+        if [[ -n "$existing_id" ]]; then
+            log_info "Webhook already exists for $repo (id=$existing_id), skipping"
+            store_hook_id "$repo" "$existing_id"
+            continue
+        fi
+
+        log_info "Registering webhook for $repo"
 
         local payload
         payload=$(jq -n \

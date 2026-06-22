@@ -369,6 +369,17 @@ EOF
     install_packages "$mount_dir" docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     chroot "$mount_dir" apt-mark unhold systemd
 
+    # Firecracker kernels lack the iptable_raw module required by Docker's
+    # DIRECT ACCESS FILTERING feature. Disable iptables management so Docker
+    # falls back to plain bridge networking (containers can still talk to each
+    # other; use --network host for host-accessible ports).
+    mkdir -p "$mount_dir/etc/docker"
+    cat > "$mount_dir/etc/docker/daemon.json" <<'EOF'
+{
+    "iptables": false
+}
+EOF
+
     log_info "Installing nvm and Node.js 24"
     # Install nvm
     # shellcheck disable=SC2016  # Variables should expand in chroot, not host
