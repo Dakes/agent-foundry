@@ -190,7 +190,8 @@ ACTIONS:
     logs <vm> [-f|--follow]    View agent logs
     enable-autostart <vm>      Enable agent autostart on boot
     disable-autostart <vm>     Disable agent autostart
-    gh-watcher <action> <vm>   Manage GitHub watcher (see: foundry agent gh-watcher help)
+    gh-watcher <action> <vm>      Manage GitHub watcher (see: foundry agent gh-watcher help)
+    forgejo-watcher <action> <vm> Manage Forgejo watcher (see: foundry agent forgejo-watcher help)
 
 AGENT TYPES:
     ralph   - ralph-claude-code autonomous agent (default, runs in tmux)
@@ -208,6 +209,7 @@ EXAMPLES:
     foundry agent stop my-project
     foundry agent enable-autostart my-project
     foundry agent gh-watcher init my-project
+    foundry agent forgejo-watcher init my-project
 EOF
 }
 
@@ -279,6 +281,83 @@ PRIORITY:
     2. !ralph in issues (new features/bugs)
 
 For more information, see: docs/designs/2026-02-15-github-watcher-automation.md
+EOF
+}
+
+show_forgejo_watcher_help() {
+    cat << 'EOF'
+foundry agent forgejo-watcher - Automated Forgejo issue/PR monitoring via webhooks
+
+USAGE:
+    foundry agent forgejo-watcher <action> <vm> [options]
+
+DESCRIPTION:
+    The Forgejo watcher registers webhooks on a self-hosted Forgejo instance,
+    receives issue/PR events in real time, detects the configured trigger keyword,
+    and starts the configured autonomous agent to work on tasks.
+
+ACTIONS:
+    init <vm>              Initialize Forgejo watcher (uses project forgejo-watcher.json if present, otherwise prompts)
+    register-hooks <vm>    Create Forgejo webhooks on watched repositories
+    start <vm>             Start watcher daemon and webhook receiver in background
+    stop <vm>              Stop watcher daemon and receiver
+    status <vm>            Show watcher, receiver, and agent status
+    logs <vm> [--follow]   View watcher logs
+    reset <vm>             Clear processed task history and queued events
+    mark-all <vm>          Mark all existing trigger mentions as processed without running agent
+    unregister-hooks <vm>  Remove Forgejo webhooks created by this integration
+
+WORKFLOW:
+    1. User creates issue or PR comment with trigger keyword mention
+    2. Forgejo delivers webhook payload to the VM receiver
+    3. Watcher verifies signature, builds agent-specific task context
+    4. Watcher starts the autonomous agent
+    5. Agent creates/updates PR when complete (or posts error comment)
+    6. Watcher waits for the next webhook event
+
+CONFIGURATION:
+    Location: /root/.config/forgejo-watcher/ (inside VM)
+    - config.conf      Watcher settings (instance URL, repos, receiver port)
+    - processed.json   Completed task history
+    - queue/           Incoming webhook events
+    - watcher.log      Activity log
+
+PROJECT CONFIG:
+    Optional host-side config:
+    ~/.config/foundry/projects/<project>/forgejo-watcher.json
+
+FORGEJO TOKEN:
+    Required permissions:
+    - repository: write (to manage webhooks)
+    - issue: write
+    - pull_request: write
+
+    Create at: Settings | Applications | Generate New Token
+
+NETWORK REQUIREMENT:
+    Forgejo must be able to reach the VM on the configured receiver port
+    (default 8080). Ensure the host/VM is reachable from the Forgejo instance.
+
+EXAMPLES:
+    # Setup
+    foundry agent forgejo-watcher init my-vm
+    foundry agent forgejo-watcher register-hooks my-vm
+    foundry agent forgejo-watcher start my-vm
+
+    # Monitor
+    foundry agent forgejo-watcher status my-vm
+    foundry agent forgejo-watcher logs my-vm --follow
+
+    # Maintenance
+    foundry agent forgejo-watcher stop my-vm
+    foundry agent forgejo-watcher unregister-hooks my-vm
+
+PRIORITY:
+    1. Trigger in PR review comments
+    2. Trigger in issue/PR comments
+    3. Trigger in issue/PR body
+
+For more information, see: docs/FORGEJO-WATCHER.md
 EOF
 }
 
@@ -616,6 +695,47 @@ cmd_agent() {
                     ;;
             esac
             ;;
+        forgejo-watcher)
+            local fj_action="${1:-help}"
+            shift || true
+            case "$fj_action" in
+                init)
+                    agent_forgejo_watcher_init "$@"
+                    ;;
+                register-hooks)
+                    agent_forgejo_watcher_register_hooks "$@"
+                    ;;
+                start)
+                    agent_forgejo_watcher_start "$@"
+                    ;;
+                stop)
+                    agent_forgejo_watcher_stop "$@"
+                    ;;
+                status)
+                    agent_forgejo_watcher_status "$@"
+                    ;;
+                logs)
+                    agent_forgejo_watcher_logs "$@"
+                    ;;
+                reset)
+                    agent_forgejo_watcher_reset "$@"
+                    ;;
+                mark-all)
+                    agent_forgejo_watcher_mark_all "$@"
+                    ;;
+                unregister-hooks)
+                    agent_forgejo_watcher_unregister_hooks "$@"
+                    ;;
+                help|--help|-h)
+                    show_forgejo_watcher_help
+                    ;;
+                *)
+                    log_error "Unknown forgejo-watcher action: $fj_action"
+                    echo "Run 'foundry agent forgejo-watcher help' for usage"
+                    return 1
+                    ;;
+            esac
+            ;;
         help|--help|-h)
             show_agent_help
             ;;
@@ -755,8 +875,10 @@ cmd_config() {
         show|list)
             config_load
             echo "=== Configuration ==="
-            if [[ -f "${FOUNDRY_CONFIG_DIR:-$HOME/.config/foundry}/config.conf" ]]; then
-                cat "${FOUNDRY_CONFIG_DIR:-$HOME/.config/foundry}/config.conf"
+            local _config_home
+            _config_home="$(resolve_host_home)"
+            if [[ -f "${FOUNDRY_CONFIG_DIR:-${_config_home}/.config/foundry}/config.conf" ]]; then
+                cat "${FOUNDRY_CONFIG_DIR:-${_config_home}/.config/foundry}/config.conf"
             else
                 echo "No user configuration (using defaults)"
             fi
@@ -779,7 +901,9 @@ cmd_template() {
     case "$action" in
         list|ls)
             echo "=== Available Templates ==="
-            local templates_dir="${FOUNDRY_DATA_DIR:-$HOME/.local/share/foundry}/vms/templates"
+            local _data_home
+            _data_home="$(resolve_host_home)"
+            local templates_dir="${FOUNDRY_DATA_DIR:-${_data_home}/.local/share/foundry}/vms/templates"
             if [[ -d "$templates_dir" ]]; then
                 ls -lh "$templates_dir"/*.ext4 2>/dev/null || echo "No templates found"
             else

@@ -998,7 +998,7 @@ _resolve_agent_log_path() {
     fi
 
     # Watcher-driven autonomous runs log to a separate file.
-    local watcher_log="${WORKSPACE_BASE}/logs/ralph-watcher.log"
+    local watcher_log="${WORKSPACE_BASE}/logs/agent-watcher.log"
 
     # Prefer the log that matches the currently active agent session.
     if _ssh_cmd "$vm_name" "tmux has-session -t ralph-loop 2>/dev/null"; then
@@ -1597,6 +1597,783 @@ EOF
 }
 
 # ============================================================================
+# FORGEJO WATCHER MANAGEMENT
+# ============================================================================
+
+_sync_forgejo_watcher_scripts() {
+    local vm_name="$1"
+    local watcher_root="$AGENT_FOUNDRY_BASE_DIR/templates/forgejo"
+    local vm_helper_dir="/opt/foundry/forgejo"
+    local chmod_paths=""
+
+    _ssh_cmd "$vm_name" "mkdir -p $vm_helper_dir" || return 1
+
+    local files=(
+        "$watcher_root/forgejo_watcher.sh:$vm_helper_dir/forgejo_watcher.sh"
+        "$watcher_root/forgejo_watcher_common.sh:$vm_helper_dir/forgejo_watcher_common.sh"
+        "$watcher_root/forgejo_receiver.sh:$vm_helper_dir/forgejo_receiver.sh"
+        "$watcher_root/forgejo_hook_manager.sh:$vm_helper_dir/forgejo_hook_manager.sh"
+    )
+
+    local agent adapter_src adapter_dst
+    for agent in $(agent_autonomous_types); do
+        adapter_src=$(agent_watcher_adapter_for "$agent" forgejo)
+        if [[ -z "$adapter_src" || ! -f "$adapter_src" ]]; then
+            log_debug "No Forgejo watcher adapter found for agent '$agent', skipping"
+            continue
+        fi
+        adapter_dst="$vm_helper_dir/$(basename "$adapter_src")"
+        files+=("$adapter_src:$adapter_dst")
+    done
+
+    local pair src dst
+    for pair in "${files[@]}"; do
+        src="${pair%%:*}"
+        dst="${pair##*:}"
+        _scp_to_vm_path "$vm_name" "$src" "$dst" || return 1
+        chmod_paths="$chmod_paths $dst"
+    done
+
+    _ssh_cmd "$vm_name" "chmod 755$chmod_paths" || return 1
+}
+
+_resolve_forgejo_watcher_project_config_path() {
+    local vm_name="$1"
+    local host_home config_root candidate project_dir project_name
+
+    host_home="$(resolve_host_home)"
+    config_root="${FOUNDRY_CONFIG_DIR:-${host_home}/.config/foundry}/projects"
+
+    project_dir=$(registry_get "$vm_name" ".project_dir" 2>/dev/null || true)
+    project_dir="${project_dir%\"}"
+    project_dir="${project_dir#\"}"
+    if [[ -n "$project_dir" && "$project_dir" != "null" ]]; then
+        candidate="$project_dir/forgejo-watcher.json"
+        if [[ -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    for project_name in \
+        "$(registry_get "$vm_name" ".project_name" 2>/dev/null || true)" \
+        "$vm_name"
+    do
+        project_name="${project_name%\"}"
+        project_name="${project_name#\"}"
+        [[ -z "$project_name" || "$project_name" == "null" ]] && continue
+
+        candidate="$config_root/$project_name/forgejo-watcher.json"
+        if [[ -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+
+        candidate="${AGENT_FOUNDRY_BASE_DIR}/projects/$project_name/forgejo-watcher.json"
+        if [[ -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+_load_forgejo_watcher_config() {
+    local config_path="$1"
+    local instance_url_var="$2"
+    local watched_repos_var="$3"
+    local token_var="$4"
+    local webhook_secret_var="$5"
+    local webhook_url_var="$6"
+    local listen_port_var="$7"
+    local agent_type_var="$8"
+    local post_error_comments_var="$9"
+    local watcher_enabled_var="${10}"
+    local default_branch_var="${11:-}"
+    local trigger_keyword_var="${12:-}"
+    local admin_token_var="${13:-}"
+
+    if ! jq -e . "$config_path" >/dev/null 2>&1; then
+        log_error "Invalid forgejo-watcher config JSON: $config_path"
+        return 1
+    fi
+
+    local cfg_instance_url cfg_watched_repos cfg_token cfg_token_file cfg_token_env
+    local cfg_admin_token cfg_admin_token_file
+    local cfg_webhook_secret cfg_webhook_secret_file cfg_webhook_url
+    local cfg_listen_port cfg_agent_type cfg_post_error_comments cfg_watcher_enabled
+    local cfg_default_branch cfg_trigger_keyword
+    local token_path secret_path admin_token_path
+
+    cfg_instance_url=$(jq -r '.instance_url // empty' "$config_path")
+    cfg_watched_repos=$(jq -r '
+        if (.watched_repos | type) == "array" then
+            .watched_repos | join(",")
+        elif (.watched_repos | type) == "string" then
+            .watched_repos
+        else
+            empty
+        end
+    ' "$config_path")
+    cfg_token=$(jq -r '.token // empty' "$config_path")
+    cfg_token_file=$(jq -r '.token_file // empty' "$config_path")
+    cfg_token_env=$(jq -r '.token_env // empty' "$config_path")
+    cfg_admin_token=$(jq -r '.admin_token // empty' "$config_path")
+    cfg_admin_token_file=$(jq -r '.admin_token_file // empty' "$config_path")
+    cfg_webhook_secret=$(jq -r '.webhook_secret // empty' "$config_path")
+    cfg_webhook_secret_file=$(jq -r '.webhook_secret_file // empty' "$config_path")
+    cfg_webhook_url=$(jq -r '.webhook_url // empty' "$config_path")
+    cfg_listen_port=$(jq -r '.listen_port // 8080' "$config_path")
+    cfg_agent_type=$(jq -r '.agent_type // empty' "$config_path")
+    cfg_post_error_comments=$(jq -r '.post_error_comments // true' "$config_path")
+    cfg_watcher_enabled=$(jq -r '.enabled // true' "$config_path")
+    cfg_default_branch=$(jq -r '.default_branch // "main"' "$config_path")
+    cfg_trigger_keyword=$(jq -r '.trigger_keyword // "!ralph"' "$config_path")
+
+    if [[ -n "$cfg_token_file" ]]; then
+        token_path=$(_resolve_host_path_from_project_file "$config_path" "$cfg_token_file")
+        if [[ ! -f "$token_path" ]]; then
+            log_error "Forgejo token file from config not found: $token_path"
+            return 1
+        fi
+        cfg_token="$(<"$token_path")"
+        if [[ -z "$cfg_token" ]]; then
+            log_error "Forgejo token file is empty: $token_path"
+            return 1
+        fi
+    elif [[ -n "$cfg_token_env" ]]; then
+        cfg_token="${!cfg_token_env:-}"
+        if [[ -z "$cfg_token" ]]; then
+            log_error "Forgejo token environment variable is empty: $cfg_token_env"
+            return 1
+        fi
+    fi
+
+    if [[ -n "$cfg_admin_token_file" ]]; then
+        admin_token_path=$(_resolve_host_path_from_project_file "$config_path" "$cfg_admin_token_file")
+        if [[ ! -f "$admin_token_path" ]]; then
+            log_error "Forgejo admin token file from config not found: $admin_token_path"
+            return 1
+        fi
+        cfg_admin_token="$(<"$admin_token_path")"
+        if [[ -z "$cfg_admin_token" ]]; then
+            log_error "Forgejo admin token file is empty: $admin_token_path"
+            return 1
+        fi
+    fi
+
+    if [[ -n "$cfg_webhook_secret_file" ]]; then
+        secret_path=$(_resolve_host_path_from_project_file "$config_path" "$cfg_webhook_secret_file")
+        if [[ ! -f "$secret_path" ]]; then
+            log_error "Webhook secret file from config not found: $secret_path"
+            return 1
+        fi
+        cfg_webhook_secret="$(<"$secret_path")"
+    fi
+
+    if [[ -z "$cfg_instance_url" ]]; then
+        log_error "forgejo-watcher config missing instance_url: $config_path"
+        return 1
+    fi
+
+    if [[ -z "$cfg_watched_repos" ]]; then
+        log_error "forgejo-watcher config missing watched_repos: $config_path"
+        return 1
+    fi
+
+    printf -v "$instance_url_var" '%s' "$cfg_instance_url"
+    printf -v "$watched_repos_var" '%s' "$cfg_watched_repos"
+    printf -v "$token_var" '%s' "$cfg_token"
+    printf -v "$webhook_secret_var" '%s' "$cfg_webhook_secret"
+    printf -v "$webhook_url_var" '%s' "$cfg_webhook_url"
+    printf -v "$listen_port_var" '%s' "$cfg_listen_port"
+    printf -v "$agent_type_var" '%s' "$cfg_agent_type"
+    printf -v "$post_error_comments_var" '%s' "$cfg_post_error_comments"
+    printf -v "$watcher_enabled_var" '%s' "$cfg_watcher_enabled"
+    if [[ -n "$default_branch_var" ]]; then
+        printf -v "$default_branch_var" '%s' "$cfg_default_branch"
+    fi
+    if [[ -n "$trigger_keyword_var" ]]; then
+        printf -v "$trigger_keyword_var" '%s' "$cfg_trigger_keyword"
+    fi
+    if [[ -n "$admin_token_var" ]]; then
+        printf -v "$admin_token_var" '%s' "$cfg_admin_token"
+    fi
+}
+
+_write_forgejo_watcher_vm_files() {
+    local vm_name="$1"
+    local config_content="$2"
+    local forgejo_token="$3"
+    local webhook_secret="${4:-}"
+    local admin_token="${5:-}"
+    local tmp_config tmp_processed tmp_token tmp_secret tmp_admin_token vm_ip ssh_key
+
+    tmp_config=""
+    tmp_processed=""
+    tmp_token=""
+    tmp_secret=""
+    tmp_admin_token=""
+
+    cleanup_vm_files() {
+        [[ -n "$tmp_config" ]] && rm -f "$tmp_config" || true
+        [[ -n "$tmp_processed" ]] && rm -f "$tmp_processed" || true
+        [[ -n "$tmp_token" ]] && rm -f "$tmp_token" || true
+        [[ -n "$tmp_secret" ]] && rm -f "$tmp_secret" || true
+        [[ -n "$tmp_admin_token" ]] && rm -f "$tmp_admin_token" || true
+        return 0
+    }
+    trap cleanup_vm_files EXIT
+
+    _ssh_cmd "$vm_name" "mkdir -p /root/.config/forgejo-watcher /root/.config/forgejo-watcher/queue"
+    vm_ip=$(_get_vm_ip "$vm_name")
+    ssh_key=$(_get_vm_ssh_key "$vm_name")
+
+    tmp_config=$(mktemp)
+    tmp_processed=$(mktemp)
+    tmp_token=$(mktemp)
+
+    printf '%s\n' "$config_content" > "$tmp_config"
+    cat > "$tmp_processed" <<'EOF'
+{
+  "version": "1.0",
+  "processed": {},
+  "last_poll": "1970-01-01T00:00:00Z"
+}
+EOF
+    printf '%s\n' "$forgejo_token" > "$tmp_token"
+
+    _scp_to_vm "$vm_ip" "$ssh_key" "$tmp_config" "/root/.config/forgejo-watcher/config.conf"
+    _scp_to_vm "$vm_ip" "$ssh_key" "$tmp_processed" "/root/.config/forgejo-watcher/processed.json"
+    _scp_to_vm "$vm_ip" "$ssh_key" "$tmp_token" "/root/.config/forgejo-watcher/token"
+
+    if [[ -n "$webhook_secret" ]]; then
+        tmp_secret=$(mktemp)
+        printf '%s\n' "$webhook_secret" > "$tmp_secret"
+        _scp_to_vm "$vm_ip" "$ssh_key" "$tmp_secret" "/root/.config/forgejo-watcher/webhook-secret"
+    fi
+
+    if [[ -n "$admin_token" ]]; then
+        tmp_admin_token=$(mktemp)
+        printf '%s\n' "$admin_token" > "$tmp_admin_token"
+        _scp_to_vm "$vm_ip" "$ssh_key" "$tmp_admin_token" "/root/.config/forgejo-watcher/admin-token"
+    fi
+
+    _ssh_cmd "$vm_name" "chmod 600 /root/.config/forgejo-watcher/token /root/.config/forgejo-watcher/webhook-secret /root/.config/forgejo-watcher/admin-token 2>/dev/null; touch /root/.config/forgejo-watcher/watcher.log"
+
+    trap - EXIT
+    cleanup_vm_files
+    return 0
+}
+
+agent_forgejo_watcher_init() {
+    local vm_name=""
+    local no_register_hooks="false"
+    local instance_url=""
+    local watched_repos=""
+    local token=""
+    local webhook_secret=""
+    local webhook_url=""
+    local listen_port="8080"
+    local agent_type=""
+    local post_error_comments="true"
+    local watcher_enabled="true"
+    local default_branch="main"
+    local trigger_keyword="!ralph"
+    local admin_token=""
+    local project_config=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-register-hooks)
+                no_register_hooks="true"
+                ;;
+            --*)
+                log_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                if [[ -z "$vm_name" ]]; then
+                    vm_name="$1"
+                else
+                    log_error "Unexpected argument: $1"
+                    return 1
+                fi
+                ;;
+        esac
+        shift
+    done
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    log_info "Initializing Forgejo watcher for VM '$vm_name'..."
+    project_config=$(_resolve_forgejo_watcher_project_config_path "$vm_name" || true)
+    if [[ -n "$project_config" ]]; then
+        log_info "Loading watcher config from $project_config"
+        _load_forgejo_watcher_config \
+            "$project_config" \
+            instance_url \
+            watched_repos \
+            token \
+            webhook_secret \
+            webhook_url \
+            listen_port \
+            agent_type \
+            post_error_comments \
+            watcher_enabled \
+            default_branch \
+            trigger_keyword \
+            admin_token || return 1
+    fi
+
+    if [[ -z "$instance_url" ]]; then
+        echo ""
+        echo "Forgejo Watcher Configuration"
+        echo "============================="
+        echo ""
+        read -r -p "Forgejo instance URL (e.g., https://git.example.com): " instance_url
+        if [[ -z "$instance_url" ]]; then
+            log_error "No instance URL specified"
+            return 1
+        fi
+    fi
+
+    if [[ -z "$watched_repos" ]]; then
+        read -r -p "Enter repositories to watch (comma-separated, e.g., owner/repo1,owner/repo2): " watched_repos
+        if [[ -z "$watched_repos" ]]; then
+            log_error "No repositories specified"
+            return 1
+        fi
+    fi
+
+    if [[ -z "$token" ]]; then
+        echo ""
+        echo "Forgejo Token Setup"
+        echo "==================="
+        echo "You need a Forgejo API token with these permissions:"
+        echo "  - repository: write"
+        echo "  - issue: write"
+        echo "  - pull_request: write"
+        echo ""
+        read -r -s -p "Enter Forgejo token (input hidden): " token
+        echo ""
+
+        if [[ -z "$token" ]]; then
+            log_error "No token provided"
+            return 1
+        fi
+    fi
+
+    if [[ -z "$webhook_url" ]]; then
+        local vm_ip
+        vm_ip=$(_get_vm_ip "$vm_name" 2>/dev/null || true)
+        if [[ -n "$vm_ip" ]]; then
+            webhook_url="http://${vm_ip}:${listen_port}/webhook"
+            log_info "Auto-derived webhook URL: $webhook_url"
+        else
+            read -r -p "Webhook URL where Forgejo can reach this VM (e.g., https://foundry-vm.example.com:8080/webhook): " webhook_url
+        fi
+    fi
+
+    if [[ -z "$webhook_secret" ]]; then
+        read -r -s -p "Enter webhook secret (input hidden, optional): " webhook_secret
+        echo ""
+    fi
+
+    local watcher_agent_type watcher_display_name project_dir
+    if [[ -n "$project_config" ]]; then
+        project_dir=$(dirname "$project_config")
+    fi
+    watcher_agent_type=$(_get_watcher_agent_type "$vm_name" "$project_dir")
+    if [[ -n "$agent_type" ]]; then
+        watcher_agent_type="$agent_type"
+    fi
+    watcher_display_name=$(agent_display_name "$watcher_agent_type")
+
+    local config_content
+    config_content=$(cat <<EOF
+# Forgejo Watcher Configuration
+
+WATCHER_ENABLED=$watcher_enabled
+
+FORGEJO_INSTANCE_URL="$instance_url"
+WATCHED_REPOS="$watched_repos"
+FORGEJO_TOKEN_FILE="/root/.config/forgejo-watcher/token"
+
+WEBHOOK_URL="$webhook_url"
+WEBHOOK_SECRET_FILE="/root/.config/forgejo-watcher/webhook-secret"
+RECEIVER_PORT=$listen_port
+RECEIVER_INTERFACE="0.0.0.0"
+
+AGENT_TIMEOUT=120
+RALPH_TIMEOUT=120
+AGENT_TYPE="$watcher_agent_type"
+AGENT_DISPLAY_NAME="$watcher_display_name"
+
+POST_ERROR_COMMENTS=$post_error_comments
+TRIGGER_KEYWORD="$trigger_keyword"
+DEFAULT_BRANCH="$default_branch"
+FORGEJO_ADMIN_TOKEN_FILE="/root/.config/forgejo-watcher/admin-token"
+EOF
+)
+
+    _write_forgejo_watcher_vm_files "$vm_name" "$config_content" "$token" "$webhook_secret" "$admin_token"
+
+    log_info "Forgejo watcher initialized successfully"
+    log_info "  Instance: $instance_url"
+    log_info "  Watching: $watched_repos"
+    log_info "  Agent type: $watcher_agent_type"
+    log_info "  Receiver port: $listen_port"
+    if [[ -n "$project_config" ]]; then
+        log_info "  Config source: $project_config"
+    fi
+
+    if [[ "$no_register_hooks" != "true" ]]; then
+        log_info ""
+        log_info "Registering webhooks automatically..."
+        if ! agent_forgejo_watcher_register_hooks "$vm_name"; then
+            log_error "Webhook registration failed. You can retry with: foundry agent forgejo-watcher register-hooks $vm_name"
+            return 1
+        fi
+    else
+        log_info ""
+        log_info "Skipped automatic webhook registration."
+        log_info "Register manually with: foundry agent forgejo-watcher register-hooks $vm_name"
+    fi
+
+    log_info ""
+    log_info "Start watcher with: foundry agent forgejo-watcher start $vm_name"
+
+    return 0
+}
+
+agent_forgejo_watcher_start() {
+    local vm_name=""
+    local no_mark_all="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --no-mark-all)
+                no_mark_all="true"
+                ;;
+            --*)
+                log_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                if [[ -z "$vm_name" ]]; then
+                    vm_name="$1"
+                else
+                    log_error "Unexpected argument: $1"
+                    return 1
+                fi
+                ;;
+        esac
+        shift
+    done
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    if ! _ssh_cmd "$vm_name" "test -f /root/.config/forgejo-watcher/config.conf"; then
+        log_error "Forgejo watcher not initialized"
+        log_info "Run: foundry agent forgejo-watcher init $vm_name"
+        return 1
+    fi
+
+    if _ssh_cmd_tty "$vm_name" "tmux has-session -t forgejo-watcher 2>/dev/null"; then
+        log_warn "Forgejo watcher already running in VM '$vm_name'"
+        return 0
+    fi
+
+    if [[ "$no_mark_all" != "true" ]]; then
+        log_info "Marking existing open issues/PRs as processed before start..."
+        agent_forgejo_watcher_mark_all "$vm_name" || {
+            log_warn "mark-all failed, continuing with start anyway"
+        }
+    fi
+
+    log_info "Starting Forgejo watcher in VM '$vm_name'..."
+
+    _sync_forgejo_watcher_scripts "$vm_name" || return 1
+
+    _ssh_cmd_tty "$vm_name" "tmux new-session -d -s forgejo-watcher '/opt/foundry/forgejo/forgejo_watcher.sh start'"
+
+    sleep 1
+    if _ssh_cmd_tty "$vm_name" "tmux has-session -t forgejo-watcher 2>/dev/null"; then
+        log_info "Forgejo watcher started successfully"
+        log_info "  View logs: foundry agent forgejo-watcher logs $vm_name"
+        log_info "  Check status: foundry agent forgejo-watcher status $vm_name"
+        return 0
+    fi
+
+    log_error "Failed to start Forgejo watcher"
+    return 1
+}
+
+agent_forgejo_watcher_stop() {
+    local vm_name="${1:-}"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    log_info "Stopping Forgejo watcher in VM '$vm_name'..."
+
+    _ssh_cmd_tty "$vm_name" "tmux kill-session -t forgejo-watcher 2>/dev/null || true"
+    _ssh_cmd_tty "$vm_name" "tmux kill-session -t forgejo-receiver 2>/dev/null || true"
+
+    log_info "Forgejo watcher stopped"
+    return 0
+}
+
+agent_forgejo_watcher_status() {
+    local vm_name="${1:-}"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    log_info "Fetching Forgejo watcher status from VM '$vm_name'..."
+    echo ""
+
+    echo "Forgejo Watcher Status"
+    echo "======================"
+
+    local config_text enabled watched_repos instance_url listen_port agent_type
+    if config_text=$(_ssh_cmd "$vm_name" "cat /root/.config/forgejo-watcher/config.conf" 2>/dev/null); then
+        enabled=$(printf '%s\n' "$config_text" | sed -n 's/^WATCHER_ENABLED=//p' | tail -1 | tr -d '"')
+        instance_url=$(printf '%s\n' "$config_text" | sed -n 's/^FORGEJO_INSTANCE_URL=//p' | tail -1 | sed 's/^"//; s/"$//')
+        watched_repos=$(printf '%s\n' "$config_text" | sed -n 's/^WATCHED_REPOS=//p' | tail -1 | sed 's/^"//; s/"$//')
+        listen_port=$(printf '%s\n' "$config_text" | sed -n 's/^RECEIVER_PORT=//p' | tail -1 | tr -d '"')
+        agent_type=$(printf '%s\n' "$config_text" | sed -n 's/^AGENT_TYPE=//p' | tail -1 | tr -d '"')
+        echo "Configuration: /root/.config/forgejo-watcher/config.conf"
+        echo "  Enabled: ${enabled:-unknown}"
+        echo "  Instance: ${instance_url:-unknown}"
+        echo "  Repos: ${watched_repos:-unknown}"
+        echo "  Receiver port: ${listen_port:-unknown}"
+        echo "  Agent type: ${agent_type:-unknown}"
+    else
+        echo "Configuration: Not found"
+    fi
+
+    echo ""
+
+    if _ssh_cmd "$vm_name" "tmux has-session -t forgejo-watcher 2>/dev/null"; then
+        echo "Watcher session: RUNNING (tmux: forgejo-watcher)"
+    else
+        echo "Watcher session: NOT RUNNING"
+    fi
+
+    if _ssh_cmd "$vm_name" "tmux has-session -t forgejo-receiver 2>/dev/null"; then
+        echo "Receiver session: RUNNING (tmux: forgejo-receiver)"
+    else
+        echo "Receiver session: NOT RUNNING"
+    fi
+
+    if _ssh_cmd "$vm_name" "tmux has-session -t ralph-loop 2>/dev/null"; then
+        echo "Agent status: WORKING"
+    else
+        echo "Agent status: IDLE"
+    fi
+
+    echo ""
+
+    if _ssh_cmd "$vm_name" "test -f /root/.config/forgejo-watcher/processed.json"; then
+        local processed_count last_poll
+        processed_count=$(_ssh_cmd "$vm_name" "jq '.processed | length' /root/.config/forgejo-watcher/processed.json" 2>/dev/null)
+        last_poll=$(_ssh_cmd "$vm_name" "jq -r '.last_poll' /root/.config/forgejo-watcher/processed.json" 2>/dev/null || true)
+        echo "Processed tasks: ${processed_count:-0}"
+        echo "Last poll: ${last_poll:-unknown}"
+    fi
+}
+
+agent_forgejo_watcher_logs() {
+    local vm_name="$1"
+    local follow=""
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --follow|-f)
+                follow="-f"
+                ;;
+            *)
+                log_warn "Unknown option: $1"
+                ;;
+        esac
+        shift
+    done
+
+    _check_vm_running "$vm_name" || return 1
+
+    local log_path="/root/.config/forgejo-watcher/watcher.log"
+
+    log_info "Viewing Forgejo watcher logs from $log_path"
+    if [[ -n "$follow" ]]; then
+        log_info "Following logs... (Ctrl+C to stop)"
+    fi
+    echo ""
+
+    if ! _ssh_cmd "$vm_name" "test -f '$log_path'"; then
+        log_warn "Log file not found: $log_path"
+        return 0
+    fi
+
+    if [[ -n "$follow" ]]; then
+        local ssh_key
+        ssh_key=$(registry_get "$vm_name" ".ssh_key" 2>/dev/null)
+        ssh_key="${ssh_key%\"}"
+        ssh_key="${ssh_key#\"}"
+        local ssh_key_opt=""
+        if [[ -n "$ssh_key" && "$ssh_key" != "null" ]]; then
+            ssh_key_opt="-i $ssh_key"
+        fi
+        local vm_ip
+        vm_ip=$(_get_vm_ip "$vm_name")
+        exec ssh $ssh_key_opt $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "tail -f '$log_path'"
+    else
+        _ssh_cmd "$vm_name" "tail -100 '$log_path'"
+    fi
+}
+
+agent_forgejo_watcher_reset() {
+    local vm_name="$1"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    log_warn "This will clear all Forgejo watcher state"
+    if ! confirm "Are you sure?"; then
+        log_info "Cancelled"
+        return 0
+    fi
+
+    log_info "Resetting Forgejo watcher state in VM '$vm_name'..."
+
+    _ssh_cmd "$vm_name" "cat > /root/.config/forgejo-watcher/processed.json" <<'EOF'
+{
+  "version": "1.0",
+  "processed": {},
+  "last_poll": "1970-01-01T00:00:00Z"
+}
+EOF
+
+    _ssh_cmd "$vm_name" "rm -f /root/.config/forgejo-watcher/current_task.json /root/.config/forgejo-watcher/current_context.json /root/.config/forgejo-watcher/retries.json /root/.config/forgejo-watcher/run-status.json /root/.config/forgejo-watcher/queue/event-*.json"
+
+    log_info "Forgejo watcher state reset"
+}
+
+agent_forgejo_watcher_mark_all() {
+    local vm_name="${1:-}"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    if ! _ssh_cmd "$vm_name" "test -f /root/.config/forgejo-watcher/config.conf"; then
+        log_error "Forgejo watcher not initialized"
+        log_info "Run: foundry agent forgejo-watcher init $vm_name"
+        return 1
+    fi
+
+    log_info "Marking all open issues and PRs as processed in VM '$vm_name'..."
+
+    local vm_ip ssh_key_path mark_all_script
+    vm_ip=$(_get_vm_ip "$vm_name")
+    ssh_key_path=$(_get_vm_ssh_key "$vm_name")
+    mark_all_script="${AGENT_FOUNDRY_BASE_DIR}/templates/forgejo/forgejo_mark_all.sh"
+
+    if [[ ! -f "$mark_all_script" ]]; then
+        log_error "Mark-all script not found: $mark_all_script"
+        return 1
+    fi
+
+    _scp_to_vm "$vm_ip" "$ssh_key_path" "$mark_all_script" "/tmp/forgejo_mark_all.sh"
+    _ssh_cmd "$vm_name" "chmod +x /tmp/forgejo_mark_all.sh && /tmp/forgejo_mark_all.sh"
+}
+
+agent_forgejo_watcher_register_hooks() {
+    local vm_name="${1:-}"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    if ! _ssh_cmd "$vm_name" "test -f /root/.config/forgejo-watcher/config.conf"; then
+        log_error "Forgejo watcher not initialized"
+        log_info "Run: foundry agent forgejo-watcher init $vm_name"
+        return 1
+    fi
+
+    _sync_forgejo_watcher_scripts "$vm_name" || return 1
+
+    log_info "Registering Forgejo webhooks for VM '$vm_name'..."
+    if ! _ssh_cmd "$vm_name" "/opt/foundry/forgejo/forgejo_hook_manager.sh register"; then
+        log_error "Failed to register Forgejo webhooks"
+        log_info "Hook manager log:"
+        _ssh_cmd "$vm_name" "cat /root/.config/forgejo-watcher/hook-manager.log" || true
+        return 1
+    fi
+
+    log_info "Forgejo webhooks registered"
+}
+
+agent_forgejo_watcher_unregister_hooks() {
+    local vm_name="${1:-}"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    _sync_forgejo_watcher_scripts "$vm_name" || return 1
+
+    log_info "Unregistering Forgejo webhooks for VM '$vm_name'..."
+    if ! _ssh_cmd "$vm_name" "/opt/foundry/forgejo/forgejo_hook_manager.sh unregister"; then
+        log_error "Failed to unregister Forgejo webhooks"
+        log_info "Hook manager log:"
+        _ssh_cmd "$vm_name" "cat /root/.config/forgejo-watcher/hook-manager.log" || true
+        return 1
+    fi
+
+    log_info "Forgejo webhooks unregistered"
+}
+
+# ============================================================================
 # TESTING/EXAMPLES
 # ============================================================================
 #
@@ -1633,4 +2410,13 @@ EOF
 #   foundry agent gh-watcher logs my-project --follow
 #   foundry agent gh-watcher stop my-project
 #   foundry agent gh-watcher reset my-project
+#
+#   # Forgejo Watcher
+#   foundry agent forgejo-watcher init my-project
+#   foundry agent forgejo-watcher register-hooks my-project
+#   foundry agent forgejo-watcher start my-project
+#   foundry agent forgejo-watcher status my-project
+#   foundry agent forgejo-watcher logs my-project --follow
+#   foundry agent forgejo-watcher stop my-project
+#   foundry agent forgejo-watcher unregister-hooks my-project
 #

@@ -324,7 +324,7 @@ EOF
 
     local core_packages=(
         # Base
-        ca-certificates git python3 python3-pip docker.io jq
+        ca-certificates git python3 python3-pip jq zip unzip sqlite3
 
         # System Monitoring
         htop btop ncdu lsof
@@ -336,7 +336,7 @@ EOF
         bat tree vim neovim nano tmux screen
 
         # Networking
-        httpie curl wget iputils-ping net-tools
+        httpie curl wget iputils-ping net-tools socat
 
         # Build & Dev Tools
         build-essential shellcheck
@@ -354,6 +354,31 @@ EOF
 deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main
 EOF
     install_packages "$mount_dir" gh
+
+    log_info "Adding Docker official repository"
+    mkdir -p "$mount_dir/etc/apt/keyrings"
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "$mount_dir/etc/apt/keyrings/docker.asc"
+    chmod a+r "$mount_dir/etc/apt/keyrings/docker.asc"
+    local docker_codename
+    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
+    docker_codename=$(chroot "$mount_dir" /bin/bash -c '. /etc/os-release && echo "$VERSION_CODENAME"')
+    cat > "$mount_dir/etc/apt/sources.list.d/docker.list" <<EOF
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${docker_codename} stable
+EOF
+    chroot "$mount_dir" apt-mark hold systemd
+    install_packages "$mount_dir" docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    chroot "$mount_dir" apt-mark unhold systemd
+
+    # Firecracker kernels lack the iptable_raw module required by Docker's
+    # DIRECT ACCESS FILTERING feature. Disable iptables management so Docker
+    # falls back to plain bridge networking (containers can still talk to each
+    # other; use --network host for host-accessible ports).
+    mkdir -p "$mount_dir/etc/docker"
+    cat > "$mount_dir/etc/docker/daemon.json" <<'EOF'
+{
+    "iptables": false
+}
+EOF
 
     log_info "Installing nvm and Node.js 24"
     # Install nvm
@@ -412,6 +437,43 @@ set -euo pipefail
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local sh
 '
 
+    log_info "Installing bun (JavaScript runtime)"
+    chroot "$mount_dir" /bin/bash -c '
+set -euo pipefail
+curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
+'
+
+    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
+    log_info "Installing yq (YAML processor)"
+    chroot "$mount_dir" /bin/bash -c '
+set -euo pipefail
+curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" -o /usr/local/bin/yq
+chmod +x /usr/local/bin/yq
+'
+
+    log_info "Installing forgejo-cli"
+    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
+    chroot "$mount_dir" /bin/bash -c '
+set -euo pipefail
+download_url=$(curl -fsSL "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases?limit=1" \
+    | jq -r ".[0].assets[] | select(.name | test(\"x86_64-linux\")) | .browser_download_url" \
+    | head -1)
+if [[ -z "$download_url" ]]; then
+    echo "Could not find forgejo-cli x86_64-linux asset" >&2
+    exit 1
+fi
+tmp=$(mktemp -d)
+curl -fsSL "$download_url" | tar -xz -C "$tmp"
+binary=$(find "$tmp" -type f -name "fj" | head -1)
+if [[ -z "$binary" ]]; then
+    echo "Could not find fj binary in archive" >&2
+    rm -rf "$tmp"
+    exit 1
+fi
+install -m 755 "$binary" /usr/local/bin/fj
+rm -rf "$tmp"
+'
+
     log_info "Skipping AI/Ralph CLI installation in golden image"
     log_info "Agent CLIs are installed per-VM from project agents.json during workspace init/sync"
 
@@ -435,6 +497,25 @@ curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local sh
         adapter_src=$(agent_watcher_adapter "$agent")
         adapter_basename=$(basename "$adapter_src")
         install -m 755 "$adapter_src" "$mount_dir/opt/foundry/gh-watcher/$adapter_basename"
+    done
+
+    log_info "Installing Forgejo watcher scripts"
+    chroot "$mount_dir" mkdir -p /opt/foundry/forgejo
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_watcher.sh" "$mount_dir/opt/foundry/forgejo/forgejo_watcher.sh"
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_watcher_common.sh" "$mount_dir/opt/foundry/forgejo/forgejo_watcher_common.sh"
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_receiver.sh" "$mount_dir/opt/foundry/forgejo/forgejo_receiver.sh"
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_hook_manager.sh" "$mount_dir/opt/foundry/forgejo/forgejo_hook_manager.sh"
+    install -m 755 "${ROOT_DIR}/templates/forgejo/forgejo_mark_all.sh" "$mount_dir/opt/foundry/forgejo/forgejo_mark_all.sh"
+
+    # Install Forgejo watcher adapters for every autonomous agent type.
+    for agent in $(agent_autonomous_types); do
+        adapter_src=$(agent_watcher_adapter_for "$agent" forgejo)
+        if [[ -z "$adapter_src" || ! -f "$adapter_src" ]]; then
+            log_debug "No Forgejo watcher adapter found for agent '$agent', skipping"
+            continue
+        fi
+        adapter_basename=$(basename "$adapter_src")
+        install -m 755 "$adapter_src" "$mount_dir/opt/foundry/forgejo/$adapter_basename"
     done
 
     rm -f "$mount_dir/opt/foundry/ralph-agent-type"
