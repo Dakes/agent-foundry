@@ -243,13 +243,10 @@ agent_task_prompt_file() {
 }
 
 # Echoes the default max Ralph iterations for agents that use a loop mode.
-# 0 means "not applicable"; positive values are used directly.
+# 0 means "not applicable".
 agent_max_iterations() {
     local agent="$1"
     case "$agent" in
-        kimi-ralph)
-            echo "100"
-            ;;
         *)
             echo "0"
             ;;

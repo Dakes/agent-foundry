@@ -241,14 +241,14 @@ AGENT_THREAD_KEY="$thread_key"
 AGENT_SESSION_ID="$session_id"
 AGENT_LOG_FILE="$KIMI_LOG_FILE"
 AGENT_TASK_PROMPT_FILE="$KIMI_TASK_PROMPT_FILE"
-AGENT_MAX_ITERATIONS="100"
+AGENT_MAX_ITERATIONS=""
 
 # shellcheck source=/opt/foundry/agent-session.sh
 source /opt/foundry/agent-session.sh 2>/dev/null || true
 
 mkdir -p "\$(dirname "\$AGENT_LOG_FILE")"
 
-kimi_args=(--max-ralph-iterations "\$AGENT_MAX_ITERATIONS")
+kimi_args=()
 if [[ -n "\$AGENT_SESSION_ID" ]]; then
     echo "[INFO] Resuming Kimi session \$AGENT_SESSION_ID for thread \$AGENT_THREAD_KEY" | tee -a "\$AGENT_LOG_FILE"
     kimi_args+=(-S "\$AGENT_SESSION_ID")

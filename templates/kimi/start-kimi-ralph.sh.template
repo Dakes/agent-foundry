@@ -1,7 +1,8 @@
 #!/bin/bash
 # Agent Foundry - Kimi Code CLI (Ralph mode) autonomous agent start script
-# Rendered by lib/agent.sh. Iterations are capped for safety.
-# Supports thread-aware session resumption via AGENT_THREAD_KEY and AGENT_SESSION_ID.
+# Rendered by lib/agent.sh. Supports thread-aware session resumption.
+# Kimi Code CLI (kimi-code) no longer exposes --max-ralph-iterations; loop
+# control is handled by Kimi's own [loop_control] config in ~/.kimi/config.toml.
 
 set -euo pipefail
 
@@ -66,9 +67,7 @@ fi
 mkdir -p "$(dirname "$AGENT_LOG_FILE")"
 
 # Prepare the Kimi invocation.
-kimi_args=(
-    --max-ralph-iterations "$AGENT_MAX_ITERATIONS"
-)
+kimi_args=()
 
 if [[ -n "$AGENT_SESSION_ID" ]]; then
     echo "[INFO] Resuming Kimi session $AGENT_SESSION_ID for thread $AGENT_THREAD_KEY" | tee -a "$AGENT_LOG_FILE"
