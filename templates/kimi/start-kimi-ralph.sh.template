@@ -1,9 +1,56 @@
 #!/bin/bash
 # Agent Foundry - Kimi Code CLI (Ralph mode) autonomous agent start script
 # Rendered by lib/agent.sh. Iterations are capped for safety.
+# Supports thread-aware session resumption via AGENT_THREAD_KEY and AGENT_SESSION_ID.
+
+set -euo pipefail
 
 # Make sure the Kimi Code CLI binary is found.
 export PATH="/root/.kimi-code/bin:/root/.local/bin:/usr/local/bin:$PATH"
+
+AGENT_THREAD_KEY="${AGENT_THREAD_KEY:-}"
+AGENT_SESSION_ID="${AGENT_SESSION_ID:-}"
+
+# Load shared session ledger helpers if available.
+if [[ -f /opt/foundry/agent-session.sh ]]; then
+    # shellcheck source=/opt/foundry/agent-session.sh
+    source /opt/foundry/agent-session.sh
+else
+    AGENT_SESSION_LEDGER="${AGENT_SESSION_LEDGER:-/root/.config/foundry/sessions.json}"
+
+    ensure_agent_session_ledger() {
+        local ledger_dir
+        ledger_dir="$(dirname "$AGENT_SESSION_LEDGER")"
+        [[ -d "$ledger_dir" ]] || mkdir -p "$ledger_dir"
+        [[ -f "$AGENT_SESSION_LEDGER" ]] || jq -n '{version: "1.0", sessions: {}}' > "$AGENT_SESSION_LEDGER"
+    }
+
+    update_agent_session() {
+        local thread_key="$1" agent_type="$2" session_id="$3" status="$4" task_prompt_file="$5" log_file="$6"
+        ensure_agent_session_ledger
+        local now tmp_file
+        now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        tmp_file="$(mktemp)"
+        jq --arg key "$thread_key" --arg agent_type "$agent_type" \
+           --arg session_id "$session_id" --arg status "$status" --arg now "$now" \
+           --arg task_prompt_file "$task_prompt_file" --arg log_file "$log_file" \
+           '.sessions[$key] = {agent_type: $agent_type, session_id: $session_id, status: $status, started_at: (.sessions[$key].started_at // $now), last_active_at: $now, task_prompt_file: $task_prompt_file, log_file: $log_file}' \
+           "$AGENT_SESSION_LEDGER" > "$tmp_file" && mv "$tmp_file" "$AGENT_SESSION_LEDGER"
+    }
+
+    capture_agent_session_id() {
+        local log_file="$1" captured session_dir latest
+        captured="$(grep -oE 'kimi -r[[:space:]]+[A-Za-z0-9_-]+' "$log_file" 2>/dev/null | tail -n 1 | awk '{print $NF}')"
+        [[ -n "$captured" ]] && { echo "$captured"; return 0; }
+        for session_dir in "$HOME/.kimi-code/sessions" "$HOME/.config/kimi-code/sessions" "$HOME/.local/share/kimi-code/sessions"; do
+            if [[ -d "$session_dir" ]]; then
+                latest="$(find "$session_dir" -maxdepth 1 -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n 1 | cut -d' ' -f2-)"
+                [[ -n "$latest" ]] && { basename "$latest"; return 0; }
+            fi
+        done
+        echo ""
+    }
+fi
 
 cd "$AGENT_WORKSPACE" || {
     echo "ERROR: cannot change to workspace $AGENT_WORKSPACE" >&2
@@ -12,8 +59,48 @@ cd "$AGENT_WORKSPACE" || {
 
 if [[ ! -f "$AGENT_TASK_PROMPT_FILE" ]]; then
     echo "ERROR: task prompt not found: $AGENT_TASK_PROMPT_FILE" >&2
-    echo "Create the prompt file or trigger the agent from the GitHub watcher." >&2
+    echo "Create the prompt file or trigger the agent from a watcher." >&2
     exit 1
 fi
 
-exec kimi --max-ralph-iterations "$AGENT_MAX_ITERATIONS" -p "$(cat "$AGENT_TASK_PROMPT_FILE")" 2>&1 | tee -a "$AGENT_LOG_FILE"
+mkdir -p "$(dirname "$AGENT_LOG_FILE")"
+
+# Prepare the Kimi invocation.
+kimi_args=(
+    --max-ralph-iterations "$AGENT_MAX_ITERATIONS"
+)
+
+if [[ -n "$AGENT_SESSION_ID" ]]; then
+    echo "[INFO] Resuming Kimi session $AGENT_SESSION_ID for thread $AGENT_THREAD_KEY" | tee -a "$AGENT_LOG_FILE"
+    kimi_args+=(-S "$AGENT_SESSION_ID")
+fi
+
+kimi_args+=(-p "$(cat "$AGENT_TASK_PROMPT_FILE")")
+
+# AGENT_TYPE, AGENT_THREAD_KEY, AGENT_SESSION_ID, AGENT_LOG_FILE,
+# AGENT_TASK_PROMPT_FILE, and AGENT_MAX_ITERATIONS are exported by the rendered
+# header from lib/agent.sh.
+# shellcheck disable=SC2153
+update_agent_session "$AGENT_THREAD_KEY" "$AGENT_TYPE" "$AGENT_SESSION_ID" "running" "$AGENT_TASK_PROMPT_FILE" "$AGENT_LOG_FILE"
+
+set +e
+kimi "${kimi_args[@]}" 2>&1 | tee -a "$AGENT_LOG_FILE"
+exit_code=${PIPESTATUS[0]}
+set -e
+
+# Capture the session ID for future resume unless we already resumed one.
+if [[ -z "$AGENT_SESSION_ID" && -n "$AGENT_THREAD_KEY" ]]; then
+    AGENT_SESSION_ID="$(capture_agent_session_id "$AGENT_LOG_FILE")"
+fi
+
+if [[ $exit_code -eq 0 ]]; then
+    # shellcheck disable=SC2153
+    update_agent_session "$AGENT_THREAD_KEY" "$AGENT_TYPE" "$AGENT_SESSION_ID" "completed" "$AGENT_TASK_PROMPT_FILE" "$AGENT_LOG_FILE"
+    echo "[INFO] Kimi agent finished successfully" | tee -a "$AGENT_LOG_FILE"
+else
+    # shellcheck disable=SC2153
+    update_agent_session "$AGENT_THREAD_KEY" "$AGENT_TYPE" "$AGENT_SESSION_ID" "failed" "$AGENT_TASK_PROMPT_FILE" "$AGENT_LOG_FILE"
+    echo "[INFO] Kimi agent exited with code $exit_code" | tee -a "$AGENT_LOG_FILE"
+fi
+
+exit $exit_code

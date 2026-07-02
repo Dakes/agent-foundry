@@ -16,6 +16,24 @@ Unlike the GitHub watcher, which polls GitHub's API every 60 seconds, the Forgej
 6. Agent completes the task and creates a PR (or posts an error comment)
 7. Watcher waits for the next webhook event
 
+### Thread Session Resumption
+
+When the configured agent is `kimi-ralph`, the watcher tracks a session ledger inside the VM at `/root/.config/foundry/sessions.json`. Each issue/PR is identified by a thread key such as `owner/repo#42`. On subsequent triggers for the same thread, the watcher resumes the previous Kimi session with `kimi -S <session-id>` instead of starting from scratch.
+
+To see tracked sessions from the host:
+
+```bash
+foundry agent sessions <vm-name>
+```
+
+To manually resume a tracked session:
+
+```bash
+foundry agent resume <vm-name> owner/repo#42
+```
+
+Session resumption is currently enabled for `kimi-ralph`. Ralph adapters (`ralph`, `ralph-orchestrator`) maintain continuity through project files (`PROMPT.md`, `fix_plan.md`) and do not use CLI session IDs. Claude, Codex, and Gemini resume behavior has not been verified yet; they start fresh on each trigger.
+
 ## Quick Start
 
 ### Prerequisites

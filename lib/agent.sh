@@ -219,6 +219,25 @@ _sync_gh_watcher_scripts() {
     done
 
     _ssh_cmd "$vm_name" "chmod 755$chmod_paths" || return 1
+
+    # Ensure shared session ledger helpers are available to watcher adapters.
+    _sync_agent_session_helpers "$vm_name" || return 1
+}
+
+# Sync shared VM-side session ledger helpers into the VM.
+_sync_agent_session_helpers() {
+    local vm_name="$1"
+    local helper_src="$AGENT_FOUNDRY_BASE_DIR/templates/agent-session.sh"
+    local helper_dst="/opt/foundry/agent-session.sh"
+
+    if [[ ! -f "$helper_src" ]]; then
+        log_debug "Agent session helper not found at $helper_src"
+        return 0
+    fi
+
+    _ssh_cmd "$vm_name" "mkdir -p /opt/foundry" || return 1
+    _scp_to_vm_path "$vm_name" "$helper_src" "$helper_dst" || return 1
+    _ssh_cmd "$vm_name" "chmod 644 '$helper_dst'" || return 1
 }
 
 _check_vm_running() {
@@ -505,15 +524,90 @@ EOF
 }
 
 # ============================================================================
+# SESSION LEDGER HELPERS
+# ============================================================================
+
+# Path to the per-VM session ledger inside the guest. The ledger maps a thread
+# key (e.g. owner/repo#42) to the agent-specific session ID used to resume.
+AGENT_SESSION_LEDGER="/root/.config/foundry/sessions.json"
+
+# Ensure the session ledger file exists in the VM.
+_ensure_vm_session_ledger() {
+    local vm_name="$1"
+    _ssh_cmd "$vm_name" "mkdir -p '\$(dirname '$AGENT_SESSION_LEDGER')' && jq -n '{version: \"1.0\", sessions: {}}' > '$AGENT_SESSION_LEDGER'" 2>/dev/null || true
+}
+
+# Echo the session JSON for a thread key, or empty if none.
+_get_vm_session() {
+    local vm_name="$1"
+    local thread_key="$2"
+    _ssh_cmd "$vm_name" "jq -r --arg key '$thread_key' '.sessions[\$key] // empty' '$AGENT_SESSION_LEDGER'" 2>/dev/null
+}
+
+# Echo a compact list of sessions (one JSON object per line).
+_list_vm_sessions() {
+    local vm_name="$1"
+    _ssh_cmd "$vm_name" "jq -c '.sessions // {} | to_entries[]?' '$AGENT_SESSION_LEDGER'" 2>/dev/null
+}
+
+# Build a thread key from repo and issue/PR number.
+_make_thread_key() {
+    local repo="$1"
+    local number="$2"
+    echo "${repo}#${number}"
+}
+
+# ============================================================================
 # AGENT START
 # ============================================================================
 
-# Start an agent in the VM
-# Usage: agent_start <vm_name> [agent_type]
+# Start an agent in the VM.
+# Usage: agent_start <vm_name> [agent_type] [--thread <thread_key>]
 # agent_type: ralph (default), ralph-orchestrator, kimi-ralph, claude, gemini, codex
 agent_start() {
-    local vm_name="${1:-}"
-    local agent_type="${2:-$FOUNDRY_DEFAULT_AGENT}"
+    local vm_name=""
+    local agent_type="$FOUNDRY_DEFAULT_AGENT"
+    local thread_key=""
+
+    # Backward-compatible positional parsing: foundry agent start <vm> [type]
+    if [[ $# -gt 0 && "${1:-}" != --* ]]; then
+        vm_name="$1"
+        shift
+        if [[ $# -gt 0 && "${1:-}" != --* ]]; then
+            agent_type="$1"
+            shift
+        fi
+    fi
+
+    # Option parsing
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread)
+                thread_key="${2:-}"
+                if [[ -z "$thread_key" ]]; then
+                    log_error "--thread requires a value"
+                    return 1
+                fi
+                shift 2
+                ;;
+            --agent-type)
+                agent_type="${2:-$FOUNDRY_DEFAULT_AGENT}"
+                if [[ -z "$agent_type" ]]; then
+                    log_error "--agent-type requires a value"
+                    return 1
+                fi
+                shift 2
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                log_error "Unexpected argument: $1"
+                return 1
+                ;;
+        esac
+    done
 
     if [[ -z "$vm_name" ]]; then
         log_error "VM name required"
@@ -534,6 +628,23 @@ agent_start() {
         return 0
     fi
 
+    # If a thread key was supplied and the agent supports resume, look for an
+    # existing session in the VM ledger.
+    local resume_session_id=""
+    if [[ -n "$thread_key" ]] && agent_supports_resume "$agent_type" 2>/dev/null; then
+        _ensure_vm_session_ledger "$vm_name"
+        local existing_session
+        existing_session=$(_get_vm_session "$vm_name" "$thread_key")
+        if [[ -n "$existing_session" && "$existing_session" != "null" ]]; then
+            resume_session_id=$(echo "$existing_session" | jq -r '.session_id // empty')
+            if [[ -n "$resume_session_id" && "$resume_session_id" != "null" ]]; then
+                log_info "Resuming existing session for $thread_key: $resume_session_id"
+            else
+                resume_session_id=""
+            fi
+        fi
+    fi
+
     log_info "Starting $(agent_display_name "$agent_type") in VM '$vm_name'..."
 
     local workspace_path="${WORKSPACE_BASE}"
@@ -541,7 +652,7 @@ agent_start() {
 
     case "$(agent_category "$agent_type")" in
         autonomous)
-            _start_autonomous_agent "$vm_name" "$workspace_path" "$agent_type"
+            _start_autonomous_agent "$vm_name" "$workspace_path" "$agent_type" "$thread_key" "$resume_session_id"
             rc=$?
             ;;
         interactive)
@@ -559,9 +670,15 @@ agent_start() {
         registry_update "$vm_name" ".agent.type" "\"$agent_type\""
         registry_update "$vm_name" ".agent.status" "\"running\""
         registry_update "$vm_name" ".agent.session" "\"$(agent_session_name "$agent_type")\""
+        if [[ -n "$thread_key" ]]; then
+            registry_update "$vm_name" ".agent.thread_key" "\"$thread_key\""
+        fi
 
         log_info "Agent started successfully"
         log_info "  Type: $agent_type"
+        if [[ -n "$thread_key" ]]; then
+            log_info "  Thread: $thread_key"
+        fi
         log_info "  Attach with: foundry agent attach $vm_name"
     fi
 
@@ -569,11 +686,13 @@ agent_start() {
 }
 
 # Render an autonomous agent start script inside the VM.
-# Usage: _render_autonomous_start_script <vm_name> <workspace_path> <agent_type>
+# Usage: _render_autonomous_start_script <vm_name> <workspace_path> <agent_type> [thread_key] [resume_session_id]
 _render_autonomous_start_script() {
     local vm_name="$1"
     local workspace_path="$2"
     local agent_type="$3"
+    local thread_key="${4:-}"
+    local resume_session_id="${5:-}"
 
     local template_path
     template_path=$(agent_start_template "$agent_type")
@@ -621,6 +740,8 @@ export AGENT_TASK_PROMPT_FILE="$task_prompt_file"
 export AGENT_MAX_ITERATIONS="$max_iterations"
 export AGENT_TIMEOUT_MINUTES="$timeout_minutes"
 export AGENT_RALPH_VARIANT="$ralph_variant"
+export AGENT_THREAD_KEY="$thread_key"
+export AGENT_SESSION_ID="$resume_session_id"
 EOF
 )
 
@@ -640,11 +761,13 @@ EOF
 }
 
 # Start an autonomous agent in a tmux session.
-# Usage: _start_autonomous_agent <vm_name> <workspace_path> <agent_type>
+# Usage: _start_autonomous_agent <vm_name> <workspace_path> <agent_type> [thread_key] [resume_session_id]
 _start_autonomous_agent() {
     local vm_name="$1"
     local workspace_path="$2"
     local agent_type="$3"
+    local thread_key="${4:-}"
+    local resume_session_id="${5:-}"
 
     log_debug "Starting $(agent_display_name "$agent_type") in tmux session..."
 
@@ -722,8 +845,11 @@ _start_autonomous_agent() {
     # Create logs directory if it doesn't exist
     _ssh_cmd "$vm_name" "mkdir -p '$workspace_path/logs'"
 
+    # Ensure shared session ledger helpers are available inside the VM.
+    _sync_agent_session_helpers "$vm_name" || return 1
+
     # Render start script from template.
-    start_script=$(_render_autonomous_start_script "$vm_name" "$workspace_path" "$agent_type")
+    start_script=$(_render_autonomous_start_script "$vm_name" "$workspace_path" "$agent_type" "$thread_key" "$resume_session_id")
     if [[ -z "$start_script" ]]; then
         log_error "Failed to render start script for '$agent_type'"
         return 1
@@ -976,6 +1102,89 @@ agent_status() {
     fi
 
     return 0
+}
+
+# ============================================================================
+# AGENT SESSIONS
+# ============================================================================
+
+# List thread-aware sessions stored in the VM ledger.
+# Usage: agent_sessions <vm_name>
+agent_sessions() {
+    local vm_name="$1"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    if ! _ssh_cmd "$vm_name" "test -f '$AGENT_SESSION_LEDGER'" >/dev/null 2>&1; then
+        echo "No session ledger found for VM '$vm_name'"
+        return 0
+    fi
+
+    echo "Agent sessions for VM: $vm_name"
+    echo ""
+
+    local entries entry key agent_type session_id status last_active
+    entries=$(_list_vm_sessions "$vm_name")
+    if [[ -z "$entries" ]]; then
+        echo "  No tracked sessions"
+        return 0
+    fi
+
+    while IFS= read -r entry; do
+        key=$(echo "$entry" | jq -r '.key')
+        agent_type=$(echo "$entry" | jq -r '.value.agent_type // "unknown"')
+        session_id=$(echo "$entry" | jq -r '.value.session_id // "none"')
+        status=$(echo "$entry" | jq -r '.value.status // "unknown"')
+        last_active=$(echo "$entry" | jq -r '.value.last_active_at // "unknown"')
+        echo "  $key"
+        echo "    Agent: $agent_type"
+        echo "    Session: $session_id"
+        echo "    Status: $status"
+        echo "    Last active: $last_active"
+    done <<< "$entries"
+
+    return 0
+}
+
+# Resume a previously tracked session for a thread.
+# Usage: agent_resume <vm_name> <thread_key>
+agent_resume() {
+    local vm_name="$1"
+    local thread_key="$2"
+
+    if [[ -z "$vm_name" ]]; then
+        log_error "VM name required"
+        return 1
+    fi
+
+    if [[ -z "$thread_key" ]]; then
+        log_error "Thread key required (e.g. owner/repo#42)"
+        return 1
+    fi
+
+    _check_vm_running "$vm_name" || return 1
+
+    local existing_session
+    existing_session=$(_get_vm_session "$vm_name" "$thread_key")
+    if [[ -z "$existing_session" || "$existing_session" == "null" ]]; then
+        log_error "No tracked session for thread '$thread_key' in VM '$vm_name'"
+        return 1
+    fi
+
+    local agent_type
+    agent_type=$(echo "$existing_session" | jq -r '.agent_type // empty')
+    if [[ -z "$agent_type" || "$agent_type" == "null" ]]; then
+        log_error "Session entry for '$thread_key' is missing agent type"
+        return 1
+    fi
+
+    log_info "Resuming $agent_type session for thread '$thread_key'"
+    agent_start "$vm_name" "$agent_type" --thread "$thread_key"
 }
 
 # ============================================================================
@@ -1635,6 +1844,9 @@ _sync_forgejo_watcher_scripts() {
     done
 
     _ssh_cmd "$vm_name" "chmod 755$chmod_paths" || return 1
+
+    # Ensure shared session ledger helpers are available to watcher adapters.
+    _sync_agent_session_helpers "$vm_name" || return 1
 }
 
 _resolve_forgejo_watcher_project_config_path() {

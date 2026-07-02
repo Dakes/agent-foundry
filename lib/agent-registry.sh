@@ -348,3 +348,33 @@ agents_json_identifier_is_valid() {
     local identifier="$1"
     [[ -n "$(agent_type_from_agents_json "$identifier")" ]]
 }
+
+# Returns 0 if the agent type supports thread-aware CLI session resume.
+# Only kimi-ralph is enabled initially; Claude/Codex/Gemini need their
+# resume semantics verified before enabling here.
+agent_supports_resume() {
+    local agent="$1"
+    case "$agent" in
+        kimi-ralph)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Echoes the CLI flag/argument style used to resume a session.
+# Currently only "kimi-session" is returned for kimi-ralph; other agents
+# return "none". Adapters can switch on this value.
+agent_session_resume_style() {
+    local agent="$1"
+    case "$agent" in
+        kimi-ralph)
+            echo "kimi-session"
+            ;;
+        *)
+            echo "none"
+            ;;
+    esac
+}

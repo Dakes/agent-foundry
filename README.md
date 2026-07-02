@@ -224,6 +224,10 @@ Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
 # For NixOS
 nix-shell
 
+# Validate shell scripts
+./scripts/shellcheck.sh
+./scripts/syntax-check.sh
+
 # Run tests
 # (tests are not fully scaffolded yet)
 

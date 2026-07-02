@@ -182,12 +182,15 @@ USAGE:
     foundry agent <action> [args...]
 
 ACTIONS:
-    start <vm> [type]          Start agent (type: ralph, ralph-orchestrator, kimi-ralph, claude, gemini, codex)
+    start <vm> [type] [--thread <key>]
+                               Start agent (type: ralph, ralph-orchestrator, kimi-ralph, claude, gemini, codex)
     stop <vm>                  Stop agent
     restart <vm>               Restart agent
     attach <vm>                Attach to agent session
     status <vm>                Show agent status
     logs <vm> [-f|--follow]    View agent logs
+    sessions <vm>              List tracked thread sessions in the VM
+    resume <vm> <thread-key>   Resume a tracked session for a thread
     enable-autostart <vm>      Enable agent autostart on boot
     disable-autostart <vm>     Disable agent autostart
     gh-watcher <action> <vm>      Manage GitHub watcher (see: foundry agent gh-watcher help)
@@ -204,6 +207,9 @@ AGENT TYPES:
 EXAMPLES:
     foundry agent start my-project ralph
     foundry agent start my-project ralph-orchestrator
+    foundry agent start my-project kimi-ralph --thread owner/repo#42
+    foundry agent sessions my-project
+    foundry agent resume my-project owner/repo#42
     foundry agent attach my-project
     foundry agent logs my-project --follow
     foundry agent stop my-project
@@ -652,6 +658,12 @@ cmd_agent() {
             ;;
         logs|log)
             agent_logs "$@"
+            ;;
+        sessions|session)
+            agent_sessions "$@"
+            ;;
+        resume)
+            agent_resume "$@"
             ;;
         enable-autostart)
             agent_enable_autostart "$@"

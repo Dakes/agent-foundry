@@ -43,12 +43,14 @@ Notes:
 ## Agent Commands
 
 ```bash
-foundry agent start <vm> [type]
+foundry agent start <vm> [type] [--thread <thread-key>]
 foundry agent stop <vm>
 foundry agent restart <vm>
 foundry agent attach <vm>
 foundry agent status <vm>
 foundry agent logs <vm> [-f|--follow]
+foundry agent sessions <vm>
+foundry agent resume <vm> <thread-key>
 foundry agent enable-autostart <vm>
 foundry agent disable-autostart <vm>
 ```
@@ -61,7 +63,12 @@ Agent types:
 - `gemini` - Gemini CLI interactive session
 - `codex` - OpenAI Codex CLI interactive session
 
-Note: each VM may run only one autonomous agent at a time.
+Notes:
+- Each VM may run only one autonomous agent at a time.
+- Use `--thread owner/repo#42` to associate a manual start with an issue/PR thread.
+  On the next start or watcher trigger for the same thread, Kimi will resume its
+  previous session if one exists. Thread session resumption is currently enabled
+  for `kimi-ralph`; other agents start fresh until their resume behavior is verified.
 
 ## GitHub Watcher Commands
 

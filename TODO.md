@@ -336,6 +336,14 @@
     - [ ] Disable systemd service
     - [ ] Remove service file
 
+  - [x] `agent_sessions()` - List tracked thread sessions in VM
+  - [x] `agent_resume()` - Resume a tracked session for a thread
+  - [x] Thread-aware session ledger for `kimi-ralph`
+    - [x] VM-side ledger at `/root/.config/foundry/sessions.json`
+    - [x] Watcher adapters compute thread key and resume existing Kimi sessions
+    - [x] Host CLI `foundry agent sessions` and `foundry agent resume`
+  - [ ] Verify and enable session resumption for claude/codex/gemini
+
 ## Phase 9: Configuration Management
 
 ### Config Module
