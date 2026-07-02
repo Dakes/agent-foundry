@@ -452,27 +452,13 @@ chmod +x /usr/local/bin/yq
 '
 
     log_info "Installing forgejo-cli"
-    # shellcheck disable=SC2016  # Variables should expand in chroot, not host
-    chroot "$mount_dir" /bin/bash -c '
-set -euo pipefail
-download_url=$(curl -fsSL "https://codeberg.org/api/v1/repos/forgejo-contrib/forgejo-cli/releases?limit=1" \
-    | jq -r ".[0].assets[] | select(.name | test(\"x86_64-linux\")) | .browser_download_url" \
-    | head -1)
-if [[ -z "$download_url" ]]; then
-    echo "Could not find forgejo-cli x86_64-linux asset" >&2
-    exit 1
-fi
-tmp=$(mktemp -d)
-curl -fsSL "$download_url" | tar -xz -C "$tmp"
-binary=$(find "$tmp" -type f -name "fj" | head -1)
-if [[ -z "$binary" ]]; then
-    echo "Could not find fj binary in archive" >&2
-    rm -rf "$tmp"
-    exit 1
-fi
-install -m 755 "$binary" /usr/local/bin/fj
-rm -rf "$tmp"
-'
+    local fj_binary
+    fj_binary="$(find "${ROOT_DIR}/binaries/fj/" -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | sort | tail -n 1)"
+    if [[ -z "$fj_binary" ]]; then
+        log_error "No forgejo-cli binary found in ${ROOT_DIR}/binaries/fj/"
+        exit 1
+    fi
+    install -m 755 "${ROOT_DIR}/binaries/fj/${fj_binary}" "$mount_dir/usr/local/bin/fj"
 
     log_info "Skipping AI/Ralph CLI installation in golden image"
     log_info "Agent CLIs are installed per-VM from project agents.json during workspace init/sync"
