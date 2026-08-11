@@ -31,7 +31,7 @@ for script in "${scripts[@]}"; do
         passed=$((passed + 1))
     else
         echo -e "${RED}✗${NC} $script"
-        bash -n "$script" 2>&1 | head -10
+        bash -n "$script" 2>&1 | head -10 || true
         failed=$((failed + 1))
     fi
 done

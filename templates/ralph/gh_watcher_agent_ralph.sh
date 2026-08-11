@@ -2,105 +2,47 @@
 #
 # Adapter for frankbria/ralph-claude-code watcher tasks.
 #
+# Prompt content is built by the shared library at /opt/foundry/prompt-lib.sh
+# so that the execution contract, task modes, and identity string stay
+# identical across every agent and forge. See docs/PROMPT-ARCHITECTURE.md.
+#
 
 set -euo pipefail
 
+FOUNDRY_PROMPT_LIB="${FOUNDRY_PROMPT_LIB:-/opt/foundry/prompt-lib.sh}"
+if [[ -f "$FOUNDRY_PROMPT_LIB" ]]; then
+    # shellcheck source=../prompt-lib.sh
+    source "$FOUNDRY_PROMPT_LIB"
+fi
+
+# ralph-claude-code consumes fix_plan.md as a task checklist.
+FOUNDRY_OBJECTIVE_STYLE="checklist"
+
 prepare_ralph_claude_code_workspace() {
     local context_file="$1"
-    local kind linked_issue_section
-    kind=$(jq -r '.kind' "$context_file")
-    linked_issue_section=""
+    local kind mode
 
-    if [[ "$(jq -r '.linked_issue_number // empty' "$context_file")" != "" ]]; then
-        linked_issue_section=$(cat <<EOF
-## Related Issue
-
-Fixes #$(jq -r '.linked_issue_number' "$context_file"): $(jq -r '.linked_issue_title // ""' "$context_file")
-
-$(jq -r '.linked_issue_body // ""' "$context_file")
-EOF
-)
+    if ! declare -F foundry_build_task_prompt >/dev/null; then
+        log_error "Prompt library missing at $FOUNDRY_PROMPT_LIB"
+        log_error "Re-run: foundry agent gh-watcher init <vm>"
+        return 1
     fi
+
+    kind=$(jq -r '.kind' "$context_file")
 
     mkdir -p "$RALPH_WORKSPACE/.ralph" "$RALPH_WORKSPACE/logs"
 
     case "$kind" in
-        issue)
-            cat > "$RALPH_WORKSPACE/.ralph/fix_plan.md" <<EOF
----
-# Task from Issue #$(jq -r '.number' "$context_file"): $(jq -r '.title' "$context_file")
-
-## Repository Context
-
-**Repository:** $(jq -r '.repo' "$context_file")
-**Issue URL:** $(jq -r '.html_url' "$context_file")
-**Local repo path:** /root/repos/$(jq -r '.repo_name' "$context_file")
-**Created by:** @$(jq -r '.user' "$context_file")
-**Labels:** $(jq -r '.labels | join(", ")' "$context_file")
-
-## Description
-
-$(jq -r '.body' "$context_file")
-
-## Discussion
-
-$(jq -r '.discussion' "$context_file")
-
-## Tasks
-
-- [ ] Navigate to /root/repos/$(jq -r '.repo_name' "$context_file") (or relevant repo if multi-repo change needed)
-- [ ] Analyze requirements from the issue description and discussion
-- [ ] Implement the solution in the correct repository
-- [ ] Run tests and verify functionality
-- [ ] Create a pull request to $(jq -r '.repo' "$context_file") with "Fixes #$(jq -r '.number' "$context_file")" in the description
-- [ ] Ensure the PR title and body clearly explain the changes
-- [ ] Comment on the original issue with a summary of the work. Start the comment with "## Ralph - Task Completed"
-
-## Notes
-
-- This VM may have multiple repos under /root/repos/
-- If changes span multiple repos, create separate PRs for each
-
----
-EOF
+        issue | pr)
+            mode=$(foundry_task_mode "$context_file")
+            log_info "Resolved task mode: $mode (kind: $kind)"
+            foundry_build_task_prompt "$context_file" "$mode" \
+                > "$RALPH_WORKSPACE/.ralph/fix_plan.md" || return 1
             ;;
-        pr)
-            cat > "$RALPH_WORKSPACE/.ralph/fix_plan.md" <<EOF
----
-# Task from PR #$(jq -r '.number' "$context_file"): $(jq -r '.title' "$context_file")
-
-## Repository Context
-
-**Repository:** $(jq -r '.repo' "$context_file")
-**PR URL:** $(jq -r '.html_url' "$context_file")
-**Branch:** $(jq -r '.branch' "$context_file")
-**Local repo path:** /root/repos/$(jq -r '.repo_name' "$context_file")
-**Created by:** @$(jq -r '.user' "$context_file")
-**Trigger type:** $(jq -r '.trigger_type' "$context_file")
-**Trigger comment ID:** $(jq -r '.trigger_comment_id // "n/a"' "$context_file")
-
-## PR Description
-
-$(jq -r '.body' "$context_file")
-
-## Conversation Thread
-
-$(jq -r '.conversation' "$context_file")
-
-${linked_issue_section}
-
-## Tasks
-
-- [ ] Navigate to /root/repos/$(jq -r '.repo_name' "$context_file")
-- [ ] Fetch and checkout branch \`$(jq -r '.branch' "$context_file")\`
-- [ ] Review all PR feedback and address all comments
-- [ ] Make the necessary code changes
-- [ ] Run tests and verify all pass
-- [ ] Push fixes to branch \`$(jq -r '.branch' "$context_file")\`
-- [ ] Comment on the PR with a summary of changes. Start the comment with "## Ralph - Task Completed"
-
----
-EOF
+        pipeline_failure)
+            log_info "Resolved task mode: fix (kind: pipeline_failure)"
+            foundry_build_pipeline_prompt "$context_file" \
+                > "$RALPH_WORKSPACE/.ralph/fix_plan.md" || return 1
             ;;
         *)
             log_error "Unsupported context kind for ralph-claude-code: $kind"

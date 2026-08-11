@@ -38,6 +38,25 @@ agent_display_name() {
     esac
 }
 
+# Echoes the short identity the agent uses when speaking on an issue or PR.
+#
+# This is deliberately separate from agent_display_name: display names are
+# verbose ("Kimi Code CLI (Ralph mode)") and belong in logs, while comment
+# headers need a short, stable name. Every generated prompt and every watcher
+# comment derives its header from this one function, so the name cannot drift
+# between adapters.
+agent_identity_name() {
+    local agent="$1"
+    case "$agent" in
+        ralph|ralph-orchestrator) echo "Ralph" ;;
+        kimi-ralph) echo "Kimi" ;;
+        claude) echo "Claude" ;;
+        gemini) echo "Gemini" ;;
+        codex) echo "Codex" ;;
+        *) echo "Agent" ;;
+    esac
+}
+
 # Echoes "autonomous" or "interactive".
 agent_category() {
     local agent="$1"

@@ -16,6 +16,14 @@ KIMI_TASK_PROMPT_FILE="$KIMI_DOTFOLDER/task_prompt.md"
 KIMI_LOG_FILE="$KIMI_WORKSPACE/logs/kimi-ralph.log"
 KIMI_SESSION_LEDGER="${KIMI_SESSION_LEDGER:-/root/.config/foundry/sessions.json}"
 
+# Shared prompt builder: single source of truth for the execution contract,
+# task modes, and the identity string. See docs/PROMPT-ARCHITECTURE.md.
+FOUNDRY_PROMPT_LIB="${FOUNDRY_PROMPT_LIB:-/opt/foundry/prompt-lib.sh}"
+if [[ -f "$FOUNDRY_PROMPT_LIB" ]]; then
+    # shellcheck source=../prompt-lib.sh
+    source "$FOUNDRY_PROMPT_LIB"
+fi
+
 # Internal: run a command inside the Kimi workspace.
 _kimi_in_workspace() {
     (
@@ -70,6 +78,8 @@ else
 fi
 
 # Compute a thread key from the watcher context file.
+# The argument is optional and defaults to $CONTEXT_FILE.
+# shellcheck disable=SC2120
 _kimi_thread_key() {
     local context_file="${1:-$CONTEXT_FILE}"
     if [[ -z "$context_file" || ! -f "$context_file" ]]; then
@@ -88,79 +98,29 @@ _kimi_thread_key() {
 
 prepare_agent_workspace() {
     local context_file="$1"
-    local kind
+    local kind mode
+
+    if ! declare -F foundry_build_task_prompt >/dev/null; then
+        log_error "Prompt library missing at $FOUNDRY_PROMPT_LIB"
+        log_error "Re-run the watcher init command for this VM"
+        return 1
+    fi
+
     kind=$(jq -r '.kind' "$context_file")
 
     mkdir -p "$KIMI_DOTFOLDER" "$KIMI_WORKSPACE/logs"
 
     case "$kind" in
-        issue)
-            cat > "$KIMI_TASK_PROMPT_FILE" <<EOF
-# Task from Issue #$(jq -r '.number' "$context_file"): $(jq -r '.title' "$context_file")
-
-**Repository:** $(jq -r '.repo' "$context_file")
-**Issue URL:** $(jq -r '.html_url' "$context_file")
-**Local repo path:** /root/repos/$(jq -r '.repo_name' "$context_file")
-**Created by:** @$(jq -r '.user' "$context_file")
-**Labels:** $(jq -r '.labels | join(", ")' "$context_file")
-
-## Description
-
-$(jq -r '.body' "$context_file")
-
-## Discussion
-
-$(jq -r '.discussion' "$context_file")
-
-## Requirements
-
-- Navigate to /root/repos/$(jq -r '.repo_name' "$context_file") (or the correct repo if the change spans multiple repos).
-- Analyze the issue description and discussion.
-- Implement the minimal correct fix or feature.
-- Run relevant tests and verify functionality.
-- Create a pull request to $(jq -r '.repo' "$context_file") with "Fixes #$(jq -r '.number' "$context_file")" in the description.
-- Comment on the original issue with a summary of the work. Start the comment with "## Kimi - Task Completed".
-
-## Notes
-
-- This VM may have multiple repos under /root/repos/.
-- If changes span multiple repos, create separate PRs for each.
-- Prefer to resume the previous session for this issue if one exists.
-EOF
+        issue | pr)
+            mode=$(foundry_task_mode "$context_file")
+            log_info "Resolved task mode: $mode (kind: $kind)"
+            foundry_build_task_prompt "$context_file" "$mode" \
+                > "$KIMI_TASK_PROMPT_FILE" || return 1
             ;;
-        pr)
-            cat > "$KIMI_TASK_PROMPT_FILE" <<EOF
-# Task from PR #$(jq -r '.number' "$context_file"): $(jq -r '.title' "$context_file")
-
-**Repository:** $(jq -r '.repo' "$context_file")
-**PR URL:** $(jq -r '.html_url' "$context_file")
-**Branch:** $(jq -r '.branch' "$context_file")
-**Local repo path:** /root/repos/$(jq -r '.repo_name' "$context_file")
-**Created by:** @$(jq -r '.user' "$context_file")
-**Trigger type:** $(jq -r '.trigger_type' "$context_file")
-
-## PR Description
-
-$(jq -r '.body' "$context_file")
-
-## Conversation Thread
-
-$(jq -r '.conversation' "$context_file")
-
-## Requirements
-
-- Navigate to /root/repos/$(jq -r '.repo_name' "$context_file").
-- Fetch and checkout branch \`$(jq -r '.branch' "$context_file")\`.
-- Address all relevant PR feedback.
-- Make the necessary code changes.
-- Run relevant tests and verify all pass.
-- Push fixes back to branch \`$(jq -r '.branch' "$context_file")\`.
-- Comment on the PR with a summary of changes. Start the comment with "## Kimi - Task Completed".
-
-## Notes
-
-- Prefer to resume the previous session for this PR if one exists.
-EOF
+        pipeline_failure)
+            log_info "Resolved task mode: fix (kind: pipeline_failure)"
+            foundry_build_pipeline_prompt "$context_file" \
+                > "$KIMI_TASK_PROMPT_FILE" || return 1
             ;;
         *)
             log_error "Unsupported context kind for kimi-ralph: $kind"

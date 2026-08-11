@@ -106,6 +106,32 @@ Host System (Arch/NixOS)
 
 For `ralph-orchestrator`, use top-level `ralph.yml` and `PROMPT.md` (see `projects/example-project-orchestrator/`).
 
+## Task Modes
+
+When a watcher triggers an agent from an issue, pull request, or comment, the
+generated prompt carries an explicit **task mode** that decides what the agent
+is allowed to do. State it directly to remove all ambiguity:
+
+```
+/review          read the diff and comment; never pushes or opens a PR
+/implement       new branch, code, pull request
+/fix             push to the existing branch; never opens a new PR
+/answer          comment only; changes nothing
+```
+
+`mode: review` and `@yourbot review` work too. Without a directive the mode is
+inferred from the request's leading verb ("please review this MR" → `review`).
+Requests with no clear intent fall back to a conservative `default` mode that
+does the least destructive thing that satisfies the request.
+
+Every prompt also opens with an execution contract stating that the run is
+headless, and that repo-level `AGENTS.md` / `CLAUDE.md` files are authoritative
+for *how* to build and test but never for *whether* or *what* to do. This is
+what stops agents from trying to open interactive sessions or from
+implementing when asked to review.
+
+See [PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md).
+
 ## Configuration
 
 ### .ralphrc (Two-Tier System)
@@ -215,7 +241,9 @@ Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
 - [VISION.md](docs/VISION.md) - Project goals and philosophy
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Complete architecture overview
 - [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) - Full command reference
+- [PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md) - How agent prompts are built, and the rules that keep them consistent
 - [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) - Ralph integration details
+- [REPO-REVIEW.md](docs/REPO-REVIEW.md) - Review findings and open items
 - [TODO.md](TODO.md) - Implementation roadmap
 
 ## Development
@@ -228,8 +256,9 @@ nix-shell
 ./scripts/shellcheck.sh
 ./scripts/syntax-check.sh
 
-# Run tests
-# (tests are not fully scaffolded yet)
+# Validate prompt architecture and run prompt tests
+./scripts/check-prompts.sh
+./scripts/test-prompt-lib.sh
 
 # Build templates
 ./scripts/build-ubuntu-base.sh

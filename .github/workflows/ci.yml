@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate shell scripts and prompts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck jq
+
+      # AGENTS.md mandates both of these before committing. Nothing enforced
+      # it until now, which is how the ssh -n and prompt-conflict defects
+      # reached main.
+      - name: Bash syntax
+        run: ./scripts/syntax-check.sh
+
+      - name: ShellCheck
+        run: ./scripts/shellcheck.sh
+
+      # Guards the prompt architecture: one identity string, one execution
+      # contract, no inline task instructions in adapters.
+      - name: Prompt architecture
+        run: ./scripts/check-prompts.sh
+
+      - name: Prompt library tests
+        run: ./scripts/test-prompt-lib.sh
+
+      - name: No private keys committed
+        run: |
+          # -I skips binary files: the vendored fj binary contains this
+          # string as a literal in its SSH key parser.
+          if git grep -lIE 'BEGIN (OPENSSH|RSA|EC|DSA|PGP) PRIVATE KEY' -- . ; then
+            echo "::error::A private key is committed to the repository"
+            exit 1
+          fi
+          echo "No private keys found."

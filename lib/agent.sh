@@ -165,6 +165,33 @@ _get_vm_ssh_key() {
     echo "$ssh_key"
 }
 
+# Run a command in the VM with stdin forwarded from the caller.
+#
+# _ssh_cmd passes -n, which redirects stdin from /dev/null. Any caller that
+# pipes or heredocs data into _ssh_cmd therefore sends nothing, and a
+# "cat > file" style command silently produces an EMPTY file. Use this
+# variant whenever the remote command must read stdin.
+_ssh_cmd_stdin() {
+    local vm_name="$1"
+    shift
+
+    local vm_ip ssh_key
+    vm_ip=$(registry_get "$vm_name" ".ip")
+    ssh_key=$(registry_get "$vm_name" ".ssh_key")
+
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
+
+    local quoted_cmd
+    printf -v quoted_cmd '%q ' "$@"
+
+    if [[ -z "$ssh_key" || "$ssh_key" == "null" ]]; then
+        ssh $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
+    else
+        ssh -i "$ssh_key" $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
+    fi
+}
+
 _scp_to_vm_path() {
     local vm_name="$1"
     local source="$2"
@@ -220,8 +247,27 @@ _sync_gh_watcher_scripts() {
 
     _ssh_cmd "$vm_name" "chmod 755$chmod_paths" || return 1
 
-    # Ensure shared session ledger helpers are available to watcher adapters.
+    # Ensure shared helpers are available to watcher adapters.
+    _sync_prompt_lib "$vm_name" || return 1
     _sync_agent_session_helpers "$vm_name" || return 1
+}
+
+# Sync the shared VM-side prompt builder into the VM. Every watcher adapter
+# sources this, so it must be present before any watcher can run.
+_sync_prompt_lib() {
+    local vm_name="$1"
+    local lib_src="$AGENT_FOUNDRY_BASE_DIR/templates/prompt-lib.sh"
+    local lib_dst="/opt/foundry/prompt-lib.sh"
+
+    if [[ ! -f "$lib_src" ]]; then
+        log_error "Prompt library not found at $lib_src"
+        log_error "The installation is incomplete; re-run ./install.sh"
+        return 1
+    fi
+
+    _ssh_cmd "$vm_name" "mkdir -p /opt/foundry" || return 1
+    _scp_to_vm_path "$vm_name" "$lib_src" "$lib_dst" || return 1
+    _ssh_cmd "$vm_name" "chmod 644 '$lib_dst'" || return 1
 }
 
 # Sync shared VM-side session ledger helpers into the VM.
@@ -1366,7 +1412,7 @@ EOF
 )
 
     # Install service
-    echo "$service_content" | _ssh_cmd "$vm_name" "cat > /etc/systemd/system/foundry-agent.service"
+    echo "$service_content" | _ssh_cmd_stdin "$vm_name" "cat > /etc/systemd/system/foundry-agent.service"
 
     # Enable and start
     _ssh_cmd "$vm_name" "systemctl daemon-reload"
@@ -1472,12 +1518,13 @@ agent_gh_watcher_init() {
         fi
     fi
 
-    local watcher_agent_type watcher_display_name project_dir
+    local watcher_agent_type watcher_display_name watcher_identity project_dir
     if [[ -n "$project_config" ]]; then
         project_dir=$(dirname "$project_config")
     fi
     watcher_agent_type=$(_get_watcher_agent_type "$vm_name" "$project_dir")
     watcher_display_name=$(agent_display_name "$watcher_agent_type")
+    watcher_identity=$(agent_identity_name "$watcher_agent_type")
 
     # Create config file
     local config_content
@@ -1502,6 +1549,9 @@ AGENT_TIMEOUT=$ralph_timeout
 # Autonomous agent type that will handle triggered tasks
 AGENT_TYPE="$watcher_agent_type"
 AGENT_DISPLAY_NAME="$watcher_display_name"
+
+# Short identity used in issue/PR comment headers (see agent_identity_name).
+AGENT_IDENTITY="$watcher_identity"
 
 # Legacy Ralph timeout (kept for backward compatibility)
 RALPH_TIMEOUT=$ralph_timeout
@@ -1789,7 +1839,7 @@ agent_gh_watcher_reset() {
     log_info "Resetting GitHub watcher state in VM '$vm_name'..."
 
     # Reset processed.json
-    _ssh_cmd "$vm_name" "cat > /root/.config/gh-watcher/processed.json" <<'EOF'
+    _ssh_cmd_stdin "$vm_name" "cat > /root/.config/gh-watcher/processed.json" <<'EOF'
 {
   "version": "1.0",
   "processed": {},
@@ -1845,7 +1895,8 @@ _sync_forgejo_watcher_scripts() {
 
     _ssh_cmd "$vm_name" "chmod 755$chmod_paths" || return 1
 
-    # Ensure shared session ledger helpers are available to watcher adapters.
+    # Ensure shared helpers are available to watcher adapters.
+    _sync_prompt_lib "$vm_name" || return 1
     _sync_agent_session_helpers "$vm_name" || return 1
 }
 
@@ -2029,11 +2080,12 @@ _write_forgejo_watcher_vm_files() {
     tmp_admin_token=""
 
     cleanup_vm_files() {
-        [[ -n "$tmp_config" ]] && rm -f "$tmp_config" || true
-        [[ -n "$tmp_processed" ]] && rm -f "$tmp_processed" || true
-        [[ -n "$tmp_token" ]] && rm -f "$tmp_token" || true
-        [[ -n "$tmp_secret" ]] && rm -f "$tmp_secret" || true
-        [[ -n "$tmp_admin_token" ]] && rm -f "$tmp_admin_token" || true
+        local f
+        for f in "$tmp_config" "$tmp_processed" "$tmp_token" \
+                 "$tmp_secret" "$tmp_admin_token"; do
+            [[ -n "$f" ]] || continue
+            rm -f "$f"
+        done
         return 0
     }
     trap cleanup_vm_files EXIT
@@ -2198,7 +2250,7 @@ agent_forgejo_watcher_init() {
         echo ""
     fi
 
-    local watcher_agent_type watcher_display_name project_dir
+    local watcher_agent_type watcher_display_name watcher_identity project_dir
     if [[ -n "$project_config" ]]; then
         project_dir=$(dirname "$project_config")
     fi
@@ -2207,6 +2259,7 @@ agent_forgejo_watcher_init() {
         watcher_agent_type="$agent_type"
     fi
     watcher_display_name=$(agent_display_name "$watcher_agent_type")
+    watcher_identity=$(agent_identity_name "$watcher_agent_type")
 
     local config_content
     config_content=$(cat <<EOF
@@ -2227,6 +2280,9 @@ AGENT_TIMEOUT=120
 RALPH_TIMEOUT=120
 AGENT_TYPE="$watcher_agent_type"
 AGENT_DISPLAY_NAME="$watcher_display_name"
+
+# Short identity used in issue/PR comment headers (see agent_identity_name).
+AGENT_IDENTITY="$watcher_identity"
 
 POST_ERROR_COMMENTS=$post_error_comments
 TRIGGER_KEYWORD="$trigger_keyword"
@@ -2488,7 +2544,7 @@ agent_forgejo_watcher_reset() {
 
     log_info "Resetting Forgejo watcher state in VM '$vm_name'..."
 
-    _ssh_cmd "$vm_name" "cat > /root/.config/forgejo-watcher/processed.json" <<'EOF'
+    _ssh_cmd_stdin "$vm_name" "cat > /root/.config/forgejo-watcher/processed.json" <<'EOF'
 {
   "version": "1.0",
   "processed": {},

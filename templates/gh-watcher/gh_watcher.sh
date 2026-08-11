@@ -535,7 +535,7 @@ post_error_comment() {
 
     local comment_body
     comment_body=$(cat <<EOF
-## 🤖 $AGENT_DISPLAY_NAME - Task Update (Error)
+## 🤖 ${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME:-Agent}} - Task Update (Error)
 
 I encountered an issue while working on this task and couldn't complete it automatically.
 

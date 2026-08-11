@@ -110,6 +110,33 @@ _ssh_cmd() {
     fi
 }
 
+# Run a command in the VM with stdin forwarded from the caller.
+#
+# _ssh_cmd passes -n, which redirects stdin from /dev/null. Any caller that
+# pipes or heredocs data into _ssh_cmd therefore sends nothing, and a
+# "cat > file" style command silently produces an EMPTY file. Use this
+# variant whenever the remote command must read stdin.
+_ssh_cmd_stdin() {
+    local vm_name="$1"
+    shift
+
+    local vm_ip ssh_key
+    vm_ip=$(registry_get "$vm_name" ".ip")
+    ssh_key=$(registry_get "$vm_name" ".ssh_key")
+
+    ssh_key="${ssh_key%\"}"
+    ssh_key="${ssh_key#\"}"
+
+    local quoted_cmd
+    printf -v quoted_cmd '%q ' "$@"
+
+    if [[ -z "$ssh_key" || "$ssh_key" == "null" ]]; then
+        ssh $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
+    else
+        ssh -i "$ssh_key" $FOUNDRY_SSH_OPTS "${FOUNDRY_SSH_USER}@${vm_ip}" "bash -l -c ${quoted_cmd}"
+    fi
+}
+
 _scp_to_vm() {
     local vm_ip="$1"
     local ssh_key_path="$2"
@@ -201,7 +228,10 @@ _setup_ssh_keys() {
             vm_key_name="$(basename "$ssh_key")"
 
             # Copy private key to VM
-            _scp_to_vm "$vm_ip" "$ssh_key_path" "$key_path" "/root/.ssh/$vm_key_name"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$key_path" "/root/.ssh/$vm_key_name" || {
+                log_error "Failed to copy SSH key to VM"
+                return 1
+            }
             _ssh_cmd "$vm_name" "chmod 600 /root/.ssh/$vm_key_name"
 
             copied_keys+=("$ssh_key")
@@ -226,7 +256,10 @@ _setup_ssh_keys() {
     local temp_config
     temp_config=$(mktemp)
     echo -e "$ssh_config_content" > "$temp_config"
-    _scp_to_vm "$vm_ip" "$ssh_key_path" "$temp_config" "/root/.ssh/config"
+    _scp_to_vm "$vm_ip" "$ssh_key_path" "$temp_config" "/root/.ssh/config" || {
+        log_error "Failed to write SSH config to VM"
+        return 1
+    }
     rm -f "$temp_config"
     _ssh_cmd "$vm_name" "chmod 600 /root/.ssh/config"
 
@@ -642,7 +675,10 @@ workspace_init() {
 
         if [[ -n "$dotfolder" && -d "$project_dir/$dotfolder" ]]; then
             log_debug "Copying $dotfolder/ to VM..."
-            _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$dotfolder" "$workspace_path/"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$dotfolder" "$workspace_path/" || {
+                log_error "Failed to copy $dotfolder to VM"
+                return 1
+            }
         fi
     done <<< "$agents_list"
 
@@ -654,7 +690,10 @@ workspace_init() {
         while IFS= read -r md_file; do
             local filename
             filename=$(basename "$md_file")
-            _scp_to_vm "$vm_ip" "$ssh_key_path" "$md_file" "$workspace_path/$filename"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$md_file" "$workspace_path/$filename" || {
+                log_error "Failed to copy $filename to VM"
+                return 1
+            }
             log_debug "Copied $filename"
         done <<< "$md_files"
     fi
@@ -668,7 +707,10 @@ workspace_init() {
             while IFS= read -r ralph_yaml; do
                 local filename
                 filename=$(basename "$ralph_yaml")
-                _scp_to_vm "$vm_ip" "$ssh_key_path" "$ralph_yaml" "$workspace_path/$filename"
+                _scp_to_vm "$vm_ip" "$ssh_key_path" "$ralph_yaml" "$workspace_path/$filename" || {
+                    log_error "Failed to copy $filename to VM"
+                    return 1
+                }
                 log_debug "Copied $filename"
             done <<< "$ralph_yaml_files"
         else
@@ -756,7 +798,10 @@ workspace_sync() {
         if [[ -d "$project_dir/$dotfolder" ]]; then
             log_info "Syncing $dotfolder/"
             _ssh_cmd "$vm_name" "mkdir -p '$workspace_path/$dotfolder'"
-            _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$dotfolder/." "$workspace_path/$dotfolder/"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$dotfolder/." "$workspace_path/$dotfolder/" || {
+                log_error "Failed to sync $dotfolder to VM"
+                return 1
+            }
             # Remove editor temp/swap files after sync.
             _ssh_cmd "$vm_name" "find '$workspace_path/$dotfolder' -type f \
                 \\( -name '*.swp' -o -name '*.swo' -o -name '*.swn' -o -name '*.kate-swp' -o -name '*~' -o -name '.#*' -o -name '#*#' \\) \
@@ -772,7 +817,10 @@ workspace_sync() {
     for config_file in "${config_files[@]}"; do
         if [[ -f "$project_dir/$config_file" ]]; then
             log_info "Syncing $config_file"
-            _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$config_file" "$workspace_path/$config_file"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$project_dir/$config_file" "$workspace_path/$config_file" || {
+                log_error "Failed to sync $config_file to VM"
+                return 1
+            }
         fi
     done
 
@@ -784,7 +832,10 @@ workspace_sync() {
         while IFS= read -r ralph_yaml; do
             local filename
             filename=$(basename "$ralph_yaml")
-            _scp_to_vm "$vm_ip" "$ssh_key_path" "$ralph_yaml" "$workspace_path/$filename"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$ralph_yaml" "$workspace_path/$filename" || {
+                log_error "Failed to sync $filename to VM"
+                return 1
+            }
         done <<< "$ralph_yaml_files"
     fi
 
@@ -796,7 +847,10 @@ workspace_sync() {
         while IFS= read -r md_file; do
             local filename
             filename=$(basename "$md_file")
-            _scp_to_vm "$vm_ip" "$ssh_key_path" "$md_file" "$workspace_path/$filename"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$md_file" "$workspace_path/$filename" || {
+                log_error "Failed to sync $filename to VM"
+                return 1
+            }
         done <<< "$md_files"
     fi
 
@@ -907,7 +961,10 @@ _copy_context_files() {
             local vm_ip ssh_key_path
             vm_ip=$(_get_vm_ip "$vm_name")
             ssh_key_path=$(_get_vm_ssh_key "$vm_name")
-            _scp_to_vm "$vm_ip" "$ssh_key_path" "$template" "${workspace_path}/context/${file}"
+            _scp_to_vm "$vm_ip" "$ssh_key_path" "$template" "${workspace_path}/context/${file}" || {
+                log_error "Failed to copy context template ${file} to VM"
+                return 1
+            }
             log_debug "Copied $file"
         else
             # Create placeholder if template doesn't exist
@@ -930,7 +987,7 @@ _init_memory_files() {
     timestamp=$(date -Iseconds)
 
     # decisions.md
-    _ssh_cmd "$vm_name" "cat > '${workspace_path}/memory/decisions.md'" << EOF
+    _ssh_cmd_stdin "$vm_name" "cat > '${workspace_path}/memory/decisions.md'" << EOF
 # Design Decisions
 
 Track important technical decisions made during development.
@@ -948,7 +1005,7 @@ Track important technical decisions made during development.
 EOF
 
     # progress.md
-    _ssh_cmd "$vm_name" "cat > '${workspace_path}/memory/progress.md'" << EOF
+    _ssh_cmd_stdin "$vm_name" "cat > '${workspace_path}/memory/progress.md'" << EOF
 # Work Progress
 
 Track completed work and milestones.
@@ -967,7 +1024,7 @@ Track completed work and milestones.
 EOF
 
     # blockers.md
-    _ssh_cmd "$vm_name" "cat > '${workspace_path}/memory/blockers.md'" << EOF
+    _ssh_cmd_stdin "$vm_name" "cat > '${workspace_path}/memory/blockers.md'" << EOF
 # Current Blockers
 
 Track issues blocking progress and their resolution.
@@ -984,7 +1041,7 @@ Track issues blocking progress and their resolution.
 EOF
 
     # learnings.md
-    _ssh_cmd "$vm_name" "cat > '${workspace_path}/memory/learnings.md'" << EOF
+    _ssh_cmd_stdin "$vm_name" "cat > '${workspace_path}/memory/learnings.md'" << EOF
 # Patterns & Learnings
 
 Track patterns discovered and lessons learned about this codebase.

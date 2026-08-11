@@ -298,7 +298,10 @@ install_foundry() {
     # Copy template files if they exist
     if [[ -d "${PROJECT_ROOT}/templates" ]]; then
         log_info "Installing template files..."
-        cp -r "${PROJECT_ROOT}"/templates/* "$CONFIG_DIR/" 2>/dev/null || true
+        if ! cp -r "${PROJECT_ROOT}"/templates/* "$CONFIG_DIR/"; then
+            log_error "Failed to copy templates to $CONFIG_DIR"
+            exit 1
+        fi
     fi
 
     # Create registry file if it doesn't exist

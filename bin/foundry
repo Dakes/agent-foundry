@@ -71,7 +71,7 @@ export COLOR_OUTPUT="${COLOR_OUTPUT:-true}"
 
 # Version (read from VERSION file, fallback to 0.1.0)
 if [[ -f "${FOUNDRY_BASE}/VERSION" ]]; then
-    FOUNDRY_VERSION=$(cat "${FOUNDRY_BASE}/VERSION" | tr -d '[:space:]')
+    FOUNDRY_VERSION=$(tr -d '[:space:]' < "${FOUNDRY_BASE}/VERSION")
 else
     FOUNDRY_VERSION="0.1.0"
 fi

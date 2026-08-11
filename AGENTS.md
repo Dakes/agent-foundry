@@ -105,6 +105,38 @@ When a command runs a helper inside a VM or container, the **host CLI must print
 
 If a remote helper writes a detailed error to `/root/.config/.../some.log`, the host CLI should tail or cat that log when the helper exits non-zero, so the user sees the root cause in the same terminal where they ran the command.
 
+# Prompt Construction
+
+Agent prompts are assembled by `templates/prompt-lib.sh` and nowhere else. It
+is the single source of truth for the execution contract, task modes, the
+identity string, and section ordering.
+
+Rules, enforced by `./scripts/check-prompts.sh`:
+
+1. **Never hardcode an identity or completion header.** Derive it from
+   `agent_identity_name()` via `AGENT_IDENTITY`.
+2. **Never write task instructions in an adapter.** Adapters resolve the mode,
+   call `foundry_build_task_prompt`, and write the result. Nothing else.
+3. **Durable files answer "how", never "whether" or "what".** `AGENT.md` holds
+   build, test, and style information. Mission statements, comment formats,
+   workflow rules, and repository paths belong in the per-task prompt.
+4. **Every task mode must state explicit prohibitions.** Agents fail by doing a
+   plausible adjacent action, not by doing nothing. "Do not open a pull
+   request" is worth more than any amount of positive instruction.
+5. **Instructions precede reference material.** Background goes last, labelled
+   as background.
+
+Full reasoning: `docs/PROMPT-ARCHITECTURE.md`.
+
 # Validation
 
-Run `./scripts/shellcheck.sh` and `./scripts/syntax-check.sh` before committing.
+Run all four before committing:
+
+```bash
+./scripts/syntax-check.sh
+./scripts/shellcheck.sh
+./scripts/check-prompts.sh
+./scripts/test-prompt-lib.sh
+```
+
+CI runs the same set on every pull request (`.github/workflows/ci.yml`).

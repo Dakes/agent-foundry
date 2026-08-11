@@ -383,8 +383,10 @@ When building cross-service features:
 ❌ **Mistake:** Ignoring architectural decisions from decisions.md
 ✅ **Fix:** Follow established patterns, document exceptions
 
-❌ **Mistake:** Working on wrong task because PROMPT.md wasn't clear
-✅ **Fix:** Ask clarifying questions, update PROMPT.md if needed
+❌ **Mistake:** Working on wrong task because the request wasn't clear
+✅ **Fix:** State the ambiguity in a comment and stop. Agents run headless —
+they cannot ask a question and wait for an answer. Re-trigger with a clearer
+request, or use an explicit mode directive such as `/review`.
 
 ## Monitoring Agent Progress
 
