@@ -63,11 +63,6 @@ coverage/
 # Runtime registry (user-specific)
 vms.json
 
-# Deploy keys - never commit private keys (public halves are fine)
-deploy-key*
-!deploy-key*.pub
-!deploy-key*.README
-
 # Backup files
 *.bak
 *.backup

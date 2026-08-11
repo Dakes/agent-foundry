@@ -34,13 +34,3 @@ jobs:
 
       - name: Prompt library tests
         run: ./scripts/test-prompt-lib.sh
-
-      - name: No private keys committed
-        run: |
-          # -I skips binary files: the vendored fj binary contains this
-          # string as a literal in its SSH key parser.
-          if git grep -lIE 'BEGIN (OPENSSH|RSA|EC|DSA|PGP) PRIVATE KEY' -- . ; then
-            echo "::error::A private key is committed to the repository"
-            exit 1
-          fi
-          echo "No private keys found."

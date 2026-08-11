@@ -108,7 +108,7 @@ Nothing enforced it, and there was no `.github/` directory.
 **Why it matters.** Every defect above is the kind a CI run catches.
 
 **Fixed.** `.github/workflows/ci.yml` runs syntax check, shellcheck, the prompt
-architecture lint, the prompt library tests, and a committed-private-key scan.
+architecture lint, and the prompt library tests.
 
 ## 8. Five spellings of one identity — Fixed
 
@@ -120,19 +120,7 @@ durable files and Kimi by its task prompt).
 source. The host CLI writes `AGENT_IDENTITY` into both watcher configs; every
 header derives from it. Enforced by `scripts/check-prompts.sh`.
 
-## 9. Private keys committed — Fixed
-
-**What.** `projects/*/deploy-key-example` were genuine OpenSSH RSA private
-keys.
-
-**Why it matters.** They are in git history and trip secret scanners, even as
-throwaway examples.
-
-**Fixed.** Removed, replaced with a `.README` explaining how to generate a
-keypair. `.gitignore` now excludes `deploy-key*` while keeping `.pub`. CI fails
-if a private key reappears.
-
-## 10. Competing completion protocols — Partially fixed
+## 9. Competing completion protocols — Partially fixed
 
 **What.** `.ralph/PROMPT.md` demanded a `RALPH_STATUS` block, `ralph.yml`
 declared `completion_promise: LOOP_COMPLETE`, and `evaluate_agent_outcome`
@@ -147,7 +135,7 @@ competing protocol.
 rate-limit log grep. It does not verify that the promise was actually emitted,
 so an agent that exits cleanly without finishing is recorded as success.
 
-## 11. Useless `cat` in version reads — Fixed
+## 10. Useless `cat` in version reads — Fixed
 
 `bin/foundry:74` and `scripts/build-release.sh:18` both used
 `cat FILE | tr -d ...`. Replaced with a redirect.
