@@ -5,10 +5,9 @@
 # The project-centric CLI: init, up, down, status, logs, attach, shell, rm,
 # doctor, policy, image.
 #
-# The old noun domains (vm, agent, workspace, network, template, host) are
-# deprecated and remain only for one release. Everything they did is either
-# folded into these verbs or gone entirely because the sandbox model removed
-# the need for it.
+# These replaced the old noun domains (vm, agent, workspace, network, template,
+# host): everything they did is either folded into these verbs or gone
+# entirely, because the sandbox model removed the need for it.
 #
 # 'up' is idempotent reconciliation: it makes reality match foundry.json.
 # That property is what lets restart / sync / register-hooks / mark-all /

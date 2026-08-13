@@ -2,237 +2,157 @@
 
 ## Overview
 
-Agent Foundry is a framework for managing isolated Firecracker microVMs that run AI coding agents autonomously. Each VM is a self-contained development environment where agents can work 24/7 on projects without host system pollution.
+Agent Foundry manages isolated [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/)
+that run AI coding agents. Each project gets one sandbox and one host directory
+— the *volume root* — that is bind-mounted into it. Agents work without
+polluting the host, while the files they produce stay ordinary host files.
 
 ## Core Principles
 
-1. **Isolation** - Each project gets its own VM, no cross-contamination
-2. **Reproducibility** - VMs built from scripts, snapshots for reuse
-3. **Autonomy** - Agents run unattended with an autonomous agent backend (ralph-claude-code, ralph-orchestrator, or kimi-ralph)
-4. **Flexibility** - Support multiple AI CLIs and concurrent VMs
-5. **Portability** - System-agnostic host, works on any Linux
+1. **Isolation** — one sandbox per project, no cross-contamination
+2. **The volume root is the workspace** — a live-mounted host directory, not a
+   copy that needs syncing
+3. **Idempotent reconciliation** — `foundry up` makes reality match
+   `foundry.json`; run it any time
+4. **Autonomy** — agents run unattended in a tmux session inside the sandbox
+5. **Reviewable egress** — the network posture is policy, and every project
+   exception is written back into the project's config
 
-## Three-Layer Architecture
+## Two-Layer Architecture
 
-### Layer 1: Host System
-- Any Linux with KVM/Firecracker support (NixOS, Ubuntu, Arch, etc.)
-- Provides: Firecracker, networking (TAP devices), VM storage
-- Framework CLI (`foundry`) manages everything from host
+### Layer 1: Host
 
-### Layer 2: VM Templates
-- **Base template**: Official Firecracker Ubuntu 22.04 rootfs + kernel
-- **Golden template**: Base + AI tools + authentication
-- **Custom snapshots**: User-customized for specific needs
+- Any Linux with Docker Sandboxes (`sbx`) installed. No KVM, no TAP devices,
+  no golden image: sandboxes are containers.
+- The `foundry` CLI manages sandboxes, network policy, volume roots and agents.
+- Holds every piece of durable state, because the volume root lives here.
 
-### Layer 3: Workspaces
-- Self-contained project environments inside VMs
-- Contains: repos, context files, agent memory, skills
-- Portable across VMs, git-friendly structure
+### Layer 2: Sandbox
 
-## Template System
+- One container per project, created from the agent image.
+- The volume root is mounted **at the same absolute path it has on the host**,
+  so a path is valid on both sides — this is what removes the whole
+  copy-in/copy-out layer the VM backend needed.
+- Runs as an unprivileged user whose UID/GID match the host user's, so files
+  written into the mount stay editable on the host.
 
-### Base Template (`ubuntu-base.ext4`)
-- Downloaded from official Firecracker resource bucket
-- Ubuntu 22.04 with essential cloud-init and networking
-- SSH enabled with key-based auth
-- No AI tools yet - pure OS foundation
-- Built once, rarely updated
+## The Agent Image
 
-### Golden Template (`golden.ext4`)
-- Base template + AI development stack
-- Pre-installed: Claude Code CLI, Gemini CLI, OpenAI CLI
-- Exactly one autonomous agent variant installed per image (`ralph-claude-code`, `ralph-orchestrator`, or `kimi-ralph`)
-- Per-VM SSH keys for git authentication (generated at VM create time)
-- Docker, Node.js, Python 3, development tools
-- This is what users actually clone
+Built from `docker/foundry-agent.Dockerfile`, replacing the old
+base/golden/snapshot template pipeline. It carries **binaries only** — every
+piece of per-project state (auth, agent memory, prompts, repos) lives in the
+mounted volume root, so nothing needs baking per project.
 
-### User Snapshots
-- Golden template + company/project customizations
-- Custom packages from `packages.txt`
-- Company context files pre-loaded
-- Additional tools for specific workflows
-- Users create these for reuse
+- `foundry-agent:base` — git, tmux, node, gh, jq, ripgrep, plus the interactive
+  CLIs (claude, gemini, codex). This is what most projects use.
+- `foundry-agent:<variant>` — the above plus exactly one autonomous runner
+  (`ralph`, `ralph-orchestrator`, `kimi-ralph`).
 
-## Networking Architecture
+`foundry image build` also imports the result into the sandbox runtime's own
+image store, which is separate from the local docker daemon's.
 
-### TAP-Based Networking Model
-- Host gateway: `172.16.0.1/24`
-- VM IP pool: `172.16.0.10-254` (245 VMs max)
-- Each VM gets dedicated TAP device: `tap-agent-01`, `tap-agent-02`, etc.
-- Static IP assignment inside VM
-- NAT for internet access
-- Direct SSH access: `ssh root@172.16.0.X`
+## Network Architecture
 
-### Network Lifecycle
-1. VM Creation: Allocate IP, create TAP device, configure VM
-2. VM Destruction: Delete TAP device, release IP, update registry
+There is no host-managed network: no TAP devices, no IP pool, no NAT. What
+Foundry manages instead is the **egress policy** enforced by the sandbox
+proxy.
 
-### VM Registry
-Located at `~/.config/foundry/vms.json`:
-```json
-{
-  "vms": {
-    "my-project": {
-      "ip": "172.16.0.11",
-      "tap": "tap-agent-01",
-      "disk": "/path/to/my-project.ext4",
-      "status": "running",
-      "pid": 12345
-    }
-  },
-  "network": {
-    "next_ip": "172.16.0.12",
-    "next_tap_id": 2
-  }
-}
-```
+- The global policy is initialized `allow-all`, then every private, loopback
+  and link-local range is explicitly denied.
+- Result: the open internet is reachable — including a self-hosted forge on a
+  public URL — while the LAN and the host are not.
+- Per-project holes are derived from the project's git remotes and written
+  back into `foundry.json`, so every exception is reviewable in a diff.
+- Non-HTTP TCP (git over SSH on `:22`) needs an explicit `host:22` rule. UDP
+  and ICMP are blocked at the network layer and cannot be allowed.
+- These rules govern *egress only*: a service the agent starts on its own
+  loopback inside the sandbox is unaffected.
 
-## Workspace Structure
+Ports the outside world must reach (a webhook receiver) are published
+explicitly. Port mappings do **not** survive a sandbox restart, which is why
+`foundry up` re-applies them every time.
 
-Current runtime workspace lives in `/root` inside each VM:
+## Volume Root Structure
 
 ```
-/root/
-├── repos/                      # Git repositories
-├── .ralph/                     # Ralph config + plans
-├── .kimi/                      # Kimi config + task prompts
-├── ralph.yml                   # Ralph Orchestrator config (optional)
-├── .claude/                    # Claude config (optional)
-├── .codex/                     # Codex config (optional)
-├── .gemini/                    # Gemini config (optional)
-├── .ralphrc                    # Ralph runtime config
-├── *.md                        # Top-level project docs
-└── logs/
-    ├── ralph.log
-    └── kimi-ralph.log
+~/.local/share/foundry/volumes/<project>/
+├── foundry.json            # agent, repos, resources, watcher, network rules
+├── repos/                  # git repositories, cloned inside the sandbox
+├── .ssh/                   # git keys + hand-editable config (700 / 600)
+├── .foundry/               # generated start scripts
+├── .ralph/ .kimi/ .claude/ # per-agent state, whichever applies
+└── logs/                   # agent logs, readable directly on the host
 ```
+
+`~/.local/share/foundry/shared/` is mounted read-only into every sandbox for
+context you want available everywhere.
 
 ## Agent Integration
 
-### Supported Agent Types
+Agent types are defined in `lib/agent-registry.sh`, which is transport-agnostic
+and survived the migration unchanged.
 
-1. **ralph** (Autonomous)
-   - Continuous loop until tasks complete
-   - Built-in tmux monitoring
-   - Backed by `frankbria/ralph-claude-code`
+| Agent | Kind | Backed by |
+|---|---|---|
+| `claude` | interactive | `@anthropic-ai/claude-code` |
+| `gemini` | interactive | `@google/gemini-cli` |
+| `codex` | interactive | `@openai/codex` |
+| `ralph` | autonomous | `frankbria/ralph-claude-code` |
+| `ralph-orchestrator` | autonomous | `@ralph-orchestrator/ralph-cli` |
+| `kimi-ralph` | autonomous | `kimi-code` |
 
-2. **ralph-orchestrator** (Autonomous)
-   - `ralph run` orchestration loop via `ralph.yml`
-   - Built-in tmux monitoring
-   - Backed by `mikeyobrien/ralph-orchestrator`
-
-3. **claude** (Interactive)
-   - Claude Code CLI in screen session
-   - Manual or script-driven
-
-4. **gemini** (Interactive)
-   - Google's Gemini CLI
-   - Screen session for interaction
-
-5. **kimi-ralph** (Autonomous)
-   - Kimi Code CLI in Ralph loop mode
-   - Bounded to 100 iterations for safety
-   - Backed by `MoonshotAI/kimi-cli`
-
-6. **codex** (Interactive)
-   - OpenAI's Codex CLI
-   - Screen session for interaction
-
-### Skills Management
-
-Each tool has its own skills directory:
-- Claude Code: `/root/.claude/skills/`
-- OpenAI Codex: `/root/.codex/skills/`
-- Gemini CLI: `/root/.gemini/commands/`
-- Kimi CLI: `/root/.kimi/skills/`
-
-Skills from `agent-foundry/skills/` are copied to appropriate locations during VM creation.
+Both kinds run in a tmux session inside the sandbox: autonomous agents run a
+generated start script, interactive ones run the bare CLI so you can
+`foundry attach`.
 
 ## CLI Interface
 
-Host-based commands abstract VM complexity:
+Thirteen commands, of which three cover the common path:
 
 ```bash
-# VM management
-foundry vm create <name>
-foundry vm ssh <name>
-foundry vm destroy <name>
+foundry init <project>     # volume root + policy + sandbox + clone
+foundry up [project]       # start box, publish ports, clone, start agent
+foundry down [project]     # stop agent and sandbox, keep all state
 
-# Agent management
-foundry agent start <vm-name> <agent-type>
-foundry agent logs <vm-name> --follow
-foundry agent attach <vm-name>
-
-# Templates
-foundry template build base
-foundry template build golden
+foundry status / logs / attach / shell / rm / doctor
+foundry policy / image / config
 ```
 
-## Resource Configuration
-
-### Default Resources Per VM
-- **CPU**: 4 vCPUs
-- **RAM**: 8GB
-- **Disk**: 20GB (expandable)
-
-Configured via defaults in `config/default.conf` and user overrides in `~/.config/foundry/config.conf`.
-
-## Data Storage
-
-### Host Locations
-```
-~/.config/foundry/
-├── config.conf              # User configuration
-├── packages.txt             # Custom packages
-└── vms.json                 # VM registry
-
-~/.local/share/foundry/
-├── vms/
-│   ├── templates/           # VM templates
-│   ├── instances/           # Running VMs
-│   └── kernels/             # Firecracker kernels
-└── logs/                    # Agent logs
-```
+See `docs/CLI-REFERENCE.md` for the full surface.
 
 ## Implementation Modules
 
-- `lib/vm.sh` - VM lifecycle functions
-- `lib/agent.sh` - Agent management
-- `lib/agent-registry.sh` - Agent type definitions and metadata
-- `lib/network.sh` - Networking setup
-- `lib/template.sh` - Template building
-- `lib/workspace.sh` - Workspace initialization
-- `lib/config.sh` - Configuration management
-- `lib/registry.sh` - VM registry operations
-- `lib/utils.sh` - Common utilities
+- `lib/sandbox.sh` — the `sbx` wrapper: create/start/stop/rm/exec/publish
+- `lib/policy.sh` — network baseline, rule derivation, policy matrix
+- `lib/project.sh` — volume root scaffold, `foundry.json`, in-box cloning
+- `lib/agent-sandbox.sh` — agent sessions over `sbx exec`
+- `lib/agent-registry.sh` — agent type definitions and metadata
+- `lib/commands.sh` — the verb layer
+- `lib/config.sh` — configuration management
+- `lib/utils.sh` — common utilities
 
 ## Security Considerations
 
-- SSH key-based authentication only (no passwords)
-- Per-VM SSH key isolation with auto-generated keys in `~/.local/share/foundry/vms/<name>/ssh/`
-- Foundry never reads `~/.ssh/` unless you explicitly pass `--ssh-key <path>`
-- Isolated VM network namespaces
-- NAT firewall for outbound traffic
-- No inbound connections to VMs from internet
-- Git authentication via dedicated per-VM SSH keys
-- User-controlled VM lifecycle
+- Egress is open to the internet but closed to the LAN, the host and
+  link-local/metadata space.
+- Git keys live in the project's `.ssh/`, are never read from `~/.ssh`, and are
+  set up by hand — `init` seeds a commented `config` and warns when repos are
+  declared without a key.
+- The agent runs unprivileged inside the sandbox, as the host user's UID.
+- The first `git clone` happens inside the box on purpose: it exercises the key
+  and the policy before any agent starts.
 
 ## Extensibility
 
-### Adding New Guest OS Support
-1. Create build script in `scripts/build-<os>-base.sh`
-2. Implement OS-specific package management in template builder
-3. Add OS detection in VM initialization
-
-### Adding New AI Agent Types
+### Adding a new AI agent type
 1. Add the agent to `lib/agent-registry.sh`
-2. Provide a start-script template under `templates/<agent>/`
-3. Add a GitHub watcher adapter under `templates/<agent>/` if autonomous
-4. Add install logic in `lib/workspace.sh`
-5. Configure skills directory mapping
-6. Document in CLI reference
+2. Provide a start-script template under `templates/<agent>/` if autonomous
+3. Add a watcher adapter under `templates/<agent>/` if it should react to
+   forge events
+4. Add its install step to `docker/foundry-agent.Dockerfile`
+5. Document it in the CLI reference
 
-### Custom Template Variants
-1. Create custom `packages.txt`
-2. Build with `foundry template build <variant>`
-3. Snapshot and reuse
+### Customizing the image
+1. Add packages to `config/packages.txt`
+2. Rebuild with `foundry image build [variant]`
+3. Or set `.image` in a project's `foundry.json` to use your own tag

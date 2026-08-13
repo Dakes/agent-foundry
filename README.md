@@ -1,222 +1,174 @@
 # Agent Foundry
 
-> Lightweight, isolated microVMs for autonomous AI coding agents
+> Isolated Docker Sandboxes for autonomous AI coding agents
 
-Run AI coding agents 24/7 in isolated Firecracker VMs. Each project gets its own VM with full context, multi-repo support, and autonomous operation.
+Run AI coding agents in isolated sandboxes. Each project gets its own sandbox
+and its own host directory, with multi-repo support, a reviewable network
+posture, and unattended operation.
 
 ## Features
 
-- **🤖 Autonomous** - supports `ralph-claude-code`, `ralph-orchestrator`, and `kimi-ralph`
-- **🔒 Isolated** - Dedicated VM per project, zero host pollution
-- **🚀 Concurrent** - Run unlimited VMs simultaneously
-- **📚 Rich Context** - Company docs, standards, architecture included
-- **🔄 Multi-Repo** - Agents work across multiple repositories
-- **🎯 Simple CLI** - Host commands abstract VM complexity
+- **🤖 Autonomous or interactive** — `claude`, `gemini`, `codex`, plus the
+  Ralph family (`ralph`, `ralph-orchestrator`, `kimi-ralph`)
+- **🔒 Isolated** — one sandbox per project, zero host pollution
+- **📂 No sync step** — the volume root is a live-mounted host directory, and
+  files the agent writes stay owned by you
+- **🌐 Open internet, closed LAN** — enforced by policy, per-project
+  exceptions written back into the project config
+- **🔄 Multi-repo** — agents work across several repositories
+- **🎯 Three verbs** — `init`, `up`, `down` cover the common path
 
 ## Quick Start
 
 ```bash
-# Install
+# Install (needs Docker Sandboxes: https://docs.docker.com/ai/sandboxes/)
 git clone https://github.com/user/agent-foundry.git
 cd agent-foundry
 ./install.sh --prefix ~/.local
 
-# Setup
-foundry host setup
-foundry template build base
-foundry template build golden
+# Set up the host and build the agent image
+foundry doctor --fix
+foundry image build
 
-# Create and run
-foundry vm create my-project --project example-project
-foundry agent start my-project ralph
-foundry agent logs my-project --follow
+# Create a project, add git keys, run it
+foundry init my-project
+$EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
+$EDITOR ~/.local/share/foundry/volumes/my-project/.ssh/config
+foundry up my-project
+foundry logs -f my-project
 ```
-
-## Autonomous Agent Backends
-
-Agent Foundry supports multiple autonomous agent backends:
-
-- `ralph` (backed by `frankbria/ralph-claude-code`)
-- `ralph-orchestrator` (backed by `mikeyobrien/ralph-orchestrator`)
-- `kimi-ralph` (backed by `MoonshotAI/kimi-cli` in Ralph mode, capped at 100 iterations)
-
-Each VM may run only one autonomous agent at a time. For Ralph-backed images, configure template builds with:
-
-```bash
-# ~/.config/foundry/config.conf
-RALPH_AGENT_VARIANT=ralph-claude-code
-# or
-RALPH_AGENT_VARIANT=ralph-orchestrator
-```
-
-Project examples:
-
-- `projects/example-project/` (kimi-ralph)
-- `projects/example-project-orchestrator/` (ralph-orchestrator)
 
 ## Architecture
 
 ```
-Host System (Arch/NixOS)
-  ↓ Foundry CLI
-  ↓ Firecracker + TAP (172.16.0.0/24)
-  ↓
-┌─────────┬─────────┬─────────┐
-│  VM 1   │  VM 2   │  VM 3   │
-│  .11    │  .12    │  .13    │
-│ /root/  │ /root/  │ /root/  │
-│  ├repos │  ├repos │  ├repos │
-│  └.ralph│  └.ralph│  └.ralph│
-│ Ralph → │ Gemini  │ Codex   │
-│ Claude  │  CLI    │  CLI    │
-└─────────┴─────────┴─────────┘
+Host
+  ↓ foundry CLI  ──────────────►  sbx (Docker Sandboxes)
+  ↓                                 ↓ egress policy: internet yes, LAN no
+  ↓ ~/.local/share/foundry/volumes/<project>/   ← bind-mounted, same path
+┌──────────────┬──────────────┬──────────────┐
+│  sandbox 1   │  sandbox 2   │  sandbox 3   │
+│  ├ repos/    │  ├ repos/    │  ├ repos/    │
+│  ├ .ssh/     │  ├ .ssh/     │  ├ .ssh/     │
+│  └ logs/     │  └ logs/     │  └ logs/     │
+│  claude      │  ralph       │  codex       │
+└──────────────┴──────────────┴──────────────┘
 ```
+
+No KVM, no TAP devices, no golden image: sandboxes are containers, and the
+volume root is mounted at the same absolute path inside as on the host.
+
+## Agent Backends
+
+| Agent | Kind | Backed by |
+|---|---|---|
+| `claude` | interactive | `@anthropic-ai/claude-code` |
+| `gemini` | interactive | `@google/gemini-cli` |
+| `codex` | interactive | `@openai/codex` |
+| `ralph` | autonomous | `frankbria/ralph-claude-code` |
+| `ralph-orchestrator` | autonomous | `@ralph-orchestrator/ralph-cli` |
+| `kimi-ralph` | autonomous | `kimi-code`, capped at 100 iterations |
+
+One agent per project, set with `.agent` in `foundry.json`. The interactive
+CLIs all live in `foundry-agent:base`; each autonomous runner gets its own
+image tag (`foundry image build ralph`).
 
 ## Use Cases
 
-- **Autonomous Features**: Define in `PROMPT.md`, agent implements across repos
-- **24/7 Work**: Start agent on refactoring, review progress in morning
-- **Parallel Development**: Run 3-5 VMs on different projects simultaneously
-- **Team Collaboration**: Share base templates with company standards
+- **Autonomous features**: define the mission in `PROMPT.md`, the agent
+  implements it across repos
+- **Unattended work**: start an agent on a refactor, review progress later
+- **Parallel development**: several sandboxes on different projects at once
+- **Shared context**: `~/.local/share/foundry/shared/` is mounted read-only
+  into every sandbox
 
 ## Ralph File Structure
 
-`ralph-claude-code` projects typically use this layout:
+`ralph-claude-code` projects use this layout inside the volume root:
 
 ```
-/root/                          # VM workspace
+<volume root>/
 ├── .ralphrc                    # Config (optional, overrides default)
-├── .ralph/                     # Ralph files
-│   ├── PROMPT.md              # Mission: what to do
-│   ├── fix_plan.md           # Tasks: - [ ] checklist
-│   ├── AGENT.md              # Commands: npm test, etc
-│   ├── specs/                 # Requirements (optional)
-│   └── logs/                  # Execution logs
-└── repos/                      # Your code
+├── .ralph/
+│   ├── PROMPT.md               # Mission: what to do
+│   ├── fix_plan.md             # Tasks: - [ ] checklist
+│   ├── AGENT.md                # Commands: npm test, etc
+│   ├── specs/                  # Requirements (optional)
+│   └── logs/                   # Execution logs
+└── repos/
     ├── backend/
     └── frontend/
 ```
 
-**How it works:**
-1. Ralph reads `PROMPT.md` → Understands mission
-2. Reads `fix_plan.md` → Gets next task
-3. Reads `AGENT.md` → Knows how to test
-4. Makes changes → Runs tests → Checks off task
-5. Repeats until all done
+1. Ralph reads `PROMPT.md` → understands the mission
+2. Reads `fix_plan.md` → gets the next task
+3. Reads `AGENT.md` → knows how to test
+4. Makes changes → runs tests → checks off the task
+5. Repeats until done
 
-For `ralph-orchestrator`, use top-level `ralph.yml` and `PROMPT.md` (see `projects/example-project-orchestrator/`).
+For `ralph-orchestrator`, use a top-level `ralph.yml` and `PROMPT.md`.
 
 ## Configuration
 
-### .ralphrc (Two-Tier System)
+Project settings live in the volume root's `foundry.json`; host-wide defaults
+in `~/.config/foundry/config.conf`. See
+[PROJECT-SETUP.md](docs/PROJECT-SETUP.md).
 
-**Default** (`templates/.ralphrc.template`) - Full tool access, used when no project config exists
+### Resources
 
-**Project-Specific** (`projects/your-project/.ralphrc`) - Overrides default
+Defaults come from the sandbox runtime (all host CPUs, 50% of host memory).
+Override globally with `DEFAULT_CPUS` / `DEFAULT_MEMORY`, or per project with
+`.resources` in `foundry.json`.
 
-Customize: `ALLOWED_TOOLS`, `MAX_CALLS_PER_HOUR`, `CLAUDE_TIMEOUT_MINUTES`, circuit breaker thresholds
+### SSH keys
 
-```bash
-# Customize for a project
-cp templates/.ralphrc.template projects/my-project/.ralphrc
-vim projects/my-project/.ralphrc
-foundry workspace sync my-vm my-project  # Apply to VM
-```
+Per-project keys in the volume root's `.ssh/`, written by hand. Foundry never
+reads `~/.ssh/` and never generates a key behind your back — `init` seeds a
+commented `config` with the patterns to fill in, including a separate agent
+identity on the same forge.
 
-### VM Resources
+### Custom packages
 
-**Defaults:** 4 vCPUs, 8GB RAM, 20GB disk
-
-**Override:**
-- Global: `~/.config/foundry/config.conf`
-- At create time: choose a different template and per-VM SSH key
-
-### SSH Keys
-
-Per-VM keypair in `~/.local/share/foundry/vms/<name>/ssh/`. Never reads `~/.ssh/` unless you pass `--ssh-key <path>`.
-
-### Custom Packages
-
-Add to `~/.config/foundry/packages.txt`:
-```txt
-postgresql
-redis
-go
-rustup
-```
+Add to `config/packages.txt` and rebuild the image with `foundry image build`.
 
 ## CLI Commands
 
 ```bash
-# VM lifecycle
-foundry vm create <name> [template] [--project <project>] [--ssh-key <path>]
-foundry vm start <name>
-foundry vm stop <name>
-foundry vm ssh <name> [command]
-foundry vm destroy <name>
-foundry vm list
-foundry vm status <name>
-foundry vm update <name>
+foundry init <project>     # volume root + config + policy + sandbox + clone
+foundry up [project]       # start, publish ports, clone missing, start agent
+foundry down [project]     # stop agent and sandbox, keep all state
+foundry status [project]   # sandbox, agent, repos, ports, policy
+foundry logs [project]     # -f to follow
+foundry attach [project]   # attach to the agent's tmux session
+foundry shell [project]    # shell inside the sandbox
+foundry rm [project]       # remove the sandbox; volume root is kept
+foundry doctor [project]   # check host, policy, ports, keys (--fix repairs)
 
-# VM operations
-foundry vm copy <src> <dst>
-foundry vm rename <old> <new>
-foundry vm snapshot <name> <snapshot>
-
-# Agent management
-foundry agent start <vm> <agent-type>  # ralph, ralph-orchestrator, kimi-ralph, claude, gemini, codex
-foundry agent stop <vm>
-foundry agent restart <vm>
-foundry agent logs <vm> [--follow]
-foundry agent attach <vm>
-foundry agent status <vm>
-foundry agent gh-watcher <action> <vm>
-
-# Workspace
-foundry workspace init <vm> <config.json>
-foundry workspace sync <vm> [project]
-foundry workspace init-ralph <vm>
-foundry workspace edit <vm> <file>
-foundry workspace info <vm>
-foundry workspace template [file]
-
-# Templates
-foundry template build base      # Downloads Ubuntu 22.04 base
-foundry template build golden    # Configures AI tools (apt based)
-foundry template list
-
-# Host setup
-foundry host setup
-foundry host status
-
-# Network
-foundry network init
-foundry network status
-foundry network cleanup
+foundry policy <action>    # baseline | allow | deny | check | ls
+foundry image <action>     # build | push
+foundry config <action>    # get | set | edit | show
 ```
 
 Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
 
 ## Requirements
 
-**Host System:**
+**Host system:**
 - Linux (Arch, NixOS, Ubuntu, Fedora)
-- KVM enabled (hardware virtualization)
+- Docker Sandboxes (`sbx`), signed in
 - 4+ CPU cores, 16GB+ RAM recommended
-- 100GB+ disk space
 
-**Dependencies:**
-- Firecracker, QEMU utils (`qemu-img`), iproute2 (`ip`), iptables/nftables, jq, SSH, Git
+**Dependencies:** `sbx`, `docker`, `jq`, `git`
 
-**NixOS:** Use included `shell.nix`
+**NixOS:** use the included `shell.nix`
 
 ## Documentation
 
-- [VISION.md](docs/VISION.md) - Project goals and philosophy
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Complete architecture overview
-- [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) - Full command reference
-- [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) - Ralph integration details
-- [TODO.md](TODO.md) - Implementation roadmap
+- [VISION.md](docs/VISION.md) — project goals and philosophy
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — complete architecture overview
+- [PROJECT-SETUP.md](docs/PROJECT-SETUP.md) — creating and configuring projects
+- [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) — full command reference
+- [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) — Ralph integration details
+- [TODO.md](TODO.md) — implementation roadmap
 
 ## Development
 
@@ -228,42 +180,40 @@ nix-shell
 ./scripts/shellcheck.sh
 ./scripts/syntax-check.sh
 
-# Run tests
-# (tests are not fully scaffolded yet)
-
-# Build templates
-./scripts/build-ubuntu-base.sh
+# Build the agent image
+foundry image build [ralph|ralph-orchestrator|kimi-ralph]
 ```
 
-Release bundle is built automatically by `install.sh` if needed.
+The release bundle is built automatically by `install.sh` if needed.
 
 ## Project Status
 
-🚧 **Early Development** - Core architecture defined, implementation in progress.
+🚧 **Early development.** The sandbox core (project verbs, policy, images,
+agents) is implemented. Forge watchers are not yet ported to the sandbox
+transport — `foundry up` publishes the receiver port and says so.
 
-See [TODO.md](TODO.md) for roadmap.
+See [TODO.md](TODO.md) for the roadmap.
 
 ## License
 
-MIT License - See [LICENSE](LICENSE)
+MIT License — See [LICENSE](LICENSE)
 
 ## Contributing
 
 1. Read [VISION.md](docs/VISION.md) and [ARCHITECTURE.md](docs/ARCHITECTURE.md)
 2. Check [TODO.md](TODO.md) for open tasks
-3. Create issue or PR
-4. Follow existing code style
+3. Create an issue or PR
+4. Follow the existing code style
 
 ## Credits
 
-Built on [Firecracker](https://firecracker-microvm.github.io/) • Supports [ralph-claude-code](https://github.com/frankbria/ralph-claude-code), [ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator), and [kimi-cli](https://github.com/MoonshotAI/kimi-cli) • Inspired by the Ralph Wiggum technique
-
-## Support
-
-- **GitHub Issues**: Report bugs, request features
-- **Discussions**: Ask questions, share setups
-- **Wiki**: Community guides and tips
+Built on [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) • Supports
+[ralph-claude-code](https://github.com/frankbria/ralph-claude-code),
+[ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator) and
+[kimi-cli](https://github.com/MoonshotAI/kimi-cli) • Inspired by the Ralph
+Wiggum technique
 
 ---
 
-**Note**: Agent Foundry is for development use only. Not intended for production workload hosting.
+**Note**: Agent Foundry is for development use only. Not intended for
+production workload hosting.

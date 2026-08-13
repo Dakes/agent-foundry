@@ -14,8 +14,7 @@
 # Requires: lib/agent-registry.sh, lib/sandbox.sh
 #
 
-# Agent metadata registry. Sourced directly so this module stays usable once
-# the deprecated lib/agent.sh is removed.
+# Agent metadata registry, sourced directly so this module is self-contained.
 _AGENT_SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${_AGENT_SANDBOX_DIR}/agent-registry.sh" ]]; then
     # shellcheck source=/dev/null

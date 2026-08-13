@@ -65,7 +65,7 @@ log_debug() {
 # Check if a command exists in PATH
 # Returns 0 if command exists, 1 otherwise
 # Handles NixOS per-user profiles when running with elevated privileges
-# Usage: check_command "firecracker" && log_info "Firecracker found"
+# Usage: check_command "sbx" && log_info "Docker Sandboxes found"
 check_command() {
     local cmd="$1"
 
@@ -92,7 +92,7 @@ check_command() {
 }
 
 # Resolve full path of a command (handles NixOS under sudo/doas)
-# Usage: path=$(get_command_path "firecracker") || exit 1
+# Usage: path=$(get_command_path "sbx") || exit 1
 get_command_path() {
     local cmd="$1"
     
@@ -407,7 +407,7 @@ _exit_handler() {
 #   log_debug "Detailed diagnostic info"
 #
 #   # System checks
-#   check_command "firecracker" && echo "Firecracker found"
+#   check_command "sbx" && echo "Docker Sandboxes found"
 #   check_kvm && echo "KVM support verified"
 #   os=$(detect_os) && echo "Running on $os"
 #

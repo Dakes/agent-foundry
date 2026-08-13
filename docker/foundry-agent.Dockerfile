@@ -97,6 +97,18 @@ RUN set -eux; \
     chmod -R a+rX /opt; \
     printf '%s\n' "${RALPH_VARIANT}" > /etc/foundry-ralph-variant
 
+# Shared session-ledger helpers, sourced by the agent start scripts and watcher
+# adapters. The golden image used to install these; the image carries them now.
+COPY templates/agent-session.sh /opt/foundry/agent-session.sh
+RUN chmod 0755 /opt/foundry/agent-session.sh
+
+# forgejo-cli, used by the Forgejo watcher adapters.
+COPY binaries/fj/ /tmp/fj/
+RUN set -eux; \
+    binary="$(find /tmp/fj -maxdepth 1 -type f | sort | tail -n 1)"; \
+    if [ -n "$binary" ]; then install -m 0755 "$binary" /usr/local/bin/fj; fi; \
+    rm -rf /tmp/fj
+
 # Extra packages, if the operator maintains a list. The apt lists were removed
 # by the layers above, so this needs its own update before it can install.
 COPY config/packages.txt /tmp/packages.txt

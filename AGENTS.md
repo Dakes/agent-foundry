@@ -28,7 +28,7 @@ Rules:
 
 1. Always call `resolve_host_home()` when building paths to `~/.config/foundry`, `~/.local/share/foundry`, or user-owned project directories.
 2. Do not declare local variables named `token`, `secret`, or any other name that matches a caller-passed variable name when using `printf -v "$var_name"`; it will write to the local shadow instead of the caller's variable.
-3. Inside VM scripts (running as `root` in the VM), `$HOME` is `/root` and may be used normally.
+3. Inside a sandbox, `$HOME` is set per-exec to the project's volume root, which is the same absolute path on the host and in the box.
 4. Help text and comments may use `~` for readability; runtime code must not.
 
 # Config-Driven Automation
@@ -37,7 +37,7 @@ Agent Foundry is **config-driven**: if a piece of information or behavior is pre
 
 Principles:
 
-1. **One command to activate**: Running a top-level command (e.g. `foundry agent forgejo-watcher init <vm>`) should apply the full configuration. If the config says register hooks, register them. If it says watch repos, watch them.
+1. **One command to activate**: Running a top-level command (e.g. `foundry up`) should apply the full configuration. If the config says register hooks, register them. If it says watch repos, watch them.
 2. **Auto-derive what you can**: IP addresses, URLs, ports, and other runtime values should be derived from the environment whenever possible. Only prompt or require explicit input when derivation is impossible.
 3. **Opt-out, not opt-in**: Prefer automatic behavior with a flag to disable it (e.g. `--no-register-hooks`, `--no-mark-all`) over requiring a separate command to enable it.
 4. **Keep escape hatches**: Always provide explicit manual commands and opt-out flags for power users and debugging.
@@ -46,7 +46,7 @@ Examples:
 
 - `forgejo-watcher init` auto-registers webhooks because `watched_repos` and `webhook_url` are in the config.
 - `forgejo-watcher start` auto-runs `mark-all` because the default lifecycle expectation is "don't reprocess old events on restart".
-- `webhook_url` is auto-derived from the VM IP because the VM already knows its own address.
+- `foundry up` re-publishes the configured ports on every run, because port mappings do not survive a sandbox restart.
 
 If a user has to run more than one command to make a configured feature work, the design is probably wrong.
 
@@ -101,9 +101,9 @@ Err on the side of being too noisy. Users can ignore a clear error; they cannot 
 
 ## Surface Remote Errors in the CLI
 
-When a command runs a helper inside a VM or container, the **host CLI must print the actual error**, not just "command failed". Remote log files are useful for debugging, but they are not a substitute for immediate console output.
+When a command runs a helper inside a sandbox, the **host CLI must print the actual error**, not just "command failed". Remote log files are useful for debugging, but they are not a substitute for immediate console output.
 
-If a remote helper writes a detailed error to `/root/.config/.../some.log`, the host CLI should tail or cat that log when the helper exits non-zero, so the user sees the root cause in the same terminal where they ran the command.
+If a helper writes a detailed error to a log in the volume root, the host CLI should tail or cat that log when the helper exits non-zero, so the user sees the root cause in the same terminal where they ran the command.
 
 # Validation
 

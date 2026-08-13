@@ -1,23 +1,38 @@
 # Getting Started with the Ralph Orchestrator Example Project
 
-1. **Inspect the configuration files**
-   - `agents.json` selects `mikeyobrien/ralph-orchestrator` as the Ralph variant for this image.
+This folder is a **reference layout**, not something the CLI reads. A real
+project lives in its volume root at
+`~/.local/share/foundry/volumes/<project>/`.
+
+1. **Inspect the configuration**
+   - `foundry.json` sets `"agent": "ralph-orchestrator"`, which also selects
+     the `foundry-agent:ralph-orchestrator` image.
    - `ralph.yml` configures Ralph Orchestrator's loop behavior.
    - `PROMPT.md` is the default task prompt file (`event_loop.prompt_file`).
 
-2. **Create and initialize a VM from this project**
+2. **Build the image for this variant**
    ```sh
-   foundry vm create example-orchestrator-dev --project example-project-orchestrator
+   foundry image build ralph-orchestrator
    ```
 
-3. **Start the orchestrator agent**
+3. **Create the project and copy the files in**
    ```sh
-   foundry agent start example-orchestrator-dev ralph-orchestrator
-   foundry agent logs example-orchestrator-dev --follow
+   foundry init example-project-orchestrator
+   cp -r overview.md PROMPT.md ralph.yml .ralph \
+       ~/.local/share/foundry/volumes/example-project-orchestrator/
+   $EDITOR ~/.local/share/foundry/volumes/example-project-orchestrator/foundry.json
    ```
 
-4. **Sync updates after local edits**
+4. **Start the agent**
    ```sh
-   foundry workspace sync example-orchestrator-dev example-project-orchestrator
+   foundry up example-project-orchestrator
+   foundry logs -f example-project-orchestrator
    ```
-   This syncs `.ralph/`, `ralph.yml`, `PROMPT.md`, and other top-level markdown docs.
+
+5. **After local edits**
+   ```sh
+   foundry up example-project-orchestrator
+   ```
+   There is no sync step: the volume root is mounted live, so edits to
+   `.ralph/`, `ralph.yml` and `PROMPT.md` are visible inside the sandbox
+   immediately. `up` only restarts what is not already running.

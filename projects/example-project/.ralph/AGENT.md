@@ -2,7 +2,7 @@
 
 ## VM Environment
 
-You are running as **root** in an **isolated Ubuntu 22.04 microVM** managed by Agent Foundry:
+You are running in an **isolated Ubuntu sandbox** managed by Agent Foundry:
 
 - **Root access** - You are root, install any packages: `apt-get install <package>`
 - **Isolated filesystem** - Changes only affect this VM, not the host
@@ -25,7 +25,7 @@ free -h        # Memory
 nproc          # CPU cores
 ```
 
-**Important:** This is a microVM, not a container - you can modify anything, including system files, kernel modules, and network settings.
+**Important:** This is a container sandbox. You have sudo and can install packages, but the LAN and the host are unreachable by design - only the internet is.
 
 ## System Requirements
 

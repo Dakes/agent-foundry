@@ -4,7 +4,7 @@
 # To customize for a specific project:
 # 1. Copy this file to your project directory: projects/your-project/.ralphrc
 # 2. Modify the settings as needed
-# 3. Run: foundry workspace sync your-project <vm-name>
+# 3. Copy it into the project's volume root; it is picked up live (no sync step).
 #
 # The project-specific .ralphrc will override this default template.
 

@@ -1,0 +1,34 @@
+{
+  "name": "example-project",
+  "agent": "kimi-ralph",
+  "autostart": false,
+  "repos": [
+    {
+      "url": "git@github.com:example-org/api.git",
+      "branch": "main",
+      "dir": "github-api"
+    },
+    {
+      "url": "git@gitlab.com:example-org/ui.git",
+      "branch": "develop",
+      "dir": "gitlab-ui"
+    }
+  ],
+  "resources": {
+    "cpus": 4,
+    "memory": "8g"
+  },
+  "watcher": {
+    "kind": "github",
+    "port": 9100,
+    "token_file": "secrets/github-token.txt",
+    "watched_repos": [
+      "myorg/backend",
+      "myorg/frontend"
+    ]
+  },
+  "network": {
+    "allow": [],
+    "deny": []
+  }
+}

@@ -198,8 +198,17 @@ used, because it would give the agent your own identity rather than its own.
 The first clone runs inside the sandbox, so a wrong key or a blocked forge
 fails there, before any agent starts.
 
-## Deprecated commands
+## Removed commands
 
-`vm`, `agent`, `workspace`, `template`, `host` and `network` are the
-pre-sandbox Firecracker commands. They still work for one release and print a
-deprecation notice. See `foundry <domain> help`.
+`vm`, `agent`, `workspace`, `template`, `host` and `network` were the
+pre-sandbox Firecracker commands. They are gone; running one prints where its
+job moved to:
+
+| Removed | Replacement |
+|---|---|
+| `vm` | `init` / `up` / `down` / `status` / `shell` / `rm` |
+| `agent` | `up` / `down` / `attach` / `logs` |
+| `workspace` | none needed — the volume root *is* the workspace |
+| `template` | `image build` |
+| `host` | `doctor --fix` |
+| `network` | `policy` |

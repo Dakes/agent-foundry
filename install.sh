@@ -269,9 +269,10 @@ install_foundry() {
     log_info "Creating directories..."
     mkdir -p "$BIN_DIR"
     mkdir -p "$CONFIG_DIR"
-    mkdir -p "$DATA_DIR/vms/templates"
-    mkdir -p "$DATA_DIR/vms/instances"
-    mkdir -p "$DATA_DIR/vms/kernels"
+    # One volume root per project, plus a shared read-only context directory
+    # mounted into every sandbox. These replace the VM disk/kernel layout.
+    mkdir -p "$DATA_DIR/volumes"
+    mkdir -p "$DATA_DIR/shared"
     mkdir -p "$DATA_DIR/logs"
 
     # Install binary from bundle
@@ -384,21 +385,18 @@ show_next_steps() {
         echo "     # Create $shell_rc if it does not exist yet"
     fi
     echo ""
-    echo "  2. Set up your host system:"
-    echo "     sudo foundry host setup"
+    echo "  2. Check the host (needs Docker Sandboxes: 'sbx'):"
+    echo "     foundry doctor --fix"
     echo ""
-    echo "  3. Build VM templates:"
-    echo "     sudo foundry template build base"
-    echo "     sudo foundry template build golden"
+    echo "  3. Build the agent image:"
+    echo "     foundry image build"
     echo ""
-    echo "  4. Create your first VM:"
-    echo "     foundry vm create my-project"
+    echo "  4. Create your first project:"
+    echo "     foundry init my-project"
     echo ""
-    echo "  5. Initialize a workspace:"
-    echo "     foundry workspace init my-project config.json"
-    echo ""
-    echo "  6. Start an agent:"
-    echo "     foundry agent start my-project ralph"
+    echo "  5. Add git keys, then start it:"
+    echo "     \$EDITOR $DATA_DIR/volumes/my-project/.ssh/config"
+    echo "     foundry up my-project"
     echo ""
     log_info "Documentation: See README.md and docs/ for more information"
     log_info "==================================================================="
@@ -458,15 +456,16 @@ main() {
     # Show next steps
     show_next_steps
 
-    # Optionally run host setup
+    # Optionally check the host.
+    #
+    # There is no provisioning step any more: the Firecracker backend needed
+    # KVM, TAP devices and a golden image, while Docker Sandboxes needs only a
+    # working `sbx`. 'foundry doctor' reports what is missing, and --fix
+    # applies the network policy baseline.
     if $RUN_SETUP; then
         echo ""
-        if confirm "Run host setup now? (Recommended)"; then
-            if [[ -x "${PROJECT_ROOT}/scripts/setup-host.sh" ]]; then
-                exec "${PROJECT_ROOT}/scripts/setup-host.sh"
-            else
-                log_warn "Host setup script not found"
-            fi
+        if confirm "Check the host now with 'foundry doctor'? (Recommended)"; then
+            exec "${BIN_DIR}/foundry" doctor
         fi
     fi
 }
