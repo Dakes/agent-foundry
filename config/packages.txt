@@ -1,13 +1,12 @@
-# Agent Foundry - Default Package List for VM Templates
+# Agent Foundry - Extra Package List for the Agent Image
 #
-# This file lists packages to install in Ubuntu Linux VMs beyond the base set.
-# Add one package per line. Lines starting with # are comments.
+# Packages installed into the sandbox image beyond the base set. Add one
+# package per line; lines starting with # are comments. Edit this file in the
+# source tree, then rebuild: foundry image build [variant]
 #
-# Users can customize by creating ~/.config/foundry/packages.txt
-#
-# Base packages (always installed):
-#   git, openssh-server, vim, nano, bash, tmux, screen, jq, curl, wget,
-#   nodejs, npm, python3, python3-pip, docker.io, build-essential
+# Base packages (always installed, see docker/foundry-agent.Dockerfile):
+#   ca-certificates, curl, git, gnupg, jq, openssh-client, python3,
+#   python3-pip, python3-venv, ripgrep, tmux, unzip, vim, nodejs, gh, sudo
 #
 # Add your custom packages below:
 
