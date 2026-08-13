@@ -5,8 +5,12 @@ All commands run from the host system.
 ## Command Structure
 
 ```bash
-foundry <domain> <action> [arguments] [options]
+foundry <command> [project] [options]
 ```
+
+The project is inferred from the current working directory when omitted — run
+from anywhere inside a project's volume root (or a directory containing a
+`foundry.json`) and the name is resolved automatically.
 
 ## Global Options
 
@@ -17,127 +21,108 @@ foundry <domain> <action> [arguments] [options]
 --dry-run       Print intended actions without executing
 ```
 
-## VM Commands
+## Lifecycle
 
 ```bash
-foundry vm create <name> [template] [-y|--yes] [--ssh-key <path>] [--project <name|path>]
-foundry vm start <name>
-foundry vm stop <name>
-foundry vm restart <name>
-foundry vm destroy <name>
-foundry vm ssh <name> [command...]
-foundry vm list
-foundry vm status <name>
-foundry vm ip <name>
-foundry vm copy <source> <dest>
-foundry vm rename <old> <new>
-foundry vm snapshot <name> <snapshot>
-foundry vm update <name>
+foundry init <project> [--no-clone]
+foundry up [project] [--no-agent]
+foundry down [project]
+foundry rm [project] [--purge-volume] [-y|--yes]
 ```
 
-Notes:
-- VM lifecycle operations require root privileges.
-- `create --project` expects a project directory that includes `git-config.json`.
-- If `--ssh-key` is omitted, Foundry generates a per-VM keypair under `~/.local/share/foundry/vms/<name>/ssh/`.
+- `init` scaffolds the volume root, validates config, applies the network
+  policy baseline plus this project's derived rules, creates and starts the
+  sandbox, then clones declared repositories **inside the sandbox**.
+- `up` is idempotent reconciliation: it makes reality match `foundry.json`.
+  Start the sandbox, re-publish ports, clone anything missing, start the agent.
+  Run it any time; there is no separate `restart`.
+- `rm` removes the sandbox. The volume root — repos, agent memory, keys, logs —
+  is kept unless you pass `--purge-volume` and confirm.
 
-## Agent Commands
+Port mappings do not survive a sandbox restart, which is why `up` re-publishes
+them on every run.
+
+## Inspection
 
 ```bash
-foundry agent start <vm> [type] [--thread <thread-key>]
-foundry agent stop <vm>
-foundry agent restart <vm>
-foundry agent attach <vm>
-foundry agent status <vm>
-foundry agent logs <vm> [-f|--follow]
-foundry agent sessions <vm>
-foundry agent resume <vm> <thread-key>
-foundry agent enable-autostart <vm>
-foundry agent disable-autostart <vm>
+foundry status [project]
+foundry logs [project] [-f|--follow] [--watcher]
+foundry attach [project]
+foundry shell [project] [--ssh] [command...]
+foundry doctor [project] [--fix]
 ```
 
-Agent types:
-- `ralph` - ralph-claude-code autonomous agent
-- `ralph-orchestrator` - ralph-orchestrator autonomous agent
-- `kimi-ralph` - Kimi Code CLI autonomous agent in Ralph mode
-- `claude` - Claude Code CLI interactive session
-- `gemini` - Gemini CLI interactive session
-- `codex` - OpenAI Codex CLI interactive session
+- `status` with no project lists every project. With one, it shows the sandbox
+  state, agent, cloned repositories and their branches, published ports, and
+  the sandbox's active network rules.
+- `logs` reads files directly from the volume root on the host — no exec, no
+  SSH.
+- `shell` uses `sbx exec` by default. `--ssh` connects over `ssh <box>.sbx`,
+  which requires `sbx setup ssh` once (no port and no key are involved).
+- `doctor` checks host prerequisites, the network policy matrix, `.ssh`
+  permissions and key presence, and whether watcher ports are actually
+  published. `--fix` applies the policy baseline and normalizes permissions.
 
-Notes:
-- Each VM may run only one autonomous agent at a time.
-- Use `--thread owner/repo#42` to associate a manual start with an issue/PR thread.
-  On the next start or watcher trigger for the same thread, Kimi will resume its
-  previous session if one exists. Thread session resumption is currently enabled
-  for `kimi-ralph`; other agents start fresh until their resume behavior is verified.
-
-## GitHub Watcher Commands
+## Policy
 
 ```bash
-foundry agent gh-watcher init <vm>
-foundry agent gh-watcher start <vm>
-foundry agent gh-watcher stop <vm>
-foundry agent gh-watcher status <vm>
-foundry agent gh-watcher logs <vm> [--follow]
-foundry agent gh-watcher reset <vm>
+foundry policy baseline [--reset]
+foundry policy allow <resource> [project]
+foundry policy deny <resource> [project]
+foundry policy check <target> [project]
+foundry policy ls [project]
 ```
 
-## Forgejo Watcher Commands
+`baseline` initializes the global policy as `allow-all` (full internet egress)
+and then denies every private, loopback and link-local range. Sandboxes already
+block private space by default; Foundry adds explicit denies so the posture
+survives a preset change and cannot be widened by a kit. The result: the open
+internet is reachable — including a self-hosted forge on a public URL — while
+the LAN and the host are not.
+
+The global preset can only be set once (`sbx policy init`). On a host that is
+already initialized, `baseline` keeps the existing preset and only reconciles
+the deny rules; rules it has already added are not added twice. `--reset` wipes
+the whole sbx policy store first and is never implied, because it stops every
+running sandbox.
+
+Note that these denies apply to *egress*. A service the agent runs on its own
+loopback inside the sandbox is unaffected, so denying `127.0.0.0/8` does not
+break a dev server started in the box.
+
+Resources are hostnames, `host:port`, IP addresses, or CIDR ranges. Non-HTTP
+TCP (git over SSH on port 22) needs an explicit `host:22` rule — `init` and
+`up` derive these from the project's git remotes automatically. UDP and ICMP
+are blocked at the network layer and cannot be allowed.
+
+## Image
 
 ```bash
-foundry agent forgejo-watcher init <vm>
-foundry agent forgejo-watcher register-hooks <vm>
-foundry agent forgejo-watcher start <vm>
-foundry agent forgejo-watcher stop <vm>
-foundry agent forgejo-watcher status <vm>
-foundry agent forgejo-watcher logs <vm> [--follow]
-foundry agent forgejo-watcher reset <vm>
-foundry agent forgejo-watcher unregister-hooks <vm>
+foundry image build                     # -> foundry-agent:base
+foundry image build ralph               # -> foundry-agent:ralph
+foundry image build ralph-orchestrator
+foundry image build kimi-ralph
+foundry image push [tag]
 ```
 
-Notes:
-- The Forgejo watcher is webhook-driven and requires the Forgejo instance to reach the VM on the configured receiver port.
-- Use `register-hooks` after `init` to create webhooks on the watched repositories.
-- See `docs/FORGEJO-WATCHER.md` for setup details.
+Builds `docker/foundry-agent.Dockerfile`. The image carries binaries only: all
+per-project state lives in the mounted volume root.
 
-## Workspace Commands
+`:base` carries the interactive CLIs (claude, gemini, codex) and is what every
+interactive project uses; a variant argument adds one autonomous Ralph runner
+and tags the image after it. Projects pick their image implicitly from
+`.agent`, or explicitly via `.image` in `foundry.json`.
 
-```bash
-foundry workspace init <vm> <config.json>
-foundry workspace sync <vm> [project]
-foundry workspace init-ralph <vm>
-foundry workspace edit <vm> <file>
-foundry workspace info <vm>
-foundry workspace template [file]
-```
+Two things this command does that are easy to miss:
 
-Notes:
-- `workspace sync` updates `.ralph/.kimi/.claude/.codex/.gemini`, `.ralphrc`, top-level `ralph*.yml`, and top-level `*.md` files.
-- If `[project]` is omitted, Foundry tries to resolve project metadata from VM registry.
+- The image's `agent` user is created with **your** UID/GID, so files the
+  sandbox writes into the volume root stay editable on the host.
+- After building, the image is imported into the sandbox runtime's own image
+  store (`docker save` → `sbx template load`). Without that, `sbx create -t`
+  tries to *pull* the tag and fails with `403 Forbidden`, because a locally
+  built image is invisible to it.
 
-## Template Commands
-
-```bash
-foundry template list
-foundry template build base
-foundry template build golden
-```
-
-## Host Commands
-
-```bash
-foundry host setup
-foundry host status
-```
-
-## Network Commands
-
-```bash
-foundry network init
-foundry network status
-foundry network cleanup
-```
-
-## Config Commands
+## Config
 
 ```bash
 foundry config get <key>
@@ -146,6 +131,84 @@ foundry config edit
 foundry config show
 ```
 
-Config keys are normalized to uppercase underscore form internally. For example:
-- `default.cpus` -> `DEFAULT_CPUS`
-- `default.memory` -> `DEFAULT_MEMORY`
+Global config keys are normalized to uppercase underscore form internally, for
+example `default.cpus` -> `DEFAULT_CPUS`.
+
+Per-project settings live in `<volume root>/foundry.json`. Every field is
+optional:
+
+```jsonc
+{
+  "name": "pocetude",
+  "agent": "kimi-ralph",
+  "image": "foundry-agent:kimi-ralph",
+  "resources": { "cpus": 4, "memory": "8g" },
+  "autostart": false,
+  "repos": [
+    { "url": "git@forge.example.com:org/api.git", "branch": "main", "dir": "api" }
+  ],
+  "network": {
+    "allow": ["forge.example.com:22"],
+    "deny": []
+  },
+  "watcher": {
+    "kind": "forgejo",
+    "port": 9101,
+    "token_file": "secrets/forge-token"
+  }
+}
+```
+
+`network.allow` is derived from the project's git remotes and written back on
+`init`, so every exception — especially any hole punched in the LAN denial — is
+reviewable in a diff.
+
+## Volume root layout
+
+```
+~/.local/share/foundry/volumes/<project>/
+├── repos/          # git checkouts
+├── .ssh/           # keys and config (user-managed, see below)
+├── .ralph/         # prompts, plans, memories
+├── .claude/ .codex/ .gemini/ .config/gh/
+├── logs/           # agent and watcher logs
+├── secrets/        # token files
+├── foundry.json
+└── AGENT.md
+```
+
+This directory is mounted into the sandbox at the same absolute path, and is
+the agent's `HOME` there. Everything the agent writes to `~` persists on the
+host automatically — there is no sync step.
+
+## Git SSH keys (manual setup)
+
+Foundry does not generate or manage SSH keys. Each project's `.ssh/config` is
+seeded with commented examples on `init`; fill it in by hand:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.local/share/foundry/volumes/<project>/.ssh/id_agent
+$EDITOR ~/.local/share/foundry/volumes/<project>/.ssh/config
+```
+
+Add the public key to the git account or repository the agent should use — a
+deploy key, or a dedicated agent account. Host SSH agent forwarding is *not*
+used, because it would give the agent your own identity rather than its own.
+
+The first clone runs inside the sandbox, so a wrong key or a blocked forge
+fails there, before any agent starts.
+
+## Removed commands
+
+`vm`, `agent`, `workspace`, `template`, `host` and `network` were the
+pre-sandbox Firecracker commands. They are gone; running one prints where its
+job moved to:
+
+| Removed | Replacement |
+|---|---|
+| `vm` | `init` / `up` / `down` / `status` / `shell` / `rm` |
+| `agent` | `up` / `down` / `attach` / `logs` |
+| `workspace` | none needed — the volume root *is* the workspace |
+| `template` | `image build` |
+| `host` | `doctor --fix` |
+| `network` | `policy` |

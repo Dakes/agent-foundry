@@ -1,5 +1,11 @@
 # Forgejo Watcher - Automated Agent Workflow
 
+> **Status: not yet ported to the sandbox backend.** This document describes
+> the watcher as it worked on the Firecracker VM backend. The receiver port is
+> published by `foundry up`, but the watcher itself does not start yet. Host
+> commands named below (`foundry agent ...`) no longer exist; the scripts under
+> `templates/` are the material for the port.
+
 The Forgejo Watcher enables fully autonomous development by monitoring Forgejo repositories for trigger mentions, receiving events via webhooks, and automatically triggering the configured autonomous agent to work on tasks.
 
 It supports `ralph-claude-code`, `ralph-orchestrator`, and `kimi-ralph`. The watcher reads the configured agent type from `/root/.config/forgejo-watcher/config.conf` (or falls back to legacy Ralph variant detection) and loads the matching adapter.

@@ -4,8 +4,8 @@
 
 Agent Foundry supports two Ralph integrations:
 
-- [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) (`foundry agent start <vm> ralph`)
-- [ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator) (`foundry agent start <vm> ralph-orchestrator`)
+- [ralph-claude-code](https://github.com/frankbria/ralph-claude-code) (`.agent: "ralph"` in `foundry.json`)
+- [ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator) (`.agent: "ralph-orchestrator"`)
 
 Each image should include exactly one Ralph variant.
 
@@ -209,7 +209,7 @@ Framework provides convenient commands:
 
 ```bash
 # Start Ralph agent
-foundry agent start my-project ralph
+foundry up my-project    # with .agent = "ralph"
 
 # Behind the scenes:
 # 1. SSH into VM
@@ -219,7 +219,7 @@ foundry agent start my-project ralph
 # 5. Return to host
 
 # Orchestrator variant:
-foundry agent start my-project ralph-orchestrator
+foundry up my-project    # with .agent = "ralph-orchestrator"
 
 # Check status
 foundry agent status my-project
@@ -398,7 +398,7 @@ tmux list-sessions
 foundry agent logs my-project --tail 100
 
 # Check system resources
-foundry vm status my-project
+foundry status my-project
 ```
 
 ## Future Enhancements

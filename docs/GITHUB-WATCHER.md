@@ -1,5 +1,11 @@
 # GitHub Watcher - Automated Agent Workflow
 
+> **Status: not yet ported to the sandbox backend.** This document describes
+> the watcher as it worked on the Firecracker VM backend. The receiver port is
+> published by `foundry up`, but the watcher itself does not start yet. Host
+> commands named below (`foundry agent ...`) no longer exist; the scripts under
+> `templates/` are the material for the port.
+
 The GitHub Watcher enables fully autonomous development by monitoring GitHub repositories for `!ralph` mentions, automatically triggering the configured autonomous agent to work on tasks, and creating pull requests when complete.
 
 > **Using a self-hosted Forgejo instance?** See the [Forgejo Watcher](./FORGEJO-WATCHER.md) for a webhook-driven integration instead of polling.

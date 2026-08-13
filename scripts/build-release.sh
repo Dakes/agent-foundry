@@ -15,7 +15,7 @@ set -euo pipefail
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION=$(cat "${PROJECT_ROOT}/VERSION" | tr -d '[:space:]')
+VERSION=$(tr -d '[:space:]' < "${PROJECT_ROOT}/VERSION")
 OUTPUT_BIN="${1:-bin/foundry-release}"
 TEMP_DIR=$(mktemp -d)
 

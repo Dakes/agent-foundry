@@ -1,21 +1,47 @@
 # Getting Started with the Example Project
 
-1. **Inspect the configuration files**
-   - `git-config.json` lists the repositories Agent Foundry will clone and the deploy key each repo uses.
-   - `agents.json` must include at most one autonomous agent (`frankbria/ralph-claude-code`, `mikeyobrien/ralph-orchestrator`, or `kimi-cli`).
-   - `.kimi/` contains Kimi-specific configuration and task prompts that are automatically copied into each workspace if you run `kimi-ralph`.
+This folder is a **reference layout**, not something the CLI reads. A real
+project lives in its volume root at
+`~/.local/share/foundry/volumes/<project>/`; copy what you want from here into
+one.
 
-2. **Generate a VM**
+1. **Inspect the configuration**
+   - `foundry.json` is the whole project config: agent, repos to clone,
+     resources, watcher settings and network exceptions. It replaces the old
+     `git-config.json` + `agents.json` pair.
+   - `.kimi/` holds Kimi-specific configuration and task prompts, used when the
+     agent is `kimi-ralph`.
+   - `.ralph/` and `.ralphrc` do the same for the Ralph agents.
+
+2. **Create the project**
    ```sh
-   foundry vm create example-dev --project example-project
+   foundry init example-project
+   cp -r overview.md getting-started.md .kimi .ralph .ralphrc \
+       ~/.local/share/foundry/volumes/example-project/
+   $EDITOR ~/.local/share/foundry/volumes/example-project/foundry.json
    ```
-   The CLI validates the project folder, copies `overview.md` + `getting-started.md` into `context/`, copies `.kimi/`, and injects `deploy-key-example` into `/root/.ssh/` along with the SSH config described in the design doc.
 
-3. **Verify repositories**
-   - Once the VM boots, look inside `/work/example-dev/repos/` for `github-api/` and `gitlab-ui/`.
-   - Both clones use host aliases (`github.com-github-api`, `gitlab.com-gitlab-ui`) so each repo signs in with the deploy key declared in this folder.
+3. **Add a git key**
+   ```sh
+   cd ~/.local/share/foundry/volumes/example-project/.ssh
+   ssh-keygen -t ed25519 -f id_agent -C "foundry-agent" -N ""
+   $EDITOR config      # uncomment and edit a block; add id_agent.pub to your forge
+   ```
+   There are no deploy-key files in this folder any more: keys are per project,
+   created by you, and never generated behind your back.
 
-4. **Edit and extend**
-   - Add new Markdown context files (outside `.kimi/`) to shape agent behavior; they appear under `context/` in the workspace.
-   - Update `git-config.json` whenever you add repositories or branches so the CLI knows what to clone.
-   - Replace `.kimi/` contents with your preferred Kimi prompt, plan, or agent instructions.
+4. **Bring it up**
+   ```sh
+   foundry up example-project
+   ```
+   The clone runs inside the sandbox, so a bad key or a blocked forge fails
+   here — before any agent starts. Then look in `repos/` for `github-api/` and
+   `gitlab-ui/`; the volume root is a normal host directory, so you can open
+   them directly.
+
+5. **Edit and extend**
+   - Add Markdown context files to the volume root to shape agent behavior;
+     they are visible at the same path inside the sandbox.
+   - Update `.repos` in `foundry.json` when you add repositories, then run
+     `foundry up` again — it clones what is missing and leaves the rest alone.
+   - Replace `.kimi/` with your preferred prompt, plan or agent instructions.
