@@ -65,7 +65,7 @@ log_debug() {
 # Check if a command exists in PATH
 # Returns 0 if command exists, 1 otherwise
 # Handles NixOS per-user profiles when running with elevated privileges
-# Usage: check_command "firecracker" && log_info "Firecracker found"
+# Usage: check_command "sbx" && log_info "Docker Sandboxes found"
 check_command() {
     local cmd="$1"
 
@@ -92,7 +92,7 @@ check_command() {
 }
 
 # Resolve full path of a command (handles NixOS under sudo/doas)
-# Usage: path=$(get_command_path "firecracker") || exit 1
+# Usage: path=$(get_command_path "sbx") || exit 1
 get_command_path() {
     local cmd="$1"
     
@@ -263,6 +263,45 @@ resolve_host_home() {
     echo "$home"
 }
 
+# Numeric UID of the invoking (non-root) user.
+#
+# Everything Foundry runs inside a sandbox writes into the mounted volume root,
+# which lives on the host filesystem. Running as root in the box would leave
+# root-owned files the user cannot edit, so the sandbox user must match the
+# host user's UID.
+resolve_host_uid() {
+    local user
+    user="$(resolve_host_user)"
+
+    local uid=""
+    if [[ -n "$user" ]] && command -v id >/dev/null; then
+        uid="$(id -u "$user" 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$uid" ]]; then
+        uid="$(id -u)"
+    fi
+
+    echo "$uid"
+}
+
+# Numeric GID of the invoking (non-root) user. See resolve_host_uid.
+resolve_host_gid() {
+    local user
+    user="$(resolve_host_user)"
+
+    local gid=""
+    if [[ -n "$user" ]] && command -v id >/dev/null; then
+        gid="$(id -g "$user" 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$gid" ]]; then
+        gid="$(id -g)"
+    fi
+
+    echo "$gid"
+}
+
 # ============================================================================
 # USER INTERACTION
 # ============================================================================
@@ -368,7 +407,7 @@ _exit_handler() {
 #   log_debug "Detailed diagnostic info"
 #
 #   # System checks
-#   check_command "firecracker" && echo "Firecracker found"
+#   check_command "sbx" && echo "Docker Sandboxes found"
 #   check_kvm && echo "KVM support verified"
 #   os=$(detect_os) && echo "Running on $os"
 #

@@ -125,9 +125,22 @@ impl_pr=$(foundry_build_task_prompt "$(_ctx pr "implement the suggested change")
 check_contains "implement/issue" "$impl_issue" 'Fixes #42'
 check_not_contains "implement/pr" "$impl_pr" 'Fixes #42'
 
-echo "== identity falls back cleanly =="
-fallback=$(AGENT_IDENTITY="" AGENT_DISPLAY_NAME="" foundry_completion_header)
-check_contains "identity" "$fallback" "Agent - Task Completed"
+echo "== identity resolution =="
+fallback=$(AGENT_IDENTITY="" AGENT_DISPLAY_NAME="" AGENT_TYPE="" foundry_completion_header)
+check_contains "identity/none" "$fallback" "Agent - Task Completed"
+
+# With no AGENT_IDENTITY, the registry must still supply the right short name
+# rather than the verbose display name. Watcher configs written before
+# AGENT_IDENTITY existed rely on this.
+# shellcheck source=../lib/agent-registry.sh
+source "$ROOT_DIR/lib/agent-registry.sh"
+derived=$(AGENT_IDENTITY="" AGENT_TYPE="kimi-ralph" \
+    AGENT_DISPLAY_NAME="Kimi Code CLI (Ralph mode)" foundry_completion_header)
+check_contains "identity/derived" "$derived" "🤖 Kimi - Task Completed"
+check_not_contains "identity/derived" "$derived" "Ralph mode"
+
+explicit=$(AGENT_IDENTITY="Ralph" AGENT_TYPE="kimi-ralph" foundry_completion_header)
+check_contains "identity/explicit" "$explicit" "🤖 Ralph - Task Completed"
 
 echo "== checklist style is honoured, negatives stay unchecked =="
 checklist=$(FOUNDRY_OBJECTIVE_STYLE=checklist foundry_build_task_prompt "$(_ctx issue "implement a retry helper")")

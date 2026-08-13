@@ -5,6 +5,15 @@ was changed. Prompt-architecture items are summarised here and covered in full
 in [PROMPT-ARCHITECTURE.md](PROMPT-ARCHITECTURE.md).
 
 Status key: **Fixed** — resolved in this change. **Open** — not addressed.
+**Superseded** — the Docker sandbox migration deleted the code the finding
+described, so there is nothing left to fix.
+
+The review was written against the Firecracker VM backend. The Docker sandbox
+migration (`#2`, `#3`) landed afterwards and removed `lib/agent.sh`,
+`lib/workspace.sh`, `lib/vm.sh`, `lib/registry.sh`, and `lib/network.sh`
+outright. Findings against those files are marked Superseded and kept for the
+record — several describe bug classes worth avoiding when the sandbox
+transport grows the same features.
 
 ---
 
@@ -52,10 +61,11 @@ The agent burned reasoning on every run deciding which to obey.
 headless with no interactive channel, and splits authority: repo agent files
 are authoritative for *how* (build, test, style) and never for *whether* or
 *what*. Also removed the shipped advice to "ask clarifying questions"
-(`templates/workspace/README.md`) and stripped workflow and identity rules from
-`templates/AGENT.md.template`, which was dead code that nothing deployed.
+(`templates/workspace/README.md`, since removed by the migration) and stripped
+workflow and identity rules from `templates/AGENT.md.template`, which was dead
+code that nothing deployed.
 
-## 4. `ssh -n` silently discarded every heredoc — Fixed
+## 4. `ssh -n` silently discarded every heredoc — Superseded
 
 **What.** `_ssh_cmd` (duplicated in `lib/workspace.sh` and `lib/agent.sh`) runs
 `ssh -n`, which redirects stdin from `/dev/null`. Seven call sites piped or
@@ -71,10 +81,14 @@ heredoc'd data into it. All seven wrote **empty files**:
 The two `processed.json` cases sit in the watcher *reset* path, which is the
 backlog protection `AGENTS.md` § *Watcher Lifecycle* is built around.
 
-**Fixed.** Added `_ssh_cmd_stdin` (identical minus `-n`) and repointed all
-seven call sites.
+**Fixed, then superseded.** Fixed by adding `_ssh_cmd_stdin` (identical minus
+`-n`); the migration then deleted both files. The sandbox transport uses
+`sandbox_exec`, which runs `docker exec` **without** `-i` and so has exactly the
+same latent property: no current caller pipes into it, but the first one that
+does will silently write an empty file. If a caller ever needs stdin, add a
+`sandbox_exec_stdin` variant with `-i` rather than reaching for a pipe.
 
-## 5. Silent sync failures — Fixed
+## 5. Silent sync failures — Superseded
 
 **What.** `workspace_sync` never checked `_scp_to_vm`. A failed copy still
 reported "Workspace sync complete."
@@ -83,8 +97,10 @@ reported "Workspace sync complete."
 that `set -euo pipefail` in `bin/foundry` does not help: the moment a caller
 wraps a command in `if !` or `||`, `-e` is disabled for the whole call subtree.
 
-**Fixed.** All ten unchecked `_scp_to_vm` calls now log a specific error and
-return non-zero.
+**Fixed, then superseded.** All ten unchecked `_scp_to_vm` calls were guarded;
+the migration then deleted `lib/workspace.sh`. The sandbox mounts the volume
+root as a host directory, so there is no copy step left to fail silently. The
+underlying warning about `set -e` still applies to the new code.
 
 ## 6. Validation scripts aborted after the first failure — Fixed
 
@@ -98,11 +114,11 @@ repository. Fixing it surfaced four real shellcheck findings that had been
 masked, all now resolved.
 
 **Fixed.** Failure branches no longer abort the run. Both scripts now report
-all 38 files.
+every file in the tree.
 
 ## 7. No CI — Fixed
 
-**What.** `AGENTS.md:110` mandates running both validators before committing.
+**What.** `AGENTS.md` mandates running both validators before committing.
 Nothing enforced it, and there was no `.github/` directory.
 
 **Why it matters.** Every defect above is the kind a CI run catches.
@@ -117,8 +133,11 @@ including agent-name mismatches (a `kimi-ralph` VM told it was Ralph by its
 durable files and Kimi by its task prompt).
 
 **Fixed.** `agent_identity_name()` in `lib/agent-registry.sh` is the single
-source. The host CLI writes `AGENT_IDENTITY` into both watcher configs; every
-header derives from it. Enforced by `scripts/check-prompts.sh`.
+source. `foundry_identity` prefers an explicit `AGENT_IDENTITY` and otherwise
+derives the name from the registry using `AGENT_TYPE`, so the header is correct
+without the host having to write it — which is what kept this working when the
+migration deleted the VM-era watcher config writer. Enforced by
+`scripts/check-prompts.sh`.
 
 ## 9. Competing completion protocols — Partially fixed
 
@@ -144,47 +163,50 @@ so an agent that exits cleanly without finishing is recorded as success.
 
 ## Open items
 
-Not addressed here. Roughly in priority order.
+Not addressed here. Roughly in priority order. Items that only applied to the
+VM backend have been dropped — see the Superseded findings above.
 
-### `_ssh_cmd` is duplicated
+### Watchers are not wired into the sandbox transport
 
-The same function exists in `lib/workspace.sh` and `lib/agent.sh`, which is why
-the `ssh -n` defect had to be found and fixed twice. It belongs in
-`lib/utils.sh`. Deferred because moving it touches every caller in both files
-and is better done as its own change.
+`foundry up` warns that a configured watcher is not started (`lib/commands.sh`,
+Phase 4 of the migration). The six adapters and the prompt layer are complete
+and tested, and `prompt-lib.sh` is baked into the image, but nothing yet starts
+a watcher or copies the adapters into a sandbox. Until that lands, task modes
+and the execution contract are unreachable in normal use.
 
-### `.shellcheckrc` disables SC2086 globally
+When wiring it up: set `AGENT_TYPE` in the watcher environment so
+`foundry_identity` resolves the right name, and copy the adapters for the
+project's agent into the sandbox next to `/opt/foundry/prompt-lib.sh`.
 
-Disabled for `$FOUNDRY_SSH_OPTS` word-splitting, but it hides every genuine
-unquoted-variable bug in the repository. The fix is to make `FOUNDRY_SSH_OPTS`
-an array and re-enable the check. SC2034 is likewise disabled globally and
-hides real dead variables.
+### `.shellcheckrc` disables SC2086 and SC2034 globally
 
-### Multi-field registry updates are not atomic
+SC2086 was disabled for `$FOUNDRY_SSH_OPTS` word-splitting. That variable is
+gone with the VM backend, so the suppression now buys nothing and hides every
+genuine unquoted-variable bug in the repository. SC2034 likewise hides real
+dead variables. Both should be removed and the fallout fixed.
 
-`lib/registry.sh` is otherwise solid — `flock`, temp file plus atomic rename,
-post-write `jq empty` validation. But `agent_start` performs four separate
-`registry_update` calls, each taking and releasing the lock, so a concurrent
-`foundry vm list` can observe a half-written agent record. A
-`registry_update_many` taking one lock for the batch would close it.
+### `sandbox_exec` cannot take stdin
+
+`docker exec` without `-i` discards stdin, exactly as `ssh -n` did. No caller
+pipes into it today, so this is latent rather than broken — but it is the same
+shape as finding 4, which shipped for months. Add a `sandbox_exec_stdin`
+variant before a caller needs one.
 
 ### Missing preflight validation
 
 `AGENTS.md` § *Sanity Checks* asks for early validation. `.kimi/config.toml`
-ships `api_key = ""` and nothing checks it before creating a VM, syncing, and
-starting an agent — the failure surfaces as an auth error buried in a tmux log.
-The same gap applies to `.ralphrc` and `ralph.yml` values.
+still ships `api_key = ""` and nothing checks it before starting an agent — the
+failure surfaces as an auth error buried in a tmux log. The same gap applies to
+`.ralphrc` and `ralph.yml` values. `foundry doctor` is the natural home.
 
 ### Test coverage beyond the prompt library
 
-`scripts/test-prompt-lib.sh` covers prompt construction. Mode resolution was
-the highest-risk logic, but `lib/registry.sh` locking, `lib/config.sh` parsing,
-and `lib/network.sh` IP allocation have no tests.
+`scripts/test-prompt-lib.sh` covers prompt construction, which was the
+highest-risk logic. `lib/policy.sh`, `lib/project.sh` config parsing, and
+`lib/sandbox.sh` have no tests.
 
 ### Smaller
 
 - `.gitignore` has bare `*.log` and `logs/`, which will swallow intentional
   log fixtures.
-- `_scp_to_vm` always passes `-r`, so a typo'd source path copies a directory
-  tree without complaint.
 - `VERSION` still reads `0.1.0` while the CLI is well past that.

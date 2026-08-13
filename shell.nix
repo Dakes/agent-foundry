@@ -11,11 +11,8 @@ pkgs.mkShell {
     wget
     jq
 
-    # VM and networking
-    qemu-utils        # For qemu-img
-    firecracker       # VM hypervisor
-    iproute2          # For ip commands
-    iptables          # For NAT
+    # Sandboxes
+    docker            # Docker Sandboxes runs on the docker daemon
 
     # Session management
     tmux
@@ -39,13 +36,13 @@ pkgs.mkShell {
     echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
     echo "Available tools:"
-    echo "  • firecracker: $(firecracker --version 2>&1 | head -n1)"
-    echo "  • qemu-img: $(qemu-img --version | head -n1)"
+    echo "  • sbx: $(sbx version 2>&1 | head -n1 || echo 'not installed')"
+    echo "  • docker: $(docker --version 2>&1 | head -n1)"
     echo "  • jq: $(jq --version)"
     echo ""
     echo "Quick start:"
     echo "  ./install.sh          Install framework to /usr/local/bin"
-    echo "  foundry host setup    Configure host system"
+    echo "  foundry doctor --fix  Check the host and apply the policy baseline"
     echo "  foundry --help        Show available commands"
     echo ""
     echo "Documentation:"

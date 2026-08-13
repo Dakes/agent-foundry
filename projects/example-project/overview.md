@@ -7,6 +7,6 @@ This directory shows how to declare a reusable workspace for Agent Foundry follo
 - The `.ralph/` tree demonstrates how Ralph users can ship prompts, plans, and agent guidance alongside traditional context.
 - The deploy key files illustrate the per-project SSH workflow that keeps private keys out of the golden template.
 
-Copy this folder to create new workspaces or edit it to mirror your own infrastructure; the `foundry vm create ... --project example-project` command replays it with no surprises.
+Copy this folder to create new workspaces or edit it to mirror your own infrastructure; copy its files into a volume root created by `foundry init`.
 
 For a Ralph Orchestrator-based example (with `ralph.yml` + `PROMPT.md`), see `projects/example-project-orchestrator/`.

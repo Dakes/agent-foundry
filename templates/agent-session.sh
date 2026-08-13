@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 #
-# Agent Foundry - Shared VM-side session ledger helpers.
-# Sourced by autonomous agent start scripts and watcher adapters inside VMs.
+# Agent Foundry - Shared sandbox-side session ledger helpers.
+# Sourced by autonomous agent start scripts and watcher adapters inside a
+# sandbox. Installed into the agent image at /opt/foundry/agent-session.sh.
 
 set -euo pipefail
 
-AGENT_SESSION_LEDGER="${AGENT_SESSION_LEDGER:-/root/.config/foundry/sessions.json}"
+# HOME is the project volume root inside the sandbox, so the ledger lives
+# with the rest of the project state rather than in a per-image /root.
+AGENT_SESSION_LEDGER="${AGENT_SESSION_LEDGER:-${HOME}/.config/foundry/sessions.json}"
 
 # Ensure the session ledger file exists.
 ensure_agent_session_ledger() {

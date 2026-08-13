@@ -11,23 +11,23 @@ AI coding agents are powerful but require isolated environments to work safely a
 
 ## The Solution
 
-Agent Foundry provides **lightweight, isolated microVMs** where AI agents can work autonomously 24/7 on coding projects. Each VM is:
-- **Isolated**: Separate filesystem, network, resources
-- **Reproducible**: Built from scripts, snapshots for reuse
-- **Autonomous**: Agents run unattended with safeguards
-- **Disposable**: Destroy when done, all work saved to git
+Agent Foundry provides **isolated sandboxes** where AI agents can work autonomously on coding projects. Each sandbox is:
+- **Isolated**: separate filesystem and process space, with egress governed by policy
+- **Reproducible**: built from one Dockerfile, not a hand-tended disk image
+- **Autonomous**: agents run unattended with safeguards
+- **Disposable**: remove the sandbox when done; the volume root and its git history stay on the host
 
 ## Key Goals
 
 ### 1. True Autonomy
 Agents work continuously without supervision:
-- Start agent in VM, log out, it keeps working
+- Start the agent, log out, it keeps working
 - ralph-claude-code orchestrates tasks until completion
 - Built-in circuit breakers prevent infinite loops
 - Session continuity across restarts
 
 ### 2. Multi-Project Support
-Run unlimited concurrent VMs:
+Run many concurrent sandboxes:
 - Each project gets dedicated VM
 - 4 vCPUs + 8GB RAM per VM by default (configurable)
 - Dynamic IP allocation (172.16.0.10-254)
@@ -49,35 +49,32 @@ Leverage best tools for each task:
 - Pluggable architecture for future agents
 
 ### 5. Simple, Powerful UX
-Host-based CLI abstracts VM complexity:
+A host-based CLI, three verbs for the common path:
 ```bash
-foundry vm create my-project --project acme-company
-foundry agent start my-project ralph
-# or
-foundry agent start my-project kimi-ralph
-foundry agent logs my-project --follow
+foundry init my-project
+foundry up my-project
+foundry logs -f my-project
 ```
 
 ### 6. Reproducibility
-Templates and snapshots enable reuse:
-- Base template: Clean OS foundation
-- Golden template: With AI tools installed
-- Custom snapshots: Company-specific setups
-- Version and iterate templates
+One image definition, versioned in git:
+- `foundry-agent:base`: the interactive agent CLIs
+- One tag per autonomous runner
+- Custom packages via `config/packages.txt`
+- Rebuild instead of hand-editing a disk image
 
 ### 7. Developer Freedom
 Full access when needed:
 ```bash
-foundry vm ssh my-project
+foundry shell my-project
 # Install tools, debug, customize
-# Snapshot for reuse
 ```
 
 ## Use Cases
 
 ### Autonomous Feature Development
 1. Define feature in `PROMPT.md`
-2. Start `foundry agent start <vm> ralph`
+2. Set `.agent` to `ralph` and run `foundry up`
 3. Agent implements across multiple repos
 4. Commits to feature branch
 5. Review and merge
@@ -181,32 +178,38 @@ A successful Agent Foundry:
 - Advanced orchestration
 - AI agent improvements feedback loop
 
-## Why Firecracker?
+## Why Docker Sandboxes?
 
-- **Lightweight**: Boots in milliseconds, minimal overhead
-- **Secure**: KVM isolation, minimal attack surface
-- **Fast**: Near-bare-metal performance
-- **Stable**: Production-proven (AWS Lambda, Fargate)
-- **Simple**: Easy to integrate via JSON config
+Foundry originally ran agents in Firecracker microVMs. The isolation was
+excellent, but the cost was a whole second system to maintain: a golden image
+pipeline, TAP devices and an IP pool, an SSH transport, and a workspace that
+had to be synced in and out because the VM's filesystem was not the host's.
 
-## Why MicroVMs over Containers?
+Docker Sandboxes removes all of that while keeping what actually mattered:
 
-- **True isolation**: Kernel-level, not just namespaces
-- **Any OS**: Not limited to container-friendly apps
-- **AI safety**: Harder for agent to escape VM
-- **Resource guarantees**: Dedicated CPU/RAM
-- **Familiar**: SSH, normal filesystem, standard tools
+- **Isolation with a policy layer**: egress is enforced by the sandbox proxy,
+  so "open internet, closed LAN" is a rule set rather than a firewall to build
+- **The workspace is the host directory**: bind-mounted at the same absolute
+  path, so there is nothing to sync and no copy to drift
+- **One image definition**: a Dockerfile instead of debootstrap, a kernel and
+  a chroot
+- **No host networking to own**: no TAP devices, no IP pool, no NAT
+- **Fast**: start and stop in about the time an SSH handshake used to take
+
+The trade-off is honest: container isolation is namespace-based, not
+kernel-level. For an agent running code you chose to give it, with the LAN and
+the host cut off at the network layer, that is the right trade.
 
 ## Success Stories (Envisioned)
 
 **Backend Developer**: "I start a Ralph agent on API refactoring before bed. Next morning, it's done - tests passing, PRs created. I review, merge, move on."
 
-**Full-Stack Team**: "We have a company base template with our standards. Everyone clones it, creates VMs per feature. Agents work on frontend/backend simultaneously."
+**Full-Stack Team**: "We have a company agent image with our standards. Everyone builds it, creates a sandbox per feature. Agents work on frontend/backend simultaneously."
 
-**Solo Founder**: "I run 3 agents: one on web app, one on mobile, one on docs. All working 24/7. I focus on product/design, agents handle implementation."
+**Solo Founder**: "I run 3 agents: one on web app, one on mobile, one on docs. All working around the clock. I focus on product/design, agents handle implementation."
 
-**Consultant**: "Each client gets a VM template with their specific context. I spin up VMs per project, agents know the client's codebase and standards instantly."
+**Consultant**: "Each client gets a project with their specific context. I spin up a sandbox per project, agents know the client's codebase and standards instantly."
 
 ## Conclusion
 
-Agent Foundry enables a new development paradigm: **autonomous, isolated, reproducible AI agent workspaces**. Developers describe what to build, agents execute, humans review and guide. VMs provide the safe, powerful environment agents need to work at full capability.
+Agent Foundry enables a new development paradigm: **autonomous, isolated, reproducible AI agent workspaces**. Developers describe what to build, agents execute, humans review and guide. Sandboxes provide the safe, powerful environment agents need to work at full capability.

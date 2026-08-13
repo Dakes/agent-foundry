@@ -3,9 +3,9 @@
 # Agent Foundry - Agent Registry
 #
 # Single source of truth for supported AI agent types and their runtime
-# properties. This file is sourced by lib/agent.sh, lib/workspace.sh,
-# bin/foundry, and standalone watcher scripts inside VMs, so it must stay
-# plain bash 4+ compatible and self-contained.
+# properties. This file is sourced by lib/agent-sandbox.sh and by standalone
+# watcher scripts running inside a sandbox, so it must stay plain bash 4+
+# compatible and self-contained.
 #
 
 # Whitespace-separated list of valid agent type identifiers.

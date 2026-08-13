@@ -79,9 +79,8 @@ config_init() {
 
     # Create data directory structure
     local subdirs=(
-        "vms/templates"
-        "vms/instances"
-        "vms/kernels"
+        "volumes"
+        "shared"
         "logs"
     )
 
@@ -441,8 +440,8 @@ config_load() {
     log_debug "Config values:"
     log_debug "  DEFAULT_CPUS=${DEFAULT_CPUS:-<unset>}"
     log_debug "  DEFAULT_MEMORY=${DEFAULT_MEMORY:-<unset>}"
-    log_debug "  DEFAULT_DISK=${DEFAULT_DISK:-<unset>}"
-    log_debug "  GATEWAY_IP=${GATEWAY_IP:-<unset>}"
+    log_debug "  FOUNDRY_DEFAULT_AGENT=${FOUNDRY_DEFAULT_AGENT:-<unset>}"
+    log_debug "  FOUNDRY_IMAGE_REPO=${FOUNDRY_IMAGE_REPO:-<unset>}"
     log_debug "  CONFIG_DIR=${CONFIG_DIR:-<unset>}"
 
     return 0
@@ -473,8 +472,8 @@ config_load() {
 #
 #   # Load all config into environment
 #   config_load
-#   echo "Gateway IP: $GATEWAY_IP"
-#   echo "Template dir: $TEMPLATE_DIR"
+#   echo "Default agent: $FOUNDRY_DEFAULT_AGENT"
+#   echo "Volume dir: $FOUNDRY_VOLUME_DIR"
 #
 # Test configuration hierarchy:
 #

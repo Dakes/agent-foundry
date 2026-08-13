@@ -1,275 +1,166 @@
 # Project Setup Guide
 
-This guide explains how to create and configure project folders for Agent Foundry VMs.
+How to create and configure a Foundry project.
 
 ## Overview
 
-Agent Foundry uses project folders to configure VMs. Each project folder contains:
-- **git-config.json**: Repository configuration (required)
-- **agents.json**: Agent selection for workspace provisioning (required)
-- **Context markdown files**: Project documentation for agents
-- **Deploy keys (optional)**: Per-repo SSH keys for git authentication
-- **.ralph/ folder**: Optional Ralph-specific configuration
-- **.kimi/ folder**: Optional Kimi-specific configuration
-
-## SSH Key Isolation (Per-VM)
-
-By default, Foundry generates a unique SSH keypair for each VM under:
-`~/.local/share/foundry/vms/<name>/ssh/`.
-
-- The generated key is used for VM access and git authentication.
-- Foundry never reads `~/.ssh/` unless you explicitly pass `--ssh-key <path>` when creating a VM.
-
-## Project Folder Structure
+A project is one directory on the host — the **volume root** — plus one
+sandbox. The volume root is bind-mounted into the sandbox at the same absolute
+path, so everything in it is a normal host file you can edit, grep and back up
+directly.
 
 ```
-projects/
-  my-project/
-    git-config.json           # Required: Repository configuration
-    agents.json               # Required: selected agents (one autonomous agent max)
-    overview.md               # Project context
-    architecture.md           # Architecture documentation
-    coding-standards.md       # Coding guidelines
-    ralph.yml                 # Optional: Ralph Orchestrator config
-    PROMPT.md                 # Optional: Ralph Orchestrator prompt file
-    .ralph/                   # Optional: Ralph-specific
-      PROMPT.md
-      fix_plan.md
-      AGENT.md
-    backend-deploy-key        # SSH private key for backend repo
-    backend-deploy-key.pub    # SSH public key
-    frontend-deploy-key       # SSH private key for frontend repo
-    frontend-deploy-key.pub   # SSH public key
+~/.local/share/foundry/volumes/<project>/
+├── foundry.json     # the whole project config
+├── .ssh/            # git keys and config (you write these by hand)
+├── repos/           # cloned inside the sandbox by init/up
+├── logs/            # agent logs, tailed by 'foundry logs'
+└── .foundry/        # generated start scripts
 ```
 
-## Creating a Project Folder
+There is no `projects/` folder, no `git-config.json` and no `agents.json` any
+more: one `foundry.json` replaces all three.
 
-### Step 1: Create Project Directory
+## Step 1: Create the project
 
 ```bash
-mkdir -p projects/my-project
-cd projects/my-project
+foundry init my-project
 ```
 
-### Step 2: Create git-config.json
+This scaffolds the volume root, seeds `foundry.json` and `.ssh/config`, applies
+the network policy baseline plus any rules your remotes need, creates the
+sandbox, and clones the declared repos inside it.
 
-Create `git-config.json` with your repositories:
+On a first run you will have no repos declared yet, so:
+
+```bash
+$EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
+```
+
+## Step 2: Configure `foundry.json`
 
 ```json
 {
-  "git_user_name": "ci-bot",
-  "git_user_email": "ci-bot@example.com",
-  "repositories": [
+  "name": "my-project",
+  "agent": "claude",
+  "autostart": false,
+  "repos": [
     {
-      "name": "backend",
       "url": "git@github.com:myorg/backend.git",
       "branch": "main",
-      "ssh_key": "backend-deploy-key"
+      "dir": "backend"
     },
     {
-      "name": "frontend",
-      "url": "git@gitlab.com:myorg/frontend.git",
-      "branch": "develop",
-      "ssh_key": "frontend-deploy-key"
+      "url": "https://forge.example.com:3000/myorg/frontend.git"
     }
-  ]
+  ],
+  "resources": {
+    "cpus": 4,
+    "memory": "8g"
+  },
+  "network": {
+    "allow": [],
+    "deny": []
+  }
 }
 ```
 
-**Fields:**
-- `git_user_name` (optional): Global `user.name` set in the VM, so commits are authored as this identity.
-- `git_user_email` (optional): Global `user.email` set in the VM.
-- `name`: Directory name in VM (`/work/<vm>/repos/<name>/`)
-- `url`: Standard git SSH URL
-- `branch`: Branch to checkout (default: "main")
-- `ssh_key`: Filename of deploy key (without .pub extension)
+**Fields** — all optional except what you actually use:
 
-### Step 3: Create agents.json
+- `agent` — `claude`, `gemini`, `codex`, `ralph`, `ralph-orchestrator`,
+  `kimi-ralph`. Defaults to `claude`. At most one agent per project.
+- `image` — override the image; otherwise derived from `agent`
+  (`foundry-agent:base` for interactive agents).
+- `repos[].url` — any git URL. `branch` and `dir` are optional; `dir` defaults
+  to the repo name.
+- `resources.cpus` / `resources.memory` — memory takes a unit (`8g`, `4096m`);
+  a bare number is read as MiB. Empty means "let the sandbox decide".
+- `network.allow` — rules derived from your remotes are written back here by
+  `init`, so every exception is visible in a diff. You can add your own.
+- `watcher.kind` / `watcher.port` / `watcher.token_file` — forge watcher
+  config. **Not yet ported to the sandbox transport**; the port is published
+  but nothing listens on it.
 
-Create `agents.json` to declare which agents this project uses:
+Apply any change with `foundry up` — it reconciles rather than recreating.
 
-```json
-{
-  "agents": [
-    "kimi-cli",
-    "@anthropic-ai/claude-code",
-    "@openai/codex",
-    "@google/gemini-cli"
-  ]
-}
-```
+## Step 3: Set up git keys
 
-For Ralph projects, replace `kimi-cli` with `frankbria/ralph-claude-code` or `mikeyobrien/ralph-orchestrator`.
-
-Important: include at most one autonomous agent per project/image.
-
-### Step 4: Generate Deploy Keys
-
-Generate a deploy key for each repository (optional):
+Foundry never reads `~/.ssh`. Keys live in the project's own `.ssh/`, and you
+create them by hand — that way an agent identity separate from your personal
+one is just a different key, and nothing is generated behind your back.
 
 ```bash
-# For backend repo
-ssh-keygen -t ed25519 -f backend-deploy-key -C "backend-deploy-key" -N ""
-
-# For frontend repo
-ssh-keygen -t ed25519 -f frontend-deploy-key -C "frontend-deploy-key" -N ""
+cd ~/.local/share/foundry/volumes/my-project/.ssh
+ssh-keygen -t ed25519 -f id_agent -C "foundry-agent" -N ""
 ```
 
-**Add public keys to your git hosting:**
-- GitHub: Settings → Deploy keys
+Then add the **public** key to your forge:
+
+- GitHub: repo → Settings → Deploy keys (or a dedicated account's SSH keys)
+- Forgejo/Gitea: repo → Settings → Deploy keys
 - GitLab: Settings → Repository → Deploy keys
 
-### Step 5: Add Context Files
+`init` seeds `.ssh/config` with commented blocks to fill in — a plain host, a
+self-hosted forge on a non-standard port, and the separate-agent-account
+pattern:
 
-Create markdown files with project documentation:
+```
+Host github.com
+    IdentityFile ~/.ssh/id_agent
+    IdentitiesOnly yes
 
-```bash
-# Project overview
-cat > overview.md << 'EOF'
-# My Project
-
-High-level description of the project, its purpose, and key components.
-EOF
-
-# Architecture documentation
-cat > architecture.md << 'EOF'
-# Architecture
-
-System architecture, component relationships, data flow.
-EOF
-
-# Coding standards
-cat > coding-standards.md << 'EOF'
-# Coding Standards
-
-- Style guide
-- Naming conventions
-- Best practices
-EOF
+# A separate identity for the agent, so it does not act as you:
+Host github-agent
+    HostName github.com
+    IdentityFile ~/.ssh/id_agent
+    IdentitiesOnly yes
 ```
 
-### Step 6: (Optional) Add Agent Configuration
+With the last form, write remotes as `git@github-agent:myorg/repo.git`.
 
-If using Ralph, create `.ralph/` folder:
+Permissions are normalized for you (`.ssh` 700, files 600) on every `init`,
+`up` and `doctor --fix`.
 
-```bash
-mkdir .ralph
-cat > .ralph/PROMPT.md << 'EOF'
-# Task Instructions
-
-Current development task and requirements.
-EOF
-
-cat > .ralph/fix_plan.md << 'EOF'
-# Task List
-
-- [ ] Task 1
-- [ ] Task 2
-EOF
-```
-
-If using Kimi (`kimi-cli`), create `.kimi/` folder:
+## Step 4: Bring it up
 
 ```bash
-mkdir .kimi
-cat > .kimi/config.toml << 'EOF'
-default_model = "kimi-code/kimi-for-coding"
-default_thinking = true
-
-[providers."managed:kimi-code"]
-type = "kimi"
-base_url = "https://api.kimi.com/coding/v1"
-api_key = "YOUR_MOONSHOT_API_KEY"
-
-[loop_control]
-max_steps_per_turn = 1000
-max_retries_per_step = 3
-max_ralph_iterations = 0
-EOF
-
-cat > .kimi/task_prompt.md << 'EOF'
-# Kimi Task Prompt
-
-Describe the task you want Kimi to perform autonomously.
-EOF
+foundry up my-project
 ```
 
-The `.kimi/config.toml` is synced to `/root/.kimi/config.toml` and supplies the
-API key for the `kimi` CLI. You can also authenticate interactively once inside
-the VM with `kimi login`. The `.kimi/task_prompt.md` file is used as the prompt
-for manual `foundry agent start <vm> kimi-ralph` runs; the GitHub watcher
-overwrites it for each triggered issue/PR.
+The clone runs **inside the sandbox**, on purpose: it is the first real test of
+your key and of the network policy, and it happens before any agent starts. If
+it fails, the error names the three causes worth checking — no key in `.ssh`,
+the forge blocked by policy, or a wrong branch.
 
-## Using Your Project
-
-### Create a VM
+Verify the whole picture with:
 
 ```bash
-foundry vm create dev-vm-1 --project my-project
+foundry doctor my-project
+foundry status my-project
 ```
 
-This will:
-1. Create VM from golden template
-2. Generate a per-VM SSH keypair in `~/.local/share/foundry/vms/<name>/ssh/`
-3. Copy deploy keys to VM's `/root/.ssh/` (if provided)
-4. Generate SSH config for per-repo keys
-5. Clone repositories using deploy keys
-6. Copy markdown files to `/work/dev-vm-1/context/`
-7. Copy `.ralph/` and `.kimi/` folders if they exist
-8. Copy `ralph.yml` / `ralph.*.yml` if present
+## Network access to your forge
 
-### Create Multiple VMs from Same Project
+Egress is open to the internet and closed to the LAN and the host. A forge on
+a public URL works with no extra setup. A forge reachable only on your LAN is
+**deliberately blocked** — that is the point of the posture.
+
+Git over SSH is non-HTTP TCP and always needs an explicit rule; `init` derives
+these from your remotes automatically. Check one with:
 
 ```bash
-foundry vm create dev-vm-2 --project my-project
-foundry vm create staging-vm --project my-project
+foundry policy check forge.example.com:22
 ```
 
-All VMs use the same project configuration but are independent instances.
+## Context files
 
-## Multi-Agent Support
+Anything you drop in the volume root is visible to the agent at the same path
+inside the sandbox — `overview.md`, `architecture.md`, coding standards, and
+the agent's own dotfolder (`.claude/`, `.ralph/`, `.kimi/`).
 
-The project folder structure is agent-agnostic:
+For context that should be available to *every* project, use the shared
+directory, which is mounted read-only into every sandbox:
 
-**Autonomous Agents:**
-- `frankbria/ralph-claude-code`: uses `.ralph/` + optional `.ralphrc`
-- `mikeyobrien/ralph-orchestrator`: uses `ralph.yml` + `PROMPT.md` (+ optional `.ralph/`)
-- `kimi-cli`: uses `.kimi/` for config and task prompts; capped at 100 Ralph iterations
-- Only one autonomous agent should be configured per project/image
-
-**Claude Code (Interactive):**
-- No `.ralph/` folder needed
-- User provides instructions interactively
-- Context files available in `context/`
-
-**Other Agents (Gemini, etc.):**
-- Create agent-specific folders as needed
-- Use `AGENT.md` as entrypoint
-
-## Example: Complete Setup
-
-See `projects/example-project/` in the repository for a complete working example.
-For Ralph Orchestrator, see `projects/example-project-orchestrator/`.
-
-## Tips
-
-1. **Security**: Never commit private deploy keys to git (use .gitignore)
-2. **Multiple repos can share keys**: Use same `ssh_key` value in git-config.json
-3. **Per-environment configs**: Create separate projects for dev/staging/prod
-4. **Team sharing**: Share project folder structure (without private keys)
-5. **Deploy key management**: Use read-only deploy keys when possible
-
-## Troubleshooting
-
-**Repos fail to clone:**
-- Check deploy key is added to git hosting
-- Verify key permissions (600 for private key)
-- Check URL format in git-config.json
-
-**Agent can't find context:**
-- Markdown files should be in project root (not subfolders)
-- Check files were copied to VM: `foundry vm ssh <name>`
-
-**Ralph-specific files missing:**
-- Ensure `.ralph/` exists in project folder
-- Check files were copied: `foundry vm ssh <name>` → `ls /work/<name>/.ralph/`
+```
+~/.local/share/foundry/shared/
+```

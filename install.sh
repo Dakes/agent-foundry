@@ -269,9 +269,10 @@ install_foundry() {
     log_info "Creating directories..."
     mkdir -p "$BIN_DIR"
     mkdir -p "$CONFIG_DIR"
-    mkdir -p "$DATA_DIR/vms/templates"
-    mkdir -p "$DATA_DIR/vms/instances"
-    mkdir -p "$DATA_DIR/vms/kernels"
+    # One volume root per project, plus a shared read-only context directory
+    # mounted into every sandbox. These replace the VM disk/kernel layout.
+    mkdir -p "$DATA_DIR/volumes"
+    mkdir -p "$DATA_DIR/shared"
     mkdir -p "$DATA_DIR/logs"
 
     # Install binary from bundle
@@ -289,25 +290,16 @@ install_foundry() {
         fi
     fi
 
-    if [[ -f "${PROJECT_ROOT}/config/packages.txt" ]]; then
-        if [[ ! -f "${CONFIG_DIR}/packages.txt" ]]; then
-            cp "${PROJECT_ROOT}/config/packages.txt" "${CONFIG_DIR}/packages.txt"
-        fi
-    fi
-
-    # Copy template files if they exist
-    if [[ -d "${PROJECT_ROOT}/templates" ]]; then
-        log_info "Installing template files..."
-        if ! cp -r "${PROJECT_ROOT}"/templates/* "$CONFIG_DIR/"; then
-            log_error "Failed to copy templates to $CONFIG_DIR"
-            exit 1
-        fi
-    fi
-
-    # Create registry file if it doesn't exist
-    if [[ ! -f "${CONFIG_DIR}/vms.json" ]]; then
-        echo '{"vms":{}}' > "${CONFIG_DIR}/vms.json"
-    fi
+    # Nothing else is staged here. The config directory holds config.conf and
+    # nothing more:
+    #   - Start templates and watcher scripts travel inside the release bundle
+    #     and are resolved relative to lib/, so a copy here would be read by
+    #     no one. (The VM backend needed them on the host to scp into a guest.)
+    #   - Workspace/memory/AGENT.md seeds are gone; 'foundry init' scaffolds a
+    #     volume root directly.
+    #   - Extra packages are set in config/packages.txt in the source tree and
+    #     baked in by 'foundry image build'.
+    #   - There is no VM registry; sbx tracks sandboxes itself.
 
     log_info "Installation complete!"
     echo ""
@@ -387,21 +379,18 @@ show_next_steps() {
         echo "     # Create $shell_rc if it does not exist yet"
     fi
     echo ""
-    echo "  2. Set up your host system:"
-    echo "     sudo foundry host setup"
+    echo "  2. Check the host (needs Docker Sandboxes: 'sbx'):"
+    echo "     foundry doctor --fix"
     echo ""
-    echo "  3. Build VM templates:"
-    echo "     sudo foundry template build base"
-    echo "     sudo foundry template build golden"
+    echo "  3. Build the agent image:"
+    echo "     foundry image build"
     echo ""
-    echo "  4. Create your first VM:"
-    echo "     foundry vm create my-project"
+    echo "  4. Create your first project:"
+    echo "     foundry init my-project"
     echo ""
-    echo "  5. Initialize a workspace:"
-    echo "     foundry workspace init my-project config.json"
-    echo ""
-    echo "  6. Start an agent:"
-    echo "     foundry agent start my-project ralph"
+    echo "  5. Add git keys, then start it:"
+    echo "     \$EDITOR $DATA_DIR/volumes/my-project/.ssh/config"
+    echo "     foundry up my-project"
     echo ""
     log_info "Documentation: See README.md and docs/ for more information"
     log_info "==================================================================="
@@ -461,15 +450,16 @@ main() {
     # Show next steps
     show_next_steps
 
-    # Optionally run host setup
+    # Optionally check the host.
+    #
+    # There is no provisioning step any more: the Firecracker backend needed
+    # KVM, TAP devices and a golden image, while Docker Sandboxes needs only a
+    # working `sbx`. 'foundry doctor' reports what is missing, and --fix
+    # applies the network policy baseline.
     if $RUN_SETUP; then
         echo ""
-        if confirm "Run host setup now? (Recommended)"; then
-            if [[ -x "${PROJECT_ROOT}/scripts/setup-host.sh" ]]; then
-                exec "${PROJECT_ROOT}/scripts/setup-host.sh"
-            else
-                log_warn "Host setup script not found"
-            fi
+        if confirm "Check the host now with 'foundry doctor'? (Recommended)"; then
+            exec "${BIN_DIR}/foundry" doctor
         fi
     fi
 }

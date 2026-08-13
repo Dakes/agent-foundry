@@ -59,8 +59,8 @@ that nothing ever deployed — carried its own identity and workflow rules.
 `## 🤖 Ralph - Task Completed`, `## Ralph - Task Completed`,
 `## Kimi - Task Completed`, `## 🤖 $AGENT_DISPLAY_NAME - Task Update (Error)`,
 and `## 🤖 ${AGENT_TYPE:-Agent} - ...` were hardcoded across nine files. A
-`kimi-ralph` VM was told it was Ralph by its durable files and Kimi by its
-task prompt.
+`kimi-ralph` sandbox was told it was Ralph by its durable files and Kimi by
+its task prompt.
 
 ### 4. Competing completion protocols
 
@@ -155,13 +155,25 @@ sentence is another opportunity to contradict something. The current shape:
 | Durable capabilities | project `.ralph/AGENT.md` |
 | Per-task instructions | generated `fix_plan.md` / `task_prompt.md` |
 
-`templates/prompt-lib.sh` is synced to `/opt/foundry/prompt-lib.sh` by
-`_sync_prompt_lib` and sourced by every adapter. Adapters contain no prompt
+`templates/prompt-lib.sh` is baked into the agent image at
+`/opt/foundry/prompt-lib.sh` (see `docker/foundry-agent.Dockerfile`, alongside
+`agent-session.sh`) and sourced by every adapter. Adapters contain no prompt
 text — they resolve the mode, call the builder, and write the result where
 their agent expects it.
 
-`AGENT_IDENTITY` is written into both watcher configs by the host CLI. All
-comment headers derive from it, so the name cannot drift.
+The identity resolves in `foundry_identity`: `AGENT_IDENTITY` if the watcher
+config sets it, otherwise `agent_identity_name()` from `lib/agent-registry.sh`,
+which watcher scripts source inside the sandbox. Deriving from the registry
+means the header stays correct without the host having to write the value, so
+it survives transport changes.
+
+**Watcher status.** Watchers are not yet wired into the sandbox transport
+(`lib/commands.sh` warns about this on `foundry up`; it is Phase 4 of the
+Docker migration). The adapters and this prompt layer are ready and tested;
+what is missing is the host-side code that starts a watcher and copies the
+adapters into the sandbox. When that lands, it should set `AGENT_TYPE` in the
+watcher environment — `AGENT_IDENTITY` is optional because of the fallback
+above.
 
 ---
 
@@ -209,9 +221,10 @@ re-creates the original problem.
 
 The resolved mode is logged: `Resolved task mode: review (kind: pr)`.
 
-Inspect the generated prompt in the VM — `/root/.ralph/fix_plan.md` for
-`ralph`, `/root/.ralph/gh_task_prompt.md` for `ralph-orchestrator`,
-`/root/.kimi/task_prompt.md` for `kimi-ralph`.
+Inspect the generated prompt in the volume root — `.ralph/fix_plan.md` for
+`ralph`, `.ralph/gh_task_prompt.md` for `ralph-orchestrator`,
+`.kimi/task_prompt.md` for `kimi-ralph`. The volume root is a host directory,
+so these are readable without entering the sandbox.
 
 If the agent did the wrong kind of work, check the `Mode:` line first. If the
 mode is right and the behaviour is wrong, the objective needs a sharper

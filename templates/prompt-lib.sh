@@ -105,11 +105,30 @@ _foundry_kind_label() {
 # Identity
 # ---------------------------------------------------------------------------
 
-# Short identity used in comment headers. AGENT_IDENTITY is written into the
-# watcher config by the host CLI (see agent_identity_name in
-# lib/agent-registry.sh). AGENT_DISPLAY_NAME is the verbose form used in logs.
+# Short identity used in comment headers.
+#
+# Resolution order, so the name is correct regardless of how the watcher was
+# configured:
+#   1. AGENT_IDENTITY, when the watcher config sets it explicitly.
+#   2. agent_identity_name() from lib/agent-registry.sh, which watcher scripts
+#      source inside the sandbox. This keeps the header right even when the
+#      config predates AGENT_IDENTITY or omits it.
+#   3. AGENT_DISPLAY_NAME, then a generic fallback.
+#
+# AGENT_DISPLAY_NAME is deliberately last: it is the verbose log form
+# ("Kimi Code CLI (Ralph mode)") and reads badly as a comment header.
 foundry_identity() {
-    printf '%s' "${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME:-Agent}}"
+    if [[ -n "${AGENT_IDENTITY:-}" ]]; then
+        printf '%s' "$AGENT_IDENTITY"
+        return 0
+    fi
+
+    if [[ -n "${AGENT_TYPE:-}" ]] && declare -F agent_identity_name >/dev/null; then
+        printf '%s' "$(agent_identity_name "$AGENT_TYPE")"
+        return 0
+    fi
+
+    printf '%s' "${AGENT_DISPLAY_NAME:-Agent}"
 }
 
 foundry_completion_header() {
