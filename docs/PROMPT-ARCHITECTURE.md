@@ -109,23 +109,66 @@ action. Only an explicit prohibition suppresses that.
 | `answer` | post a comment | modifying anything |
 | `default` | inferred from the request | opening a PR unless clearly asked |
 
+`default` is no longer reached by resolution; see "No mode, no run" below.
+
 ### Mode resolution
 
-Implemented in `foundry_task_mode`. Highest precedence first:
+The mode is **stated, never guessed**. The comment that triggers a run always
+contains the trigger keyword — that is what makes it a trigger — so the word
+straight after it carries the mode:
 
-1. **Explicit directive** anywhere in the triggering comment: `/review`,
-   `mode: fix`, `@bot implement`.
-2. **Leading verb** of the request, after stripping @mentions, greetings, and
-   politeness. `"Hey bot, can you please review this?"` → `review`.
-   Only the *leading* verb counts. Scanning the whole body is unpredictable:
-   a request to fix something routinely mentions "review" in passing.
-3. **`default`**, except `pipeline_failure`, which is always `fix`.
+```
+@touya review    have a look at the last commit
+@touya fix       the bug you introduced in parse_args
+@touya implement add a --verbose flag
+@touya answer    why does the uploader time out?
+```
 
-`default` is the generic fallback, and it is deliberately conservative: it
-tells the agent to determine intent from the request and choose the least
-destructive action that satisfies it. It does not assume code should be
-written. An unclear request now produces a comment, not an unwanted pull
-request.
+Precedence, highest first:
+
+1. The word after the trigger keyword (`TRIGGER_KEYWORD`, per watcher config).
+2. `/review` or `mode: review` anywhere in the request — explicit, so free to
+   support, and they survive a reworded mention.
+3. `pipeline_failure` is always `fix`: the event is the request, and no human
+   comment exists to state a mode.
+4. Otherwise `help` — see below.
+
+Quoted material is removed before any of this. Replying with the previous
+comment quoted is routine, and a mode word inside a blockquote or code fence
+belongs to someone else's message.
+
+#### Why not infer the mode from the phrasing
+
+The first implementation did infer it: synonym tables per mode, a politeness
+stripper, clause splitting, noun-form patterns. It read well and it failed
+badly. `"don't implement anything, just review it"` resolved to nothing;
+`"reveiw this"` resolved to nothing; `"Bitte behebe den Fehler"` resolved to
+nothing; and each repair made the next result harder to predict. It was ~80
+lines of natural-language processing in shell, and the thing it decided was
+which *prohibitions* the agent received.
+
+One stated word is worth thirty inferred ones. The syntax costs a user four
+characters and is impossible to get subtly wrong; inference was free to type
+and silently wrong. The list of synonyms is now the list of modes.
+
+### No mode, no run
+
+A request that states no mode gets a **hardcoded reply** listing the syntax,
+and no agent is started.
+
+`foundry_task_mode` returns `help`; the adapter writes `foundry_help_comment`
+to `FOUNDRY_REPLY_FILE` and returns `FOUNDRY_EXIT_HELP` (78). The watcher posts
+that file and skips the agent entirely.
+
+The reply is hardcoded, not generated: explaining the syntax is not a task for
+a language model. It costs tokens and latency, and a generated answer can
+invent a mode that does not exist. `scripts/test-prompt-lib.sh` asserts that
+every mode in `FOUNDRY_TASK_MODES` appears in the help text, so the two cannot
+drift.
+
+This replaces the old `default` mode as the fallback. `default` remains valid
+for an adapter that asks for it deliberately, but nothing resolves to it any
+more — a request nobody has understood now produces a question, not a guess.
 
 ### Less is more
 
@@ -177,6 +220,20 @@ above.
 
 ---
 
+### Untrusted input
+
+The triggering comment, the description, and the discussion are written by
+anyone who can comment on the repository. They used to be spliced into the
+prompt raw, which let a comment forge its own `## Execution Contract` section —
+at the same heading level as the real one, later in the document, inside the
+block the prompt declares authoritative. An architecture built on precedence
+cannot let its input mint precedence.
+
+Quoted material is now wrapped in a `<<<UNTRUSTED` fence that the execution
+contract names and defines as data. Inside the fence, Markdown headings are
+defanged (`## X` → `- X`) and fence markers are broken, so quoted text can
+neither impersonate a section nor escape its container.
+
 ## Rules
 
 These are enforced mechanically by `scripts/check-prompts.sh`, which runs in
@@ -191,6 +248,10 @@ CI. Each corresponds to a defect that previously shipped.
 5. **No hardcoded repository paths in durable prompts.** The watcher supplies
    the repository per task; a baked-in path contradicts it.
 6. **Every mode must state at least one prohibition.**
+7. **Untrusted text is fenced.** The triggering request and all background
+   material pass through `_foundry_quote`.
+8. **Repository paths are derived**, never hardcoded: the volume root differs
+   per project.
 
 `scripts/test-prompt-lib.sh` covers mode resolution against realistic phrasings
 plus the structural guarantees (review mode forbids opening a PR; the
@@ -202,8 +263,10 @@ on a prohibition).
 ## Extending
 
 **Adding a mode.** Add it to `FOUNDRY_TASK_MODES`, add a `case` branch in
-`foundry_objective_block` with at least one `_foundry_never`, add detection
-verbs to `foundry_task_mode`, and add cases to `scripts/test-prompt-lib.sh`.
+`foundry_objective_block` with at least one `_foundry_never`, add a row to
+`foundry_help_comment`, and add cases to `scripts/test-prompt-lib.sh`. No
+detection words are needed: the mode is whatever the user types after the
+trigger keyword, so the name itself is the trigger.
 
 **Adding an agent.** Add it to `lib/agent-registry.sh` including
 `agent_identity_name`. Write an adapter that sources the prompt library,
@@ -219,7 +282,9 @@ re-creates the original problem.
 
 ## Debugging a run
 
-The resolved mode is logged: `Resolved task mode: review (kind: pr)`.
+The resolved mode is logged: `Resolved task mode: review (kind: pr)`. A run
+that answered with the syntax instead logs `No task mode stated; replying with
+usage` and exits 78 without starting an agent.
 
 Inspect the generated prompt in the volume root — `.ralph/fix_plan.md` for
 `ralph`, `.ralph/gh_task_prompt.md` for `ralph-orchestrator`,
@@ -228,5 +293,5 @@ so these are readable without entering the sandbox.
 
 If the agent did the wrong kind of work, check the `Mode:` line first. If the
 mode is right and the behaviour is wrong, the objective needs a sharper
-prohibition. If the mode is wrong, use an explicit `/mode` directive and add
-the phrasing that missed to `scripts/test-prompt-lib.sh`.
+prohibition. If the mode is wrong, the request stated the wrong word — the
+resolver has no judgement to second-guess.
