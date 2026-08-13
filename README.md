@@ -197,7 +197,6 @@ Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
 - [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) — full command reference
 - [PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md) — how agent prompts are built, and the rules that keep them consistent
 - [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) — Ralph integration details
-- [REPO-REVIEW.md](docs/REPO-REVIEW.md) — review findings and open items
 - [TODO.md](TODO.md) — implementation roadmap
 
 ## Development
