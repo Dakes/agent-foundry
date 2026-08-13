@@ -2,18 +2,18 @@
 #
 # Agent Foundry - Main CLI
 #
-# Host-based management tool for Firecracker microVMs running AI agents.
+# Host-based management tool for Docker Sandboxes running AI agents.
 #
-# Usage: foundry <domain> <action> [args...]
+# Usage: foundry <command> [project] [options]
 #
-# Domains:
-#   vm        - VM lifecycle management
-#   agent     - AI agent session management
-#   workspace - Workspace management
-#   template  - Template management
-#   host      - Host system setup
-#   config    - Configuration management
-#   network   - Network management
+# Commands:
+#   init/up/down  - project lifecycle (sandbox + policy + repos + agent)
+#   status/logs   - inspection
+#   attach/shell  - enter a running sandbox
+#   rm/doctor     - teardown and diagnostics
+#   policy/image  - escape hatches over sbx and the agent image
+#
+# The vm/agent/workspace/template/host/network domains are deprecated.
 #
 
 set -euo pipefail
@@ -61,6 +61,15 @@ fi
 source "${LIB_DIR}/utils.sh"
 source "${LIB_DIR}/config.sh"
 source "${LIB_DIR}/registry.sh"
+
+# Sandbox stack (Docker Sandboxes)
+source "${LIB_DIR}/sandbox.sh"
+source "${LIB_DIR}/policy.sh"
+source "${LIB_DIR}/project.sh"
+source "${LIB_DIR}/agent-sandbox.sh"
+source "${LIB_DIR}/commands.sh"
+
+# Deprecated Firecracker stack - removed after one release
 source "${LIB_DIR}/network.sh"
 source "${LIB_DIR}/vm.sh"
 source "${LIB_DIR}/agent.sh"
@@ -71,7 +80,7 @@ export COLOR_OUTPUT="${COLOR_OUTPUT:-true}"
 
 # Version (read from VERSION file, fallback to 0.1.0)
 if [[ -f "${FOUNDRY_BASE}/VERSION" ]]; then
-    FOUNDRY_VERSION=$(cat "${FOUNDRY_BASE}/VERSION" | tr -d '[:space:]')
+    FOUNDRY_VERSION=$(tr -d '[:space:]' < "${FOUNDRY_BASE}/VERSION")
 else
     FOUNDRY_VERSION="0.1.0"
 fi
@@ -86,20 +95,31 @@ show_version() {
 
 show_help() {
     cat << 'EOF'
-Agent Foundry - Firecracker microVM management for AI agents
+Agent Foundry - isolated microVM sandboxes for AI agents
 
 USAGE:
-    foundry <domain> <action> [args...]
+    foundry <command> [project] [options]
     foundry [--help | --version]
 
-DOMAINS:
-    vm          VM lifecycle management (create, start, stop, destroy, ssh, list)
-    agent       AI agent session management (start, stop, attach, logs)
-    workspace   Workspace management (init, init-ralph, edit, info)
-    template    Template building (build, list)
-    host        Host system setup (setup, status)
-    config      Configuration management (get, set, edit)
-    network     Network management (init, status, cleanup)
+The project is inferred from the current directory when omitted.
+
+COMMANDS:
+    init <project>      Create volume root, config, policy rules and sandbox,
+                        then clone declared repos inside it
+    up [project]        Start sandbox, publish ports, clone missing repos,
+                        start the agent (idempotent - run it any time)
+    down [project]      Stop agent and sandbox, keeping all state
+    status [project]    Sandbox, agent, repos, ports and policy; no project
+                        lists everything
+    logs [project]      Tail agent logs (-f to follow, --watcher for watcher)
+    attach [project]    Attach to the agent's tmux session
+    shell [project]     Shell inside the sandbox (--ssh to use ssh)
+    rm [project]        Remove the sandbox; the volume root is kept
+    doctor [project]    Check host, policy, ports and keys (--fix repairs)
+
+    policy <action>     baseline | allow | deny | check | ls
+    image <action>      build | push
+    config <action>     get | set | edit | show
 
 GLOBAL OPTIONS:
     -h, --help      Show this help message
@@ -108,31 +128,17 @@ GLOBAL OPTIONS:
     --dry-run       Show what would be done without executing
 
 EXAMPLES:
-    # Setup host system
-    sudo foundry host setup
+    foundry doctor --fix                  # set up the host and policy baseline
+    foundry init pocetude                 # scaffold + sandbox + clone
+    $EDITOR ~/.local/share/foundry/volumes/pocetude/.ssh/config
+    foundry up                            # from inside the project
+    foundry status
+    foundry logs -f
+    foundry shell
 
-    # Create and start a VM
-    sudo foundry vm create my-project
-    sudo foundry vm start my-project
-
-    # Initialize workspace
-    foundry workspace init my-project config.json
-    foundry workspace init-ralph my-project
-
-    # Start autonomous agent
-    foundry agent start my-project ralph
-
-    # Attach to agent session
-    foundry agent attach my-project
-
-    # View agent logs
-    foundry agent logs my-project --follow
-
-    # List all VMs
-    foundry vm list
-
-For domain-specific help:
-    foundry <domain> help
+DEPRECATED (removed next release):
+    vm, agent, workspace, template, host, network
+    These are the pre-sandbox Firecracker commands. See 'foundry <domain> help'.
 
 Documentation:
     https://github.com/yourusername/agent-foundry
@@ -1001,24 +1007,70 @@ main() {
     local domain="${1:-help}"
     shift || true
 
-    # Route to domain handler
+    # Route to command handler.
+    # Verbs first (the project-centric CLI), then the deprecated noun domains.
     case "$domain" in
+        init)
+            cmd_init "$@"
+            ;;
+        up)
+            cmd_up "$@"
+            ;;
+        down)
+            cmd_down "$@"
+            ;;
+        status|st)
+            cmd_status "$@"
+            ;;
+        logs|log)
+            cmd_logs "$@"
+            ;;
+        attach)
+            cmd_attach "$@"
+            ;;
+        shell|sh)
+            cmd_shell "$@"
+            ;;
+        rm|remove)
+            cmd_rm "$@"
+            ;;
+        doctor)
+            cmd_doctor "$@"
+            ;;
+        policy)
+            cmd_policy "$@"
+            ;;
+        image|img)
+            cmd_image "$@"
+            ;;
         vm)
+            log_warn "'foundry vm' is deprecated and will be removed next release."
+            log_warn "Use: foundry init / up / down / status / shell / rm"
             cmd_vm "$@"
             ;;
         agent)
+            log_warn "'foundry agent' is deprecated and will be removed next release."
+            log_warn "Use: foundry up / down / attach / logs"
             cmd_agent "$@"
             ;;
         workspace|ws)
+            log_warn "'foundry workspace' is deprecated and will be removed next release."
+            log_warn "Use: the volume root is the workspace - edit it directly"
             cmd_workspace "$@"
             ;;
         template|tpl)
+            log_warn "'foundry template' is deprecated and will be removed next release."
+            log_warn "Use: foundry image build"
             cmd_template "$@"
             ;;
         host)
+            log_warn "'foundry host' is deprecated and will be removed next release."
+            log_warn "Use: foundry doctor --fix"
             cmd_host "$@"
             ;;
         network|net)
+            log_warn "'foundry network' is deprecated and will be removed next release."
+            log_warn "Use: foundry policy"
             cmd_network "$@"
             ;;
         config|cfg)
@@ -1033,7 +1085,7 @@ main() {
         *)
             log_error "Unknown domain: $domain"
             echo ""
-            echo "Available domains: vm, agent, workspace, template, host, network, config"
+            echo "Commands: init, up, down, status, logs, attach, shell, rm, doctor, policy, image, config"
             echo "Run 'foundry --help' for usage"
             exit 1
             ;;
