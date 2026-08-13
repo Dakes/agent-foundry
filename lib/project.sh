@@ -350,7 +350,7 @@ _project_seed_config() {
 
     [[ -f "$cfg" ]] && return 0
 
-    local agent="${FOUNDRY_DEFAULT_AGENT:-ralph}"
+    local agent="${FOUNDRY_DEFAULT_AGENT:-claude}"
 
     cat > "$cfg" <<EOF
 {

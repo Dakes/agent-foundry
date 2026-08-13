@@ -263,6 +263,45 @@ resolve_host_home() {
     echo "$home"
 }
 
+# Numeric UID of the invoking (non-root) user.
+#
+# Everything Foundry runs inside a sandbox writes into the mounted volume root,
+# which lives on the host filesystem. Running as root in the box would leave
+# root-owned files the user cannot edit, so the sandbox user must match the
+# host user's UID.
+resolve_host_uid() {
+    local user
+    user="$(resolve_host_user)"
+
+    local uid=""
+    if [[ -n "$user" ]] && command -v id >/dev/null; then
+        uid="$(id -u "$user" 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$uid" ]]; then
+        uid="$(id -u)"
+    fi
+
+    echo "$uid"
+}
+
+# Numeric GID of the invoking (non-root) user. See resolve_host_uid.
+resolve_host_gid() {
+    local user
+    user="$(resolve_host_user)"
+
+    local gid=""
+    if [[ -n "$user" ]] && command -v id >/dev/null; then
+        gid="$(id -g "$user" 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$gid" ]]; then
+        gid="$(id -g)"
+    fi
+
+    echo "$gid"
+}
+
 # ============================================================================
 # USER INTERACTION
 # ============================================================================

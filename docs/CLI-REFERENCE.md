@@ -66,17 +66,29 @@ foundry doctor [project] [--fix]
 ## Policy
 
 ```bash
-foundry policy baseline
+foundry policy baseline [--reset]
 foundry policy allow <resource> [project]
 foundry policy deny <resource> [project]
 foundry policy check <target> [project]
 foundry policy ls [project]
 ```
 
-`baseline` sets the `open` preset (full internet egress) and then denies every
-private, loopback and link-local range. Sandboxes already block private space
-by default; Foundry adds explicit denies so the posture survives a preset
-change and cannot be widened by a kit.
+`baseline` initializes the global policy as `allow-all` (full internet egress)
+and then denies every private, loopback and link-local range. Sandboxes already
+block private space by default; Foundry adds explicit denies so the posture
+survives a preset change and cannot be widened by a kit. The result: the open
+internet is reachable — including a self-hosted forge on a public URL — while
+the LAN and the host are not.
+
+The global preset can only be set once (`sbx policy init`). On a host that is
+already initialized, `baseline` keeps the existing preset and only reconciles
+the deny rules; rules it has already added are not added twice. `--reset` wipes
+the whole sbx policy store first and is never implied, because it stops every
+running sandbox.
+
+Note that these denies apply to *egress*. A service the agent runs on its own
+loopback inside the sandbox is unaffected, so denying `127.0.0.0/8` does not
+break a dev server started in the box.
 
 Resources are hostnames, `host:port`, IP addresses, or CIDR ranges. Non-HTTP
 TCP (git over SSH on port 22) needs an explicit `host:22` rule — `init` and
@@ -86,12 +98,29 @@ are blocked at the network layer and cannot be allowed.
 ## Image
 
 ```bash
-foundry image build [variant]     # ralph | ralph-orchestrator | kimi-ralph
-foundry image push [variant]
+foundry image build                     # -> foundry-agent:base
+foundry image build ralph               # -> foundry-agent:ralph
+foundry image build ralph-orchestrator
+foundry image build kimi-ralph
+foundry image push [tag]
 ```
 
 Builds `docker/foundry-agent.Dockerfile`. The image carries binaries only: all
 per-project state lives in the mounted volume root.
+
+`:base` carries the interactive CLIs (claude, gemini, codex) and is what every
+interactive project uses; a variant argument adds one autonomous Ralph runner
+and tags the image after it. Projects pick their image implicitly from
+`.agent`, or explicitly via `.image` in `foundry.json`.
+
+Two things this command does that are easy to miss:
+
+- The image's `agent` user is created with **your** UID/GID, so files the
+  sandbox writes into the volume root stay editable on the host.
+- After building, the image is imported into the sandbox runtime's own image
+  store (`docker save` → `sbx template load`). Without that, `sbx create -t`
+  tries to *pull* the tag and fails with `403 Forbidden`, because a locally
+  built image is invisible to it.
 
 ## Config
 

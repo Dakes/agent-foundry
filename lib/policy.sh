@@ -41,18 +41,103 @@ FOUNDRY_PRIVATE_RANGES=(
 # BASELINE
 # ============================================================================
 
+# Is the global network policy already initialized?
+#
+# `sbx policy init` is a one-time operation: it fails once a global policy
+# exists. There is no query for "initialized", so this reads the rule list -
+# an initialized host always has at least one global local-policy rule.
+policy_is_initialized() {
+    local json
+    if ! json="$("$SBX_BIN" policy ls --json 2>/dev/null)"; then
+        return 1
+    fi
+
+    printf '%s' "$json" | jq -e '
+        (.rules // [])
+        | map(select((.scope // "") == "global"))
+        | length > 0
+    ' >/dev/null 2>&1
+}
+
+# Does a deny rule for this exact resource already exist?
+#
+# Adding the same rule twice creates two rules, so the baseline - which runs on
+# every init and every `doctor --fix` - would otherwise accumulate duplicates.
+policy_has_deny() {
+    local resource="$1"
+
+    local json
+    if ! json="$("$SBX_BIN" policy ls --json 2>/dev/null)"; then
+        return 1
+    fi
+
+    printf '%s' "$json" | jq -e --arg r "$resource" '
+        (.rules // [])
+        | map(select((.decision // "") == "deny"))
+        | map(.resources // [])
+        | flatten
+        | any(. == $r)
+    ' >/dev/null 2>&1
+}
+
+# Does an allow rule for this resource already exist?
+#
+# sbx normalizes a bare host to host:443 when it stores the rule, so a rule
+# written as "github.com" comes back as "github.com:443"; both spellings count
+# as a match.
+policy_has_allow() {
+    local resource="$1"
+
+    local json
+    if ! json="$("$SBX_BIN" policy ls --json 2>/dev/null)"; then
+        return 1
+    fi
+
+    printf '%s' "$json" | jq -e --arg r "$resource" '
+        (.rules // [])
+        | map(select((.decision // "") == "allow"))
+        | map(.resources // [])
+        | flatten
+        | any(. == $r or . == ($r + ":443"))
+    ' >/dev/null 2>&1
+}
+
 # Apply Foundry's host-wide network baseline.
-# Usage: policy_baseline
+#
+# Usage: policy_baseline [--reset]
+#
+# The global preset can only be set once (`sbx policy init`). When the host is
+# already initialized the existing preset is kept and only the private-range
+# deny rules are reconciled; --reset wipes the policy store first, which stops
+# every running sandbox, so it is never implied.
 policy_baseline() {
+    local reset=false
+    [[ "${1:-}" == "--reset" ]] && reset=true
+
     log_info "Applying Foundry network baseline (open internet, closed LAN)"
 
-    if ! _sbx_checked "setting the default network preset" \
-        policy set-default open; then
+    if [[ "$reset" == "true" ]]; then
+        log_warn "Resetting the sbx policy store - running sandboxes will be stopped"
+        if ! _sbx_checked "resetting the policy store" policy reset --force; then
+            return 1
+        fi
+    fi
+
+    if policy_is_initialized; then
+        log_info "Global network policy already initialized - keeping the current preset"
+        log_debug "Use 'foundry policy baseline --reset' to re-initialize as allow-all"
+    elif ! _sbx_checked "initializing the global network policy" \
+        policy init allow-all; then
         return 1
     fi
 
     local range
     for range in "${FOUNDRY_PRIVATE_RANGES[@]}"; do
+        if policy_has_deny "$range"; then
+            log_debug "Private range already denied: $range"
+            continue
+        fi
+
         log_debug "Denying private range: $range"
         if ! _sbx_checked "denying private range '$range'" \
             policy deny network "$range"; then
@@ -77,6 +162,11 @@ policy_allow() {
     if [[ -z "$resource" ]]; then
         log_error "policy_allow: resource required"
         return 1
+    fi
+
+    if policy_has_allow "$resource"; then
+        log_debug "Network resource already allowed: $resource"
+        return 0
     fi
 
     local -a args=(policy allow network)

@@ -95,7 +95,7 @@ show_version() {
 
 show_help() {
     cat << 'EOF'
-Agent Foundry - isolated microVM sandboxes for AI agents
+Agent Foundry - isolated Docker Sandboxes for AI agents
 
 USAGE:
     foundry <command> [project] [options]

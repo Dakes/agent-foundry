@@ -47,20 +47,51 @@ _resolve_existing() {
 }
 
 # Resolve the image for a project.
+#
+# Interactive agents (claude, gemini, codex) all run from the single ':base'
+# image, which carries every interactive CLI. Only the autonomous Ralph
+# variants need a dedicated tag, because each bakes in one variant's runner.
 _project_image() {
     local name="$1"
     local agent
 
-    agent="$(project_get "$name" '.agent' "${FOUNDRY_DEFAULT_AGENT:-ralph}")"
+    agent="$(project_get "$name" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
 
     local image
     image="$(project_get "$name" '.image' "")"
 
     if [[ -z "$image" ]]; then
-        image="${FOUNDRY_IMAGE_REPO:-foundry-agent}:${agent}"
+        local tag="base"
+        if agent_is_autonomous "$agent"; then
+            tag="$agent"
+        fi
+        image="${FOUNDRY_IMAGE_REPO:-foundry-agent}:${tag}"
     fi
 
     printf '%s\n' "$image"
+}
+
+# Memory limit for a project, in the units sbx expects ("8g", "1024m").
+#
+# The config carries DEFAULT_MEMORY as a bare number of megabytes, which is
+# what Firecracker took; sbx -m needs an explicit unit, so a unitless value is
+# read as MiB and suffixed. Empty means "let sbx decide" (50% of host memory).
+_project_memory() {
+    local name="$1"
+
+    local memory
+    memory="$(project_get "$name" '.resources.memory' "${DEFAULT_MEMORY:-}")"
+
+    if [[ -z "$memory" ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    if [[ "$memory" =~ ^[0-9]+$ ]]; then
+        memory="${memory}m"
+    fi
+
+    printf '%s\n' "$memory"
 }
 
 # ============================================================================
@@ -96,7 +127,6 @@ cmd_init() {
 
     project_validate_name "$name" || return 1
     sandbox_require || return 1
-    sandbox_check_kvm || return 1
     sandbox_check_login || return 1
 
     local root box
@@ -130,7 +160,7 @@ cmd_init() {
     local image cpus memory shared
     image="$(_project_image "$name")"
     cpus="$(project_get "$name" '.resources.cpus' "${DEFAULT_CPUS:-}")"
-    memory="$(project_get "$name" '.resources.memory' "${DEFAULT_MEMORY_SPEC:-}")"
+    memory="$(_project_memory "$name")"
     shared="$(project_shared_dir)"
 
     local -a specs=()
@@ -273,7 +303,7 @@ _status_one() {
     root="$(project_root "$name")"
     box="$(sandbox_name_for "$name")"
     state="$(sandbox_state "$box")"
-    agent="$(project_get "$name" '.agent' "${FOUNDRY_DEFAULT_AGENT:-ralph}")"
+    agent="$(project_get "$name" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
 
     local agent_state="stopped"
     if [[ "$state" == "running" ]] && foundry_agent_running "$box" "$root" "$agent"; then
@@ -299,7 +329,7 @@ cmd_status() {
         echo "Project : $FOUNDRY_PROJECT"
         echo "Root    : $FOUNDRY_ROOT"
         echo "Sandbox : $FOUNDRY_BOX ($(sandbox_state "$FOUNDRY_BOX"))"
-        echo "Agent   : $(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-ralph}")"
+        echo "Agent   : $(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
         echo ""
 
         echo "Repositories:"
@@ -403,7 +433,7 @@ cmd_attach() {
     fi
 
     local agent session
-    agent="$(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-ralph}")"
+    agent="$(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
     session="$(agent_session_name "$agent")"
 
     if ! foundry_agent_running "$FOUNDRY_BOX" "$FOUNDRY_ROOT" "$agent"; then
@@ -448,13 +478,17 @@ cmd_logs() {
         log_file="$(find "$FOUNDRY_ROOT/logs" -maxdepth 1 -name '*watcher*.log' 2>/dev/null | head -1)"
     else
         local agent
-        agent="$(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-ralph}")"
+        agent="$(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
         log_file="$(agent_log_file "$agent" "$FOUNDRY_ROOT" 2>/dev/null || true)"
     fi
 
     if [[ -z "$log_file" || ! -f "$log_file" ]]; then
         log_error "No log file found${log_file:+: $log_file}"
         log_error "Looked under: ${FOUNDRY_ROOT}/logs"
+        if [[ "$watcher" == "true" ]]; then
+            log_error "Watchers do not run on the sandbox transport yet, so"
+            log_error "no watcher log exists - see 'foundry up' for details."
+        fi
         return 1
     fi
 
@@ -557,12 +591,12 @@ cmd_doctor() {
         failures=$((failures + 1))
     fi
 
+    # Advisory: sandboxes are containers on Linux and do not need KVM. Only
+    # a VM-backed Docker setup does, so this is never counted as a failure.
     if check_kvm; then
         echo "  ok     KVM available"
     else
-        echo "  FAIL   KVM unavailable or /dev/kvm not accessible"
-        echo "         sudo usermod -aG kvm \$USER && newgrp kvm"
-        failures=$((failures + 1))
+        echo "  info   KVM unavailable (not required for container sandboxes)"
     fi
 
     if [[ $failures -eq 0 ]]; then
@@ -662,7 +696,11 @@ cmd_policy() {
 
     case "$action" in
         baseline)
-            policy_baseline
+            if [[ -n "${1:-}" && "${1:-}" != "--reset" ]]; then
+                log_error "Usage: foundry policy baseline [--reset]"
+                return 1
+            fi
+            policy_baseline "${1:-}"
             ;;
         allow)
             [[ -z "${1:-}" ]] && { log_error "Usage: foundry policy allow <resource> [project]"; return 1; }
@@ -694,7 +732,7 @@ cmd_policy() {
             ;;
         *)
             log_error "Unknown policy action: $action"
-            echo "Actions: baseline, allow, deny, check, ls" >&2
+            echo "Actions: baseline [--reset], allow, deny, check, ls" >&2
             return 1
             ;;
     esac
@@ -709,7 +747,18 @@ cmd_image() {
 
     case "$action" in
         build)
-            local variant="${1:-ralph}"
+            # No argument builds the base image: the interactive CLIs, which
+            # is what most projects run. A variant name adds one autonomous
+            # Ralph runner and tags the image after it.
+            local variant="${1:-none}"
+            local tag="$variant"
+            [[ "$variant" == "none" ]] && tag="base"
+
+            if ! agent_is_autonomous "$variant" && [[ "$variant" != "none" ]]; then
+                log_error "Unknown image variant: $variant"
+                echo "Variants: none (default), ralph, ralph-orchestrator, kimi-ralph" >&2
+                return 1
+            fi
 
             if [[ ! -f "$dockerfile" ]]; then
                 log_error "Dockerfile not found: $dockerfile"
@@ -720,15 +769,29 @@ cmd_image() {
                 return 1
             fi
 
-            log_info "Building ${repo}:${variant}"
+            # The image's agent user must have the host user's UID/GID: the
+            # volume root is a bind mount, so any mismatch shows up as files
+            # the host user cannot edit (or the agent cannot write).
+            local uid gid
+            uid="$(resolve_host_uid)"
+            gid="$(resolve_host_gid)"
+
+            log_info "Building ${repo}:${tag} (agent uid ${uid}:${gid})"
             docker build \
                 -f "$dockerfile" \
                 --build-arg "RALPH_VARIANT=${variant}" \
-                -t "${repo}:${variant}" \
-                "${FOUNDRY_BASE}"
+                --build-arg "AGENT_UID=${uid}" \
+                --build-arg "AGENT_GID=${gid}" \
+                -t "${repo}:${tag}" \
+                "${FOUNDRY_BASE}" || return 1
+
+            # The sandbox runtime has its own image store. Without this step
+            # `sbx create -t` tries to *pull* the tag and fails with 403,
+            # because a locally built image is invisible to it.
+            sandbox_load_image "${repo}:${tag}" || return 1
             ;;
         push)
-            local variant="${1:-ralph}"
+            local variant="${1:-base}"
             if ! check_command docker; then
                 log_error "docker is required to push the agent image"
                 return 1
@@ -737,7 +800,7 @@ cmd_image() {
             ;;
         *)
             log_error "Unknown image action: ${action:-<none>}"
-            echo "Actions: build [variant], push [variant]" >&2
+            echo "Actions: build [ralph|ralph-orchestrator|kimi-ralph], push [tag]" >&2
             return 1
             ;;
     esac

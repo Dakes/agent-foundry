@@ -115,14 +115,18 @@ sandbox_require() {
     return 0
 }
 
-# Check that the user can actually reach KVM (sbx will not start without it).
+# Check whether KVM is reachable.
+#
+# On Linux, sbx runs sandboxes as containers and does not require KVM, so this
+# is advisory only and never blocks a command - the authoritative check is
+# whether sbx itself works (sandbox_check_login). It stays because a missing
+# /dev/kvm is still worth naming when sandbox creation fails on a host where
+# Docker is configured to back sandboxes with a VM.
 # Usage: sandbox_check_kvm || log_warn "..."
 sandbox_check_kvm() {
     if ! check_kvm; then
-        log_error "KVM is unavailable or /dev/kvm is not accessible"
-        log_error "Docker Sandboxes needs KVM. Verify with 'lsmod | grep kvm'."
-        log_error "If /dev/kvm exists but is not accessible, add yourself to the kvm group:"
-        log_error "  sudo usermod -aG kvm \$USER && newgrp kvm"
+        log_debug "KVM unavailable or /dev/kvm not accessible"
+        log_debug "Only relevant if this host backs sandboxes with a VM."
         return 1
     fi
 
@@ -338,14 +342,73 @@ sandbox_rm() {
     fi
 
     log_info "Removing sandbox: $name"
-    _sbx_checked "removing sandbox '$name'" rm "$name" || return 1
+    # --force: `sbx rm` prompts for confirmation otherwise, which would hang a
+    # non-interactive run, and refuses to remove a box that is still in use.
+    _sbx_checked "removing sandbox '$name'" rm --force "$name" || return 1
 
+    return 0
+}
+
+# Import a locally built docker image into the sandbox runtime's image store.
+#
+# The two stores are separate: `sbx create -t <tag>` resolves the tag against
+# the sandbox runtime and, finding nothing, tries to pull it from a registry -
+# which fails with 403 for an image that only exists in the local docker
+# daemon. Round-tripping through a tar is the supported bridge
+# (`sbx template load`).
+#
+# Usage: sandbox_load_image <tag>
+sandbox_load_image() {
+    local tag="$1"
+
+    if [[ -z "$tag" ]]; then
+        log_error "sandbox_load_image: image tag required"
+        return 1
+    fi
+
+    if ! check_command docker; then
+        log_error "docker is required to export the image for the sandbox runtime"
+        return 1
+    fi
+
+    local tar
+    tar="$(mktemp -t foundry-image-XXXXXX.tar)" || return 1
+
+    log_info "Loading ${tag} into the sandbox runtime"
+
+    if ! docker save "$tag" -o "$tar"; then
+        log_error "Failed to export image: $tag"
+        rm -f "$tar"
+        return 1
+    fi
+
+    if ! _sbx_checked "loading image '$tag' into the sandbox runtime" \
+        template load "$tar"; then
+        rm -f "$tar"
+        return 1
+    fi
+
+    rm -f "$tar"
     return 0
 }
 
 # ============================================================================
 # EXECUTION
 # ============================================================================
+
+# The user commands run as inside the sandbox.
+#
+# This is the host user's numeric UID, not root. Everything the agent writes
+# lands in the mounted volume root - a host directory - so running as root
+# would leave root-owned files the user cannot edit from the host, breaking the
+# "the volume root is your workspace" premise. The agent image creates a
+# matching user (see docker/foundry-agent.Dockerfile), so the UID also resolves
+# to a real passwd entry, which git and tmux require.
+#
+# Override with FOUNDRY_SANDBOX_USER when the image uses a different account.
+sandbox_user() {
+    printf '%s\n' "${FOUNDRY_SANDBOX_USER:-$(resolve_host_uid)}"
+}
 
 # Run a command inside a sandbox, with HOME and cwd set to the volume root.
 # Usage: sandbox_exec <name> <home> <cmd> [args...]
@@ -359,7 +422,7 @@ sandbox_exec() {
         return 1
     fi
 
-    "$SBX_BIN" exec -u root -e "HOME=${home}" -w "$home" "$name" "$@"
+    "$SBX_BIN" exec -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
 }
 
 # Same, with a TTY attached (interactive shells, tmux attach).
@@ -369,7 +432,7 @@ sandbox_exec_tty() {
     local home="$2"
     shift 2
 
-    "$SBX_BIN" exec -it -u root -e "HOME=${home}" -w "$home" "$name" "$@"
+    "$SBX_BIN" exec -it -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
 }
 
 # Run a command detached inside the sandbox.
@@ -379,7 +442,17 @@ sandbox_exec_detached() {
     local home="$2"
     shift 2
 
-    "$SBX_BIN" exec -d -u root -e "HOME=${home}" -w "$home" "$name" "$@"
+    "$SBX_BIN" exec -d -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
+}
+
+# Run a command as root inside the sandbox (package installs, chown).
+# Usage: sandbox_exec_root <name> <home> <cmd> [args...]
+sandbox_exec_root() {
+    local name="$1"
+    local home="$2"
+    shift 2
+
+    "$SBX_BIN" exec -u root -e "HOME=${home}" -w "$home" "$name" "$@"
 }
 
 # ============================================================================

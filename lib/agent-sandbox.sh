@@ -103,7 +103,7 @@ foundry_agent_start() {
     local root="$3"
 
     local agent
-    agent="$(project_get "$project" '.agent' "${FOUNDRY_DEFAULT_AGENT:-ralph}")"
+    agent="$(project_get "$project" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
 
     if ! agent_is_valid "$agent"; then
         log_error "Unknown agent type: $agent"
@@ -175,7 +175,7 @@ foundry_agent_stop() {
     fi
 
     local agent session
-    agent="$(project_get "$project" '.agent' "${FOUNDRY_DEFAULT_AGENT:-ralph}")"
+    agent="$(project_get "$project" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
     session="$(agent_session_name "$agent")"
 
     if ! foundry_agent_running "$box" "$root" "$agent"; then
