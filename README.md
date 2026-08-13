@@ -111,19 +111,21 @@ For `ralph-orchestrator`, use a top-level `ralph.yml` and `PROMPT.md`.
 
 When a watcher triggers an agent from an issue, pull request, or comment, the
 generated prompt carries an explicit **task mode** that decides what the agent
-is allowed to do. State it directly to remove all ambiguity:
+is allowed to do. You state it: the word straight after the trigger keyword.
 
 ```
-/review          read the diff and comment; never pushes or opens a PR
-/implement       new branch, code, pull request
-/fix             push to the existing branch; never opens a new PR
-/answer          comment only; changes nothing
+@yourbot review     read the diff and comment; never pushes or opens a PR
+@yourbot implement  new branch, code, pull request
+@yourbot fix        push to the existing branch; never opens a new PR
+@yourbot answer     comment only; changes nothing
 ```
 
-`mode: review` and `@yourbot review` work too. Without a directive the mode is
-inferred from the request's leading verb ("please review this MR" → `review`).
-Requests with no clear intent fall back to a conservative `default` mode that
-does the least destructive thing that satisfies the request.
+`/review` and `mode: review` work anywhere in the comment too.
+
+The mode is never inferred from phrasing. A request that states no mode gets a
+hardcoded reply listing this syntax and **no agent is started** — asking costs
+one comment, while guessing wrong costs an unwanted pull request, and what is
+being guessed is which prohibitions the agent receives.
 
 Every prompt also opens with an execution contract stating that the run is
 headless, and that repo-level `AGENTS.md` / `CLAUDE.md` files are authoritative

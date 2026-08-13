@@ -109,7 +109,10 @@ action. Only an explicit prohibition suppresses that.
 | `answer` | post a comment | modifying anything |
 | `default` | inferred from the request | opening a PR unless clearly asked |
 
-`default` is no longer reached by resolution; see "No mode, no run" below.
+`default` is not reachable by resolution any more — nothing infers it, and an
+unknown mode is an error rather than a silent downgrade to it. It stays valid
+so an adapter can pass it deliberately, which is the hook an opt-in "just do
+what the comment says" setting would use. See "No mode, no run" below.
 
 ### Mode resolution
 

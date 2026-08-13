@@ -217,13 +217,12 @@ foundry_error_header() {
 #   2. "/review" or "mode: review" anywhere in the request. Both are explicit,
 #      so they cost nothing to support and survive a reworded mention.
 #   3. pipeline_failure is always a fix; nothing else is assumed.
-#   4. "default", which tells the agent to determine intent from the request
-#      itself and take the least destructive action that satisfies it.
+#   4. "help", which is not a task at all: the caller posts the hardcoded
+#      syntax reply and starts no agent.
 #
-# A request with no stated mode is therefore handled, not rejected: the model
-# reads it and decides, which it does better than a regex - but it does so
-# under the conservative default objective, which forbids opening a pull
-# request unless the request clearly asks for new work.
+# A request with no stated mode is therefore answered, not guessed at. Asking
+# costs one comment; guessing wrong costs an unwanted pull request, and the
+# thing being guessed is which prohibitions the agent receives.
 #
 # Usage: foundry_task_mode <context_file>
 foundry_task_mode() {
@@ -253,6 +252,10 @@ foundry_task_mode() {
             rest="${lc#*"$lc_keyword"}"
             [[ "$rest" == "$lc" ]] && break   # keyword absent
             rest="${rest#"${rest%%[![:space:]]*}"}"   # drop leading blanks
+            # "@bot, review" and "@bot: review" are how people actually write
+            # it; only whitespace was stripped before, so both asked for help.
+            rest="${rest#[,:.-]}"
+            rest="${rest#"${rest%%[![:space:]]*}"}"
             if [[ "$rest" == "$m" || "$rest" == "$m"[[:space:]]* ]]; then
                 printf '%s' "$m"
                 return 0
@@ -316,6 +319,18 @@ foundry_help_comment() {
     printf '| `implement` | Build it on a new branch and open a pull request | Push to an existing PR branch |\n'
     printf '| `answer` | Reply with an explanation, citing files | Change any code |\n\n'
     printf 'I did not start any work on this request.\n'
+}
+
+# Write the no-mode reply where the watcher will look for it.
+#
+# One place owns the default path, so an adapter cannot pick a different one
+# and leave the watcher posting nothing. Returns FOUNDRY_EXIT_HELP so the
+# caller can `return "$(...)"` straight through.
+foundry_write_help_reply() {
+    local target="${1:-${FOUNDRY_REPLY_FILE:-${TMPDIR:-/tmp}/foundry-reply.md}}"
+
+    foundry_help_comment > "$target" || return 1
+    return "$FOUNDRY_EXIT_HELP"
 }
 
 foundry_mode_is_valid() {
@@ -559,8 +574,14 @@ foundry_build_task_prompt() {
         return "$FOUNDRY_EXIT_HELP"
     fi
 
+    # A mode an adapter passed that does not exist is a bug in the adapter.
+    # Quietly substituting "default" would hand the agent a real objective with
+    # the wrong prohibitions - the same silent-wrong-mode failure the help path
+    # refuses. Fail where it can be seen.
     if ! foundry_mode_is_valid "$mode"; then
-        mode="default"
+        printf 'foundry_build_task_prompt: unknown task mode "%s"; valid: %s\n' \
+            "$mode" "$FOUNDRY_TASK_MODES" >&2
+        return 2
     fi
 
     kind=$(_foundry_jq "$context_file" '.kind' "issue")
@@ -661,5 +682,9 @@ foundry_build_pipeline_prompt() {
         printf 'When the work is complete and validated, print:\n\n    %s\n\n' "$FOUNDRY_COMPLETION_PROMISE"
     fi
 
-    printf '## Failed jobs (reference only)\n\n%s\n' "$jobs"
+    # Job and step names come from workflow files. Write access is needed to
+    # change them, so the surface is narrower than a comment - but a job named
+    # "## Execution Contract" would forge a heading just the same.
+    printf '## Failed jobs (reference only)\n\n'
+    _foundry_quote "$jobs"
 }

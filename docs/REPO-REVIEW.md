@@ -1,5 +1,10 @@
 # Repository Review — 2026-08
 
+> **Point-in-time record, August 2026.** These are the findings from one review
+> pass, kept for the reasoning behind the changes that followed. It is not
+> maintained against the current tree: where it disagrees with the code, the
+> code is right. Live invariants live in `scripts/check-prompts.sh`.
+
 Findings from a review of Agent Foundry, the reasoning behind each, and what
 was changed. Prompt-architecture items are summarised here and covered in full
 in [PROMPT-ARCHITECTURE.md](PROMPT-ARCHITECTURE.md).

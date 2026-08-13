@@ -532,12 +532,15 @@ process_event() {
     run_start_epoch=$(date +%s)
 
     local prepare_rc=0
+    # A reply from a previous event must not be posted as if it were this
+    # one's; 78 is also sysexits' EX_CONFIG, so require the file to exist too.
+    rm -f "$FOUNDRY_REPLY_FILE"
     prepare_agent_workspace "$CONTEXT_FILE" || prepare_rc=$?
 
     # 78 means the request stated no task mode. The prompt library has written
     # the syntax reply to FOUNDRY_REPLY_FILE and no agent should run; posting
     # the generic workspace error here would discard it.
-    if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" ]]; then
+    if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
         log_info "No task mode stated for $task_id; replying with usage"
         if [[ "$task_type" != "pipeline_failure" ]]; then
             post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"

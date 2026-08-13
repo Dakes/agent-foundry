@@ -39,8 +39,8 @@ prepare_ralph_claude_code_workspace() {
             # watcher posts FOUNDRY_REPLY_FILE on this exit code.
             if [[ "$mode" == "help" ]]; then
                 log_info "No task mode stated; replying with usage"
-                foundry_help_comment > "${FOUNDRY_REPLY_FILE:-$PWD/.foundry-reply.md}"
-                return $FOUNDRY_EXIT_HELP
+                foundry_write_help_reply
+                return $?
             fi
             log_info "Resolved task mode: $mode (kind: $kind)"
             foundry_build_task_prompt "$context_file" "$mode" \

@@ -30,6 +30,10 @@ CONTEXT_FILE="$CONFIG_DIR/current_context.json"
 # Where the prompt library writes the reply for a request that stated no task
 # mode. Exported so the adapter writes it somewhere the watcher can find,
 # rather than defaulting to a cwd-relative path.
+# Set when the last context build answered with the usage reply rather than
+# failing, so the task is recorded as answered instead of errored.
+HELP_REPLY_POSTED=false
+
 export FOUNDRY_REPLY_FILE="${FOUNDRY_REPLY_FILE:-$CONFIG_DIR/last_reply.md}"
 HELPER_DIR="/opt/foundry/gh-watcher"
 
@@ -499,11 +503,18 @@ _prepare_or_reply() {
     local number="$2"
     local rc=0
 
+    # A reply left over from a previous event must never be posted as if it
+    # belonged to this one. Exit 78 is also sysexits' EX_CONFIG, so a tool
+    # inside prepare_agent_workspace could return it for its own reasons.
+    HELP_REPLY_POSTED=false
+    rm -f "$FOUNDRY_REPLY_FILE"
+
     prepare_agent_workspace "$CONTEXT_FILE" || rc=$?
 
-    if [[ "$rc" -eq "${FOUNDRY_EXIT_HELP:-78}" ]]; then
+    if [[ "$rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
         log_info "No task mode stated; replying with usage and starting no agent"
         post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"
+        HELP_REPLY_POSTED=true
         return 1
     fi
 
@@ -770,8 +781,13 @@ main_loop() {
                             # Cooldown period
                             sleep 120
                         else
-                            log_error "Failed to build context for $task_type #$comment_id"
-                            mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
+                            if [[ "$HELP_REPLY_POSTED" == "true" ]]; then
+                                log_info "Answered $task_type #$comment_id with the usage reply"
+                                mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"replied_no_mode\"}"
+                            else
+                                log_error "Failed to build context for $task_type #$comment_id"
+                                mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
+                            fi
                         fi
                         ;;
 
