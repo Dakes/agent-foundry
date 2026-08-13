@@ -35,14 +35,30 @@ ADAPTERS=(templates/ralph/*.sh templates/kimi/*_watcher_agent_*.sh)
 # ---------------------------------------------------------------------------
 # 1. Identity strings must come from the prompt library, not be hardcoded.
 # ---------------------------------------------------------------------------
-hits=$(grep -rn 'Task Completed' templates/ projects/ 2>/dev/null \
-    | grep -v '^templates/prompt-lib.sh:' \
-    | grep -v 'AGENT_IDENTITY' || true)
+# Both headers count. Checking only "Task Completed" let a second copy of the
+# identity chain live in the error path, where it skipped the registry fallback
+# and printed a different name than the completion header on the same run.
+#
+# A guarded fallback, reached only when the library was not sourced, is exempt
+# when the line above it is marked "identity-fallback".
+hits=$(find templates projects -type f \( -name '*.sh' -o -name '*.md' \) 2>/dev/null \
+    | grep -v '^templates/prompt-lib.sh$' \
+    | while IFS= read -r f; do
+        awk -v file="$f" '
+            # No comment exemption here: the header itself starts with "##",
+            # so skipping lines that begin with "#" would skip every hit.
+            /Task Completed|Task Update \(Error\)/ &&
+            prev !~ /identity-fallback/ {
+                printf "%s:%d:%s\n", file, NR, $0
+            }
+            { prev = $0 }
+        ' "$f"
+    done)
 if [[ -n "$hits" ]]; then
-    fail "hardcoded completion header outside prompt-lib.sh:"
+    fail "hardcoded identity header outside prompt-lib.sh:"
     printf '%s\n' "$hits" | sed 's/^/      /'
 else
-    ok "no hardcoded completion headers"
+    ok "no hardcoded identity headers"
 fi
 
 # ---------------------------------------------------------------------------
@@ -120,6 +136,48 @@ for mode in review implement fix answer default; do
     fi
 done
 ok "every task mode states explicit prohibitions"
+
+# ---------------------------------------------------------------------------
+# 7. Untrusted text must be fenced. Everything the tracker supplies is written
+#    by whoever can comment on the repository; spliced in raw, a comment can
+#    forge its own "## Execution Contract" and claim authority the prompt is
+#    built to deny it.
+# ---------------------------------------------------------------------------
+for fn in foundry_triggering_request foundry_background_block; do
+    block=$(awk -v f="^$fn\\\\(\\\\) \\\\{" '$0 ~ f {found=1} found {print} found && /^\}/ {exit}' \
+        templates/prompt-lib.sh)
+    if [[ -z "$block" ]]; then
+        fail "$fn not found in prompt-lib.sh"
+        continue
+    fi
+    # Any tracker field printed directly, rather than passed through the
+    # quoting helper, is an unfenced splice.
+    raw=$(grep -nE "printf '[^']*%s[^']*' \"\\\$(trigger|body|conversation|discussion|linked_body)" <<< "$block" || true)
+    if [[ -n "$raw" ]]; then
+        fail "$fn prints untrusted text without _foundry_quote:"
+        printf '%s\n' "$raw" | sed 's/^/      /'
+    fi
+    if ! grep -q '_foundry_quote' <<< "$block"; then
+        fail "$fn does not fence untrusted text with _foundry_quote"
+    fi
+done
+ok "untrusted tracker text is fenced"
+
+# ---------------------------------------------------------------------------
+# 8. No hardcoded repository paths anywhere in the prompt layer. The volume
+#    root differs per project, so /root/repos - correct under the Firecracker
+#    backend - now points at a directory that does not exist.
+# ---------------------------------------------------------------------------
+while IFS= read -r f; do
+    [[ -f "$f" ]] || continue
+    # Comments may name the old path when explaining why it went away.
+    hits=$(grep -nE '/root/(repos|\.ralph|\.kimi)' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+    if [[ -n "$hits" ]]; then
+        fail "$f hardcodes a pre-sandbox path:"
+        printf '%s\n' "$hits" | sed 's/^/      /'
+    fi
+done < <(printf '%s\n' templates/prompt-lib.sh templates/AGENT.md.template)
+ok "no pre-sandbox paths in the prompt layer"
 
 echo
 if [[ "$FAIL" -eq 0 ]]; then

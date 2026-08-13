@@ -25,6 +25,11 @@ QUEUE_DIR="$CONFIG_DIR/queue"
 LOG_FILE="$CONFIG_DIR/watcher.log"
 CURRENT_TASK_FILE="$CONFIG_DIR/current_task.json"
 CONTEXT_FILE="$CONFIG_DIR/current_context.json"
+
+# Where the prompt library writes the reply for a request that stated no task
+# mode. Exported so the adapter writes it somewhere the watcher can find,
+# rather than defaulting to a cwd-relative path.
+export FOUNDRY_REPLY_FILE="${FOUNDRY_REPLY_FILE:-$CONFIG_DIR/last_reply.md}"
 HELPER_DIR="/opt/foundry/forgejo"
 
 # Defaults (overridden by config file)
@@ -526,7 +531,23 @@ process_event() {
     local run_start_epoch
     run_start_epoch=$(date +%s)
 
-    if ! prepare_agent_workspace "$CONTEXT_FILE"; then
+    local prepare_rc=0
+    prepare_agent_workspace "$CONTEXT_FILE" || prepare_rc=$?
+
+    # 78 means the request stated no task mode. The prompt library has written
+    # the syntax reply to FOUNDRY_REPLY_FILE and no agent should run; posting
+    # the generic workspace error here would discard it.
+    if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" ]]; then
+        log_info "No task mode stated for $task_id; replying with usage"
+        if [[ "$task_type" != "pipeline_failure" ]]; then
+            post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"
+        fi
+        mark_processed "$task_id" "{\"type\":\"$task_type\",\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"replied_no_mode\"}"
+        rm -f "$event_file"
+        return 0
+    fi
+
+    if [[ "$prepare_rc" -ne 0 ]]; then
         log_error "Failed to prepare agent workspace for $task_id"
         if [[ "$task_type" != "pipeline_failure" ]]; then
             post_error_comment "$repo" "$number" "Failed to prepare agent workspace"

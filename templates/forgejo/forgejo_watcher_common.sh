@@ -375,6 +375,48 @@ add_reaction() {
     esac
 }
 
+# Error-comment header.
+#
+# Delegates to the prompt library so identity resolves the same way it does in
+# the completion header - including the agent_identity_name() registry
+# fallback, which a hand-rolled ${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME}} chain
+# skips. A second copy of identity resolution is how the five spellings of one
+# name came back last time.
+_watcher_error_header() {
+    if declare -F foundry_error_header >/dev/null; then
+        foundry_error_header
+        return 0
+    fi
+    # identity-fallback: only reached when prompt-lib.sh was not sourced
+    printf '## 🤖 %s - Task Update (Error)' "${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME:-Agent}}"
+}
+
+# Post a pre-rendered comment body verbatim.
+#
+# Used for the no-mode-stated reply, which the prompt library writes in full:
+# it is not an error, so it must not be wrapped in the error template, and it
+# is hardcoded text that no agent was started to produce.
+post_reply_file() {
+    local repo="$1"
+    local issue_or_pr_number="$2"
+    local reply_file="$3"
+
+    [[ -s "$reply_file" ]] || { log_error "No reply to post: $reply_file"; return 1; }
+
+    local owner part
+    read -r owner part <<< "$(split_repo "$repo")"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY RUN] Would post reply to $repo #$issue_or_pr_number"
+        return 0
+    fi
+
+    log_info "Posting reply to $repo #$issue_or_pr_number"
+    forgejo_post "repos/$owner/$part/issues/$issue_or_pr_number/comments" \
+        <<< "$(jq -n --arg body "$(cat "$reply_file")" '{body: $body}')" \
+        >/dev/null 2>&1 || log_error "Failed to post reply"
+}
+
 post_error_comment() {
     local repo="$1"
     local issue_or_pr_number="$2"
@@ -392,7 +434,7 @@ post_error_comment() {
 
     local comment_body
     comment_body=$(cat <<EOF
-## 🤖 ${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME:-Agent}} - Task Update (Error)
+$(_watcher_error_header)
 
 I encountered an issue while working on this task and couldn't complete it automatically.
 

@@ -20,13 +20,14 @@ tokens deciding which to obey. See `docs/PROMPT-ARCHITECTURE.md`.
 
 ## Environment
 
-You are root in an isolated Ubuntu microVM. Install anything you need with
-`apt-get install <package>`; changes affect only this VM. Full network access.
-Files persist across agent restarts.
+You are in an isolated Ubuntu sandbox. Install anything you need with
+`sudo apt-get install <package>`; changes affect only this sandbox. The open
+internet is reachable; the host and its LAN are not. Files under your home
+directory are a mounted host directory and persist across agent restarts.
 
 ## Repositories
 
-Source code is under `repos/`. See `git-config.json` for the repository list.
+Source code is under `repos/`. See `foundry.json` for the repository list.
 
 ## Build and test
 

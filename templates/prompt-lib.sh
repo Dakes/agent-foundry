@@ -548,6 +548,17 @@ foundry_build_task_prompt() {
     local kind title repo repo_name branch number url trigger_type
 
     [[ -n "$mode" ]] || mode=$(foundry_task_mode "$context_file")
+
+    # "help" means the request stated no mode. Refuse rather than falling back
+    # to a real objective: the caller is supposed to post foundry_help_comment
+    # and start nothing, and silently building a prompt here would run an agent
+    # on a request nobody has understood - the failure this design exists to
+    # prevent. Failing loudly keeps a forgetful adapter from failing open.
+    if [[ "$mode" == "help" ]]; then
+        printf 'foundry_build_task_prompt: no task mode stated; post foundry_help_comment instead\n' >&2
+        return "$FOUNDRY_EXIT_HELP"
+    fi
+
     if ! foundry_mode_is_valid "$mode"; then
         mode="default"
     fi

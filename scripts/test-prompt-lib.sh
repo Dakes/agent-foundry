@@ -221,6 +221,18 @@ help_ralph=$(TRIGGER_KEYWORD="!ralph" foundry_help_comment)
 check_contains "help/keyword" "$help_ralph" "!ralph review"
 check_not_contains "help/keyword" "$help_ralph" "@touya"
 
+echo "== the builder refuses to build a prompt with no mode stated =="
+# A forgetful adapter must not silently get a real objective.
+no_mode_out=$(foundry_build_task_prompt "$(_ctx pr "thoughts?")" 2>/dev/null)
+no_mode_rc=$?
+if [[ "$no_mode_rc" == "$FOUNDRY_EXIT_HELP" ]]; then
+    PASS=$((PASS + 1))
+else
+    printf 'FAIL: builder returned %s, expected %s\n' "$no_mode_rc" "$FOUNDRY_EXIT_HELP"
+    FAIL=$((FAIL + 1))
+fi
+check_not_contains "no-mode" "$no_mode_out" "## Objective"
+
 echo
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

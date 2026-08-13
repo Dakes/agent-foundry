@@ -26,6 +26,11 @@ RETRY_FILE="$CONFIG_DIR/retries.json"
 LOG_FILE="$CONFIG_DIR/watcher.log"
 CURRENT_TASK_FILE="$CONFIG_DIR/current_task.json"
 CONTEXT_FILE="$CONFIG_DIR/current_context.json"
+
+# Where the prompt library writes the reply for a request that stated no task
+# mode. Exported so the adapter writes it somewhere the watcher can find,
+# rather than defaulting to a cwd-relative path.
+export FOUNDRY_REPLY_FILE="${FOUNDRY_REPLY_FILE:-$CONFIG_DIR/last_reply.md}"
 HELPER_DIR="/opt/foundry/gh-watcher"
 
 # Default values (overridden by config file)
@@ -480,6 +485,31 @@ find_trigger_mentions() {
 # CONTEXT BUILDING AND AGENT EXECUTION
 # ============================================================================
 
+# Prepare the workspace, or answer a request that stated no task mode.
+#
+# The adapter returns FOUNDRY_EXIT_HELP (78) when the triggering comment named
+# no mode. That is not a failure: the prompt library has written the syntax
+# reply to FOUNDRY_REPLY_FILE and no agent should start. Treating it as a
+# generic error would post "Failed to prepare agent workspace" and throw the
+# reply away, which is the one outcome this whole path exists to avoid.
+#
+# Returns non-zero either way so the caller starts no agent.
+_prepare_or_reply() {
+    local repo="$1"
+    local number="$2"
+    local rc=0
+
+    prepare_agent_workspace "$CONTEXT_FILE" || rc=$?
+
+    if [[ "$rc" -eq "${FOUNDRY_EXIT_HELP:-78}" ]]; then
+        log_info "No task mode stated; replying with usage and starting no agent"
+        post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"
+        return 1
+    fi
+
+    return "$rc"
+}
+
 build_context_for_issue() {
     local repo="$1"
     local issue_number="$2"
@@ -493,7 +523,7 @@ build_context_for_issue() {
         return 1
     fi
 
-    prepare_agent_workspace "$CONTEXT_FILE"
+    _prepare_or_reply "$repo" "$issue_number"
 }
 
 build_context_for_pr() {
@@ -509,7 +539,7 @@ build_context_for_pr() {
         return 1
     fi
 
-    prepare_agent_workspace "$CONTEXT_FILE"
+    _prepare_or_reply "$repo" "$pr_number"
 }
 
 start_agent() {
@@ -519,6 +549,38 @@ start_agent() {
 evaluate_agent_run_outcome() {
     local run_start_epoch="$1"
     evaluate_agent_outcome "$run_start_epoch"
+}
+
+# Error-comment header. Delegates to the prompt library so identity resolves
+# the same way it does in the completion header, including the registry
+# fallback that a hand-rolled ${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME}} skips.
+_watcher_error_header() {
+    if declare -F foundry_error_header >/dev/null; then
+        foundry_error_header
+        return 0
+    fi
+    # identity-fallback: only reached when prompt-lib.sh was not sourced
+    printf '## 🤖 %s - Task Update (Error)' "${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME:-Agent}}"
+}
+
+# Post a pre-rendered comment body verbatim - the no-mode-stated reply, which
+# is hardcoded text rather than the output of an agent run.
+post_reply_file() {
+    local repo="$1"
+    local issue_or_pr_number="$2"
+    local reply_file="$3"
+
+    [[ -s "$reply_file" ]] || { log_error "No reply to post: $reply_file"; return 1; }
+
+    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+        log_info "[DRY RUN] Would post reply to $repo #$issue_or_pr_number"
+        return 0
+    fi
+
+    log_info "Posting reply to $repo #$issue_or_pr_number"
+    gh api "repos/$repo/issues/$issue_or_pr_number/comments" \
+        -f body="$(cat "$reply_file")" \
+        >/dev/null 2>&1 || log_error "Failed to post reply"
 }
 
 post_error_comment() {
@@ -535,7 +597,7 @@ post_error_comment() {
 
     local comment_body
     comment_body=$(cat <<EOF
-## 🤖 ${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME:-Agent}} - Task Update (Error)
+$(_watcher_error_header)
 
 I encountered an issue while working on this task and couldn't complete it automatically.
 
