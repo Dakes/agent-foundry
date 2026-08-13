@@ -290,22 +290,16 @@ install_foundry() {
         fi
     fi
 
-    if [[ -f "${PROJECT_ROOT}/config/packages.txt" ]]; then
-        if [[ ! -f "${CONFIG_DIR}/packages.txt" ]]; then
-            cp "${PROJECT_ROOT}/config/packages.txt" "${CONFIG_DIR}/packages.txt"
-        fi
-    fi
-
-    # Copy template files if they exist
-    if [[ -d "${PROJECT_ROOT}/templates" ]]; then
-        log_info "Installing template files..."
-        cp -r "${PROJECT_ROOT}"/templates/* "$CONFIG_DIR/" 2>/dev/null || true
-    fi
-
-    # Create registry file if it doesn't exist
-    if [[ ! -f "${CONFIG_DIR}/vms.json" ]]; then
-        echo '{"vms":{}}' > "${CONFIG_DIR}/vms.json"
-    fi
+    # Nothing else is staged here. The config directory holds config.conf and
+    # nothing more:
+    #   - Start templates and watcher scripts travel inside the release bundle
+    #     and are resolved relative to lib/, so a copy here would be read by
+    #     no one. (The VM backend needed them on the host to scp into a guest.)
+    #   - Workspace/memory/AGENT.md seeds are gone; 'foundry init' scaffolds a
+    #     volume root directly.
+    #   - Extra packages are set in config/packages.txt in the source tree and
+    #     baked in by 'foundry image build'.
+    #   - There is no VM registry; sbx tracks sandboxes itself.
 
     log_info "Installation complete!"
     echo ""
