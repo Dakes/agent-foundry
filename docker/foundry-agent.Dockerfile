@@ -102,6 +102,14 @@ RUN set -eux; \
 COPY templates/agent-session.sh /opt/foundry/agent-session.sh
 RUN chmod 0755 /opt/foundry/agent-session.sh
 
+# Shared prompt builder, sourced by every watcher adapter. Single source of
+# truth for the execution contract, task modes, and the agent identity string
+# (see docs/PROMPT-ARCHITECTURE.md). Baked into the image for the same reason
+# as agent-session.sh: the VM backend copied it in per-VM, the sandbox carries
+# it instead.
+COPY templates/prompt-lib.sh /opt/foundry/prompt-lib.sh
+RUN chmod 0755 /opt/foundry/prompt-lib.sh
+
 # forgejo-cli, used by the Forgejo watcher adapters.
 COPY binaries/fj/ /tmp/fj/
 RUN set -eux; \

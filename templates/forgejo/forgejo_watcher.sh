@@ -25,6 +25,11 @@ QUEUE_DIR="$CONFIG_DIR/queue"
 LOG_FILE="$CONFIG_DIR/watcher.log"
 CURRENT_TASK_FILE="$CONFIG_DIR/current_task.json"
 CONTEXT_FILE="$CONFIG_DIR/current_context.json"
+
+# Where the prompt library writes the reply for a request that stated no task
+# mode. Exported so the adapter writes it somewhere the watcher can find,
+# rather than defaulting to a cwd-relative path.
+export FOUNDRY_REPLY_FILE="${FOUNDRY_REPLY_FILE:-$CONFIG_DIR/last_reply.md}"
 HELPER_DIR="/opt/foundry/forgejo"
 
 # Defaults (overridden by config file)
@@ -526,7 +531,33 @@ process_event() {
     local run_start_epoch
     run_start_epoch=$(date +%s)
 
-    if ! prepare_agent_workspace "$CONTEXT_FILE"; then
+    local prepare_rc=0
+    # A reply from a previous event must not be posted as if it were this
+    # one's; 78 is also sysexits' EX_CONFIG, so require the file to exist too.
+    rm -f "$FOUNDRY_REPLY_FILE"
+    prepare_agent_workspace "$CONTEXT_FILE" || prepare_rc=$?
+
+    # 78 means the request stated no task mode. The prompt library has written
+    # the syntax reply to FOUNDRY_REPLY_FILE and no agent should run; posting
+    # the generic workspace error here would discard it.
+    if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
+        log_info "No task mode stated for $task_id; replying with usage"
+        local reply_result="replied_no_mode"
+        if [[ "$task_type" != "pipeline_failure" ]]; then
+            # Record what actually happened. Filing an unposted reply as
+            # answered would strand the request: nobody was told anything, and
+            # the event is never looked at again.
+            if ! post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"; then
+                log_error "Usage reply could not be posted for $task_id"
+                reply_result="error_reply_failed"
+            fi
+        fi
+        mark_processed "$task_id" "{\"type\":\"$task_type\",\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"$reply_result\"}"
+        rm -f "$event_file"
+        return 0
+    fi
+
+    if [[ "$prepare_rc" -ne 0 ]]; then
         log_error "Failed to prepare agent workspace for $task_id"
         if [[ "$task_type" != "pipeline_failure" ]]; then
             post_error_comment "$repo" "$number" "Failed to prepare agent workspace"

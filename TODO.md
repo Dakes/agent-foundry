@@ -6,11 +6,9 @@
 
 The previous roadmap tracked the Firecracker backend (host setup, golden image
 pipeline, TAP networking, VM lifecycle, SSH transport). That backend and its
-tasks were removed with the migration. Background and rationale:
-
-- `docs/designs/2026-08-13-docker-sandbox-migration.md` — why
-- `docs/designs/2026-08-13-docker-sandbox-implementation-plan.md` — how
-- `docs/designs/2026-08-13-cli-simplification.md` — 58 subcommands → 13
+tasks were removed with the migration; why and how now live in
+`docs/ARCHITECTURE.md`, `docs/VISION.md` and `docs/CLI-REFERENCE.md`, which are
+maintained against the code.
 
 ## Done
 

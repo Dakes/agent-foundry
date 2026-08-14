@@ -107,6 +107,34 @@ image tag (`foundry image build ralph`).
 
 For `ralph-orchestrator`, use a top-level `ralph.yml` and `PROMPT.md`.
 
+## Task Modes
+
+When a watcher triggers an agent from an issue, pull request, or comment, the
+generated prompt carries an explicit **task mode** that decides what the agent
+is allowed to do. You state it: the word straight after the trigger keyword.
+
+```
+@yourbot review     read the diff and comment; never pushes or opens a PR
+@yourbot implement  new branch, code, pull request
+@yourbot fix        push to the existing branch; never opens a new PR
+@yourbot answer     comment only; changes nothing
+```
+
+`/review` and `mode: review` work anywhere in the comment too.
+
+The mode is never inferred from phrasing. A request that states no mode gets a
+hardcoded reply listing this syntax and **no agent is started** — asking costs
+one comment, while guessing wrong costs an unwanted pull request, and what is
+being guessed is which prohibitions the agent receives.
+
+Every prompt also opens with an execution contract stating that the run is
+headless, and that repo-level `AGENTS.md` / `CLAUDE.md` files are authoritative
+for *how* to build and test but never for *whether* or *what* to do. This is
+what stops agents from trying to open interactive sessions or from
+implementing when asked to review.
+
+See [PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md).
+
 ## Configuration
 
 Project settings live in the volume root's `foundry.json`; host-wide defaults
@@ -167,6 +195,7 @@ Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — complete architecture overview
 - [PROJECT-SETUP.md](docs/PROJECT-SETUP.md) — creating and configuring projects
 - [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) — full command reference
+- [PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md) — how agent prompts are built, and the rules that keep them consistent
 - [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) — Ralph integration details
 - [TODO.md](TODO.md) — implementation roadmap
 
@@ -179,6 +208,10 @@ nix-shell
 # Validate shell scripts
 ./scripts/shellcheck.sh
 ./scripts/syntax-check.sh
+
+# Validate prompt architecture and run prompt tests
+./scripts/check-prompts.sh
+./scripts/test-prompt-lib.sh
 
 # Build the agent image
 foundry image build [ralph|ralph-orchestrator|kimi-ralph]

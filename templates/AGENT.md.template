@@ -1,20 +1,69 @@
-## Communication Guidelines
-- When responding to PRs or Issues, always identify yourself as Ralph.
-- Use the header: `## 🤖 Ralph - Task Completed` for final summaries.
-- Keep comments concise and technical.
+# AGENT.md — capabilities reference
 
-## Project Context
-- See files in `context/` for project overview, architecture, standards
+Scaffolding template. Copy it into your project and edit:
 
-## Working Memory
-- `memory/decisions.md` - Track architectural decisions
-- `memory/progress.md` - Track implementation progress
-- `memory/learnings.md` - Document patterns learned
+```bash
+cp templates/AGENT.md.template projects/my-project/.ralph/AGENT.md
+```
+
+`AGENT.md` answers **how** to work in this repository: build commands, test
+commands, tooling, layout. It must not answer **whether** or **what** — no
+mission statements, no task lists, no identity or comment-formatting rules,
+and no workflow instructions about opening pull requests or asking questions.
+
+Those come from the per-task prompt the watcher generates, which carries the
+execution contract and the resolved task mode. Restating them here creates two
+sources of truth that contradict each other, and the agent burns reasoning
+tokens deciding which to obey. See `docs/PROMPT-ARCHITECTURE.md`.
+
+---
+
+## Environment
+
+You are in an isolated Ubuntu sandbox. Install anything you need with
+`sudo apt-get install <package>`; changes affect only this sandbox. The open
+internet is reachable; the host and its LAN are not. Files under your home
+directory are a mounted host directory and persist across agent restarts.
 
 ## Repositories
-- Source code is in `repos/`
-- See git-config.json for repository details
 
-## Agent-Specific Config
-- Ralph users: See `.ralph/` folder
-- Other agents: Create your own workflow files
+Source code is under `repos/`. See `foundry.json` for the repository list.
+
+## Build and test
+
+Replace these with the real commands for your project.
+
+```bash
+# Install dependencies
+<install command>
+
+# Run tests
+<test command>
+
+# Lint
+<lint command>
+
+# Type check
+<type check command>
+
+# Build
+<build command>
+```
+
+## Project layout
+
+```
+<describe the directory structure agents need to navigate>
+```
+
+## Project-specific notes
+
+Anything non-obvious about working in this repository: required services,
+environment variables, slow test suites, generated files that must not be
+edited by hand, known-flaky tests.
+
+## Working memory
+
+- `memory/decisions.md` — architectural decisions
+- `memory/progress.md` — implementation progress
+- `memory/learnings.md` — patterns learned

@@ -3,130 +3,57 @@
 # Forgejo watcher adapter for mikeyobrien/ralph-orchestrator.
 # Implements the standard adapter interface consumed by forgejo_watcher.sh.
 #
+# Prompt content is built by the shared library at /opt/foundry/prompt-lib.sh
+# so that the execution contract, task modes, and identity string stay
+# identical across every agent and forge. See docs/PROMPT-ARCHITECTURE.md.
+#
 
 set -euo pipefail
 
+RALPH_WORKSPACE="${RALPH_WORKSPACE:-/root}"
 ORCHESTRATOR_WATCHER_PROMPT="${ORCHESTRATOR_WATCHER_PROMPT:-$RALPH_WORKSPACE/.ralph/gh_task_prompt.md}"
+
+FOUNDRY_PROMPT_LIB="${FOUNDRY_PROMPT_LIB:-/opt/foundry/prompt-lib.sh}"
+if [[ -f "$FOUNDRY_PROMPT_LIB" ]]; then
+    # shellcheck source=../prompt-lib.sh
+    source "$FOUNDRY_PROMPT_LIB"
+fi
+
+# ralph-orchestrator gates loop completion on this promise (see ralph.yml).
+FOUNDRY_COMPLETION_PROMISE="LOOP_COMPLETE"
 
 prepare_ralph_orchestrator_workspace() {
     local context_file="$1"
-    local kind linked_issue_section
-    kind=$(jq -r '.kind' "$context_file")
-    linked_issue_section=""
+    local kind mode
 
-    if [[ "$(jq -r '.linked_issue_number // empty' "$context_file")" != "" ]]; then
-        linked_issue_section=$(cat <<EOF
-## Related Issue
-
-Fixes #$(jq -r '.linked_issue_number' "$context_file"): $(jq -r '.linked_issue_title // ""' "$context_file")
-
-$(jq -r '.linked_issue_body // ""' "$context_file")
-EOF
-)
+    if ! declare -F foundry_build_task_prompt >/dev/null; then
+        log_error "Prompt library missing at $FOUNDRY_PROMPT_LIB"
+        log_error "Re-run: foundry agent forgejo-watcher init <vm>"
+        return 1
     fi
 
-    mkdir -p "$RALPH_WORKSPACE/.ralph/agent" "$RALPH_WORKSPACE/logs"
+    kind=$(jq -r '.kind' "$context_file")
+
+    mkdir -p "$(dirname "$ORCHESTRATOR_WATCHER_PROMPT")" "$RALPH_WORKSPACE/logs"
 
     case "$kind" in
-        issue)
-            cat > "$ORCHESTRATOR_WATCHER_PROMPT" <<EOF
-# Task: GitHub Issue #$(jq -r '.number' "$context_file") - $(jq -r '.title' "$context_file")
-
-Implement the requested issue work for $(jq -r '.repo' "$context_file").
-
-## Project Context
-
-- Primary repository path: /root/repos/$(jq -r '.repo_name' "$context_file")
-- Stable runbook: /root/.ralph/AGENT.md
-- Persistent memory: /root/.ralph/agent/memories.md
-- Issue URL: $(jq -r '.html_url' "$context_file")
-- Opened by: @$(jq -r '.user' "$context_file")
-- Labels: $(jq -r '.labels | join(", ")' "$context_file")
-
-## Issue Description
-
-$(jq -r '.body' "$context_file")
-
-## Discussion
-
-$(jq -r '.discussion' "$context_file")
-
-## Triggering Request
-
-This is the newest direct request and has priority over older discussion when they conflict.
-
-$(jq -r '.trigger_body // .body' "$context_file")
-
-## Requirements
-
-- Work in /root/repos/$(jq -r '.repo_name' "$context_file"), or additional repos only if the real execution path requires it.
-- Analyze the issue and recent discussion before editing code.
-- Treat the "Triggering Request" section as the primary objective for this run.
-- Implement the minimal correct fix or feature.
-- Run relevant tests and validation.
-- Create a pull request to $(jq -r '.repo' "$context_file") with "Fixes #$(jq -r '.number' "$context_file")" in the description.
-- Comment on the original issue with a summary of the work. Start the comment with "## Ralph - Task Completed".
-
-## Completion
-
-When the work is complete and validated, print:
-
-\`\`\`text
-LOOP_COMPLETE
-\`\`\`
-EOF
+        issue | pr)
+            mode=$(foundry_task_mode "$context_file")
+            # No mode stated: reply with the syntax and run no agent. The
+            # watcher posts FOUNDRY_REPLY_FILE on this exit code.
+            if [[ "$mode" == "help" ]]; then
+                log_info "No task mode stated; replying with usage"
+                foundry_write_help_reply
+                return $?
+            fi
+            log_info "Resolved task mode: $mode (kind: $kind)"
+            foundry_build_task_prompt "$context_file" "$mode" \
+                > "$ORCHESTRATOR_WATCHER_PROMPT" || return 1
             ;;
-        pr)
-            cat > "$ORCHESTRATOR_WATCHER_PROMPT" <<EOF
-# Task: GitHub PR #$(jq -r '.number' "$context_file") - $(jq -r '.title' "$context_file")
-
-Review and address the requested PR feedback for $(jq -r '.repo' "$context_file").
-
-## Project Context
-
-- Primary repository path: /root/repos/$(jq -r '.repo_name' "$context_file")
-- Stable runbook: /root/.ralph/AGENT.md
-- Persistent memory: /root/.ralph/agent/memories.md
-- PR URL: $(jq -r '.html_url' "$context_file")
-- Branch to update: $(jq -r '.branch' "$context_file")
-- Opened by: @$(jq -r '.user' "$context_file")
-- Trigger type: $(jq -r '.trigger_type' "$context_file")
-- Trigger comment ID: $(jq -r '.trigger_comment_id // "n/a"' "$context_file")
-
-## PR Description
-
-$(jq -r '.body' "$context_file")
-
-## Conversation Thread
-
-$(jq -r '.conversation' "$context_file")
-
-${linked_issue_section}
-
-## Triggering Request
-
-This is the newest direct request and has priority over older discussion when they conflict.
-
-$(jq -r '.trigger_body // "No trigger comment body available."' "$context_file")
-
-## Requirements
-
-- Work in /root/repos/$(jq -r '.repo_name' "$context_file").
-- Fetch and checkout branch \`$(jq -r '.branch' "$context_file")\`.
-- Treat the "Triggering Request" section as the primary objective for this run.
-- Address all relevant PR feedback.
-- Run relevant tests and validation.
-- Push fixes back to branch \`$(jq -r '.branch' "$context_file")\`.
-- Comment on the PR with a summary of the work. Start the comment with "## Ralph - Task Completed".
-
-## Completion
-
-When the work is complete and validated, print:
-
-\`\`\`text
-LOOP_COMPLETE
-\`\`\`
-EOF
+        pipeline_failure)
+            log_info "Resolved task mode: fix (kind: pipeline_failure)"
+            foundry_build_pipeline_prompt "$context_file" \
+                > "$ORCHESTRATOR_WATCHER_PROMPT" || return 1
             ;;
         *)
             log_error "Unsupported context kind for ralph-orchestrator: $kind"
@@ -177,7 +104,7 @@ evaluate_ralph_orchestrator_outcome() {
     fi
 }
 
-# Standard generic interface used by the agent-aware GitHub watcher.
+# Standard generic interface used by the agent-aware Forgejo watcher.
 prepare_agent_workspace() { prepare_ralph_orchestrator_workspace "$@"; }
 start_agent_loop() { start_ralph_orchestrator_loop; }
 evaluate_agent_outcome() { evaluate_ralph_orchestrator_outcome "$@"; }

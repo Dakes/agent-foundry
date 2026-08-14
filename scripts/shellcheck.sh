@@ -54,7 +54,7 @@ for script in "${scripts[@]}"; do
         passed=$((passed + 1))
     else
         echo -e "${RED}✗${NC} $script"
-        shellcheck "$script" 2>&1 | head -20
+        shellcheck "$script" 2>&1 | head -20 || true
         failed=$((failed + 1))
     fi
 done

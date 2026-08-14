@@ -26,6 +26,15 @@ RETRY_FILE="$CONFIG_DIR/retries.json"
 LOG_FILE="$CONFIG_DIR/watcher.log"
 CURRENT_TASK_FILE="$CONFIG_DIR/current_task.json"
 CONTEXT_FILE="$CONFIG_DIR/current_context.json"
+
+# Where the prompt library writes the reply for a request that stated no task
+# mode. Exported so the adapter writes it somewhere the watcher can find,
+# rather than defaulting to a cwd-relative path.
+# Set when the last context build answered with the usage reply rather than
+# failing, so the task is recorded as answered instead of errored.
+HELP_REPLY_POSTED=false
+
+export FOUNDRY_REPLY_FILE="${FOUNDRY_REPLY_FILE:-$CONFIG_DIR/last_reply.md}"
 HELPER_DIR="/opt/foundry/gh-watcher"
 
 # Default values (overridden by config file)
@@ -480,6 +489,43 @@ find_trigger_mentions() {
 # CONTEXT BUILDING AND AGENT EXECUTION
 # ============================================================================
 
+# Prepare the workspace, or answer a request that stated no task mode.
+#
+# The adapter returns FOUNDRY_EXIT_HELP (78) when the triggering comment named
+# no mode. That is not a failure: the prompt library has written the syntax
+# reply to FOUNDRY_REPLY_FILE and no agent should start. Treating it as a
+# generic error would post "Failed to prepare agent workspace" and throw the
+# reply away, which is the one outcome this whole path exists to avoid.
+#
+# Returns non-zero either way so the caller starts no agent.
+_prepare_or_reply() {
+    local repo="$1"
+    local number="$2"
+    local rc=0
+
+    # A reply left over from a previous event must never be posted as if it
+    # belonged to this one. Exit 78 is also sysexits' EX_CONFIG, so a tool
+    # inside prepare_agent_workspace could return it for its own reasons.
+    HELP_REPLY_POSTED=false
+    rm -f "$FOUNDRY_REPLY_FILE"
+
+    prepare_agent_workspace "$CONTEXT_FILE" || rc=$?
+
+    if [[ "$rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
+        log_info "No task mode stated; replying with usage and starting no agent"
+        if post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"; then
+            HELP_REPLY_POSTED=true
+        else
+            # Leave the flag false so the caller records a failure rather than
+            # filing the task as answered when nobody was answered.
+            log_error "Usage reply could not be posted for $repo #$number"
+        fi
+        return 1
+    fi
+
+    return "$rc"
+}
+
 build_context_for_issue() {
     local repo="$1"
     local issue_number="$2"
@@ -493,7 +539,7 @@ build_context_for_issue() {
         return 1
     fi
 
-    prepare_agent_workspace "$CONTEXT_FILE"
+    _prepare_or_reply "$repo" "$issue_number"
 }
 
 build_context_for_pr() {
@@ -509,7 +555,7 @@ build_context_for_pr() {
         return 1
     fi
 
-    prepare_agent_workspace "$CONTEXT_FILE"
+    _prepare_or_reply "$repo" "$pr_number"
 }
 
 start_agent() {
@@ -519,6 +565,44 @@ start_agent() {
 evaluate_agent_run_outcome() {
     local run_start_epoch="$1"
     evaluate_agent_outcome "$run_start_epoch"
+}
+
+# Error-comment header. Delegates to the prompt library so identity resolves
+# the same way it does in the completion header, including the registry
+# fallback that a hand-rolled ${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME}} skips.
+_watcher_error_header() {
+    if declare -F foundry_error_header >/dev/null; then
+        foundry_error_header
+        return 0
+    fi
+    # identity-fallback: only reached when prompt-lib.sh was not sourced
+    printf '## 🤖 %s - Task Update (Error)' "${AGENT_IDENTITY:-${AGENT_DISPLAY_NAME:-Agent}}"
+}
+
+# Post a pre-rendered comment body verbatim - the no-mode-stated reply, which
+# is hardcoded text rather than the output of an agent run.
+post_reply_file() {
+    local repo="$1"
+    local issue_or_pr_number="$2"
+    local reply_file="$3"
+
+    [[ -s "$reply_file" ]] || { log_error "No reply to post: $reply_file"; return 1; }
+
+    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+        log_info "[DRY RUN] Would post reply to $repo #$issue_or_pr_number"
+        return 0
+    fi
+
+    log_info "Posting reply to $repo #$issue_or_pr_number"
+    # The status matters: the caller records the task as answered only if the
+    # comment actually went out. `|| log_error` alone would swallow it and
+    # return 0, so a failed post would be filed as a successful reply.
+    if ! gh api "repos/$repo/issues/$issue_or_pr_number/comments" \
+        -f body="$(cat "$reply_file")" >/dev/null 2>&1; then
+        log_error "Failed to post reply to $repo #$issue_or_pr_number"
+        return 1
+    fi
+    return 0
 }
 
 post_error_comment() {
@@ -535,7 +619,7 @@ post_error_comment() {
 
     local comment_body
     comment_body=$(cat <<EOF
-## 🤖 $AGENT_DISPLAY_NAME - Task Update (Error)
+$(_watcher_error_header)
 
 I encountered an issue while working on this task and couldn't complete it automatically.
 
@@ -708,8 +792,13 @@ main_loop() {
                             # Cooldown period
                             sleep 120
                         else
-                            log_error "Failed to build context for $task_type #$comment_id"
-                            mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
+                            if [[ "$HELP_REPLY_POSTED" == "true" ]]; then
+                                log_info "Answered $task_type #$comment_id with the usage reply"
+                                mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"replied_no_mode\"}"
+                            else
+                                log_error "Failed to build context for $task_type #$comment_id"
+                                mark_processed "$task_id" "{\"type\":\"$task_type\",\"number\":$number,\"comment_id\":$comment_id,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
+                            fi
                         fi
                         ;;
 
@@ -777,6 +866,9 @@ main_loop() {
 
                             # Cooldown period
                             sleep 120
+                        elif [[ "$HELP_REPLY_POSTED" == "true" ]]; then
+                            log_info "Answered Issue #$issue_number with the usage reply"
+                            mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"replied_no_mode\"}"
                         else
                             log_error "Failed to build context for Issue #$issue_number"
                             mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"
