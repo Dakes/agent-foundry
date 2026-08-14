@@ -235,6 +235,11 @@ agent_watcher_adapter_for() {
                 kimi-ralph)
                     echo "$base_dir/templates/kimi/forgejo_watcher_agent_kimi-ralph.sh"
                     ;;
+                claude-goal|codex-goal|agy-goal)
+                    # One adapter for every goal agent and both forges: it only
+                    # writes the prompt and the condition, which does not vary.
+                    echo "$base_dir/templates/goal/watcher_agent_goal.sh"
+                    ;;
                 *)
                     echo ""
                     ;;
@@ -250,6 +255,9 @@ agent_watcher_adapter_for() {
                     ;;
                 kimi-ralph)
                     echo "$base_dir/templates/kimi/gh_watcher_agent_kimi-ralph.sh"
+                    ;;
+                claude-goal|codex-goal|agy-goal)
+                    echo "$base_dir/templates/goal/watcher_agent_goal.sh"
                     ;;
                 *)
                     echo ""

@@ -182,6 +182,58 @@ while IFS= read -r f; do
 done < <(printf '%s\n' templates/prompt-lib.sh templates/AGENT.md.template)
 ok "no pre-sandbox paths in the prompt layer"
 
+# ---------------------------------------------------------------------------
+# 9. Every autonomous agent must be reachable: a start template and a watcher
+#    adapter that exist on disk, and an adapter whose in-container filename the
+#    watchers actually resolve.
+#
+#    The goal agents shipped registered but unreachable - the registry returned
+#    no adapter, and the watchers looked for <forge>_watcher_agent_<type>.sh,
+#    which did not exist for them. Nothing failed until a real forge event
+#    arrived, which is the one moment nobody is watching.
+# ---------------------------------------------------------------------------
+# shellcheck source=../lib/agent-registry.sh
+source lib/agent-registry.sh
+
+for agent in $AGENT_TYPES; do
+    agent_is_autonomous "$agent" || continue
+
+    tmpl=$(agent_start_template "$agent")
+    if [[ -z "$tmpl" || ! -f "$tmpl" ]]; then
+        fail "agent '$agent' has no start template on disk (${tmpl:-<none>})"
+    fi
+
+    for forge in gh forgejo; do
+        adapter=$(agent_watcher_adapter_for "$agent" "$forge")
+        if [[ -z "$adapter" || ! -f "$adapter" ]]; then
+            fail "agent '$agent' has no $forge watcher adapter (${adapter:-<none>})"
+            continue
+        fi
+
+        # The watchers resolve the adapter by filename inside the image. A
+        # registry entry pointing at a file the watcher will never look for is
+        # the same outage as no entry at all.
+        base=$(basename "$adapter")
+        if ! grep -q "$base" "templates/${forge}-watcher/${forge}_watcher.sh" \
+            2>/dev/null && \
+           ! grep -q "$base" "templates/${forge}/${forge}_watcher.sh" 2>/dev/null
+        then
+            expected="${forge}_watcher_agent_${agent}.sh"
+            [[ "$base" == "$expected" ]] || \
+                fail "agent '$agent': $forge watcher will not resolve $base"
+        fi
+
+        # And it has to be in the image, or the watcher finds nothing.
+        if ! grep -q "$base" docker/foundry-agent.Dockerfile 2>/dev/null; then
+            case "$base" in
+                *_watcher_agent_*) ;;   # per-agent adapters ship another way
+                *) fail "agent '$agent': $base is not copied into the image" ;;
+            esac
+        fi
+    done
+done
+ok "every autonomous agent has a reachable template and adapter"
+
 echo
 if [[ "$FAIL" -eq 0 ]]; then
     echo "All prompt checks passed."

@@ -103,6 +103,17 @@ _agent_adapter_file() {
         echo ""
         return
     fi
+    # The goal agents share one adapter: it writes the task prompt and the
+    # completion condition, and neither varies by agent or by forge. The loop
+    # belongs to the CLI, so there is nothing per-agent left to adapt.
+    case "$AGENT_TYPE" in
+        *-goal)
+            echo "$HELPER_DIR/watcher_agent_goal.sh"
+            return
+            ;;
+    esac
+
+    # Otherwise: one adapter per autonomous agent type.
     echo "$HELPER_DIR/forgejo_watcher_agent_${AGENT_TYPE}.sh"
 }
 
