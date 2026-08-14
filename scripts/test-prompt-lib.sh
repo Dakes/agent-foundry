@@ -277,6 +277,15 @@ else
 fi
 check_contains "reply-file" "$(cat "$reply_target")" "@touya review"
 
+echo "== the mode is found at any mention, not only the first =="
+export TRIGGER_KEYWORD="@touya"
+check_mode pr "I remember @touya fixed this last week. @touya review"   review
+check_mode pr "@touya said no. @touya, implement it"                    implement
+check_mode issue "cc @touya — @touya answer why this times out"         answer
+# A talked-about mention with no mode anywhere still asks for the syntax.
+check_mode pr "@touya was here. @touya later maybe"                     help
+unset TRIGGER_KEYWORD
+
 echo
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

@@ -513,8 +513,13 @@ _prepare_or_reply() {
 
     if [[ "$rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
         log_info "No task mode stated; replying with usage and starting no agent"
-        post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"
-        HELP_REPLY_POSTED=true
+        if post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"; then
+            HELP_REPLY_POSTED=true
+        else
+            # Leave the flag false so the caller records a failure rather than
+            # filing the task as answered when nobody was answered.
+            log_error "Usage reply could not be posted for $repo #$number"
+        fi
         return 1
     fi
 
@@ -589,9 +594,15 @@ post_reply_file() {
     fi
 
     log_info "Posting reply to $repo #$issue_or_pr_number"
-    gh api "repos/$repo/issues/$issue_or_pr_number/comments" \
-        -f body="$(cat "$reply_file")" \
-        >/dev/null 2>&1 || log_error "Failed to post reply"
+    # The status matters: the caller records the task as answered only if the
+    # comment actually went out. `|| log_error` alone would swallow it and
+    # return 0, so a failed post would be filed as a successful reply.
+    if ! gh api "repos/$repo/issues/$issue_or_pr_number/comments" \
+        -f body="$(cat "$reply_file")" >/dev/null 2>&1; then
+        log_error "Failed to post reply to $repo #$issue_or_pr_number"
+        return 1
+    fi
+    return 0
 }
 
 post_error_comment() {
@@ -855,6 +866,9 @@ main_loop() {
 
                             # Cooldown period
                             sleep 120
+                        elif [[ "$HELP_REPLY_POSTED" == "true" ]]; then
+                            log_info "Answered Issue #$issue_number with the usage reply"
+                            mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"replied_no_mode\"}"
                         else
                             log_error "Failed to build context for Issue #$issue_number"
                             mark_processed "$task_id" "{\"type\":\"issue\",\"number\":$issue_number,\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"error_context_failed\"}"

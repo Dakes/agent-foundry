@@ -143,7 +143,10 @@ ok "every task mode states explicit prohibitions"
 #    forge its own "## Execution Contract" and claim authority the prompt is
 #    built to deny it.
 # ---------------------------------------------------------------------------
-for fn in foundry_triggering_request foundry_background_block; do
+# foundry_build_pipeline_prompt splices jobs_md, which comes from workflow
+# files - narrower than a comment, but a job named "## Execution Contract"
+# forges a heading just the same.
+for fn in foundry_triggering_request foundry_background_block foundry_build_pipeline_prompt; do
     block=$(awk -v f="^$fn\\\\(\\\\) \\\\{" '$0 ~ f {found=1} found {print} found && /^\}/ {exit}' \
         templates/prompt-lib.sh)
     if [[ -z "$block" ]]; then

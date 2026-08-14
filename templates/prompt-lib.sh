@@ -239,27 +239,35 @@ foundry_task_mode() {
     lc=$(_foundry_strip_quoted "$trigger" | tr '[:upper:]' '[:lower:]')
 
     # 1. The word following the trigger keyword.
+    #
+    # Every occurrence is examined, not just the first. People mention the bot
+    # while talking about it - "I remember @touya fixed this last week. @touya
+    # review" - and stopping at the first hit reads "fixed" as the mode word,
+    # finds nothing, and asks for syntax the user already supplied.
     local keyword lc_keyword
     keyword="${TRIGGER_KEYWORD:-${FOUNDRY_TRIGGER_KEYWORD:-}}"
     if [[ -n "$keyword" ]]; then
         lc_keyword=$(printf '%s' "$keyword" | tr '[:upper:]' '[:lower:]')
-        for m in $FOUNDRY_TASK_MODES; do
-            [[ "$m" == "default" ]] && continue
-            # The keyword is matched literally: it contains "!" or "@", which
-            # are not regex metacharacters, but a user-configured value could
-            # contain "." or "*", so compare on a fixed prefix instead.
-            local rest
-            rest="${lc#*"$lc_keyword"}"
-            [[ "$rest" == "$lc" ]] && break   # keyword absent
-            rest="${rest#"${rest%%[![:space:]]*}"}"   # drop leading blanks
+
+        local remainder="$lc" rest
+        # The keyword is matched literally: it contains "!" or "@", which are
+        # not regex metacharacters, but a user-configured value could contain
+        # "." or "*", so compare on a fixed prefix instead of a pattern.
+        while [[ "$remainder" == *"$lc_keyword"* ]]; do
+            remainder="${remainder#*"$lc_keyword"}"
+            rest="${remainder#"${remainder%%[![:space:]]*}"}"   # drop blanks
             # "@bot, review" and "@bot: review" are how people actually write
             # it; only whitespace was stripped before, so both asked for help.
             rest="${rest#[,:.-]}"
             rest="${rest#"${rest%%[![:space:]]*}"}"
-            if [[ "$rest" == "$m" || "$rest" == "$m"[[:space:]]* ]]; then
-                printf '%s' "$m"
-                return 0
-            fi
+
+            for m in $FOUNDRY_TASK_MODES; do
+                [[ "$m" == "default" ]] && continue
+                if [[ "$rest" == "$m" || "$rest" == "$m"[[:space:]]* ]]; then
+                    printf '%s' "$m"
+                    return 0
+                fi
+            done
         done
     fi
 

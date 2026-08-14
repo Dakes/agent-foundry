@@ -542,10 +542,17 @@ process_event() {
     # the generic workspace error here would discard it.
     if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
         log_info "No task mode stated for $task_id; replying with usage"
+        local reply_result="replied_no_mode"
         if [[ "$task_type" != "pipeline_failure" ]]; then
-            post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"
+            # Record what actually happened. Filing an unposted reply as
+            # answered would strand the request: nobody was told anything, and
+            # the event is never looked at again.
+            if ! post_reply_file "$repo" "$number" "$FOUNDRY_REPLY_FILE"; then
+                log_error "Usage reply could not be posted for $task_id"
+                reply_result="error_reply_failed"
+            fi
         fi
-        mark_processed "$task_id" "{\"type\":\"$task_type\",\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"replied_no_mode\"}"
+        mark_processed "$task_id" "{\"type\":\"$task_type\",\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"$reply_result\"}"
         rm -f "$event_file"
         return 0
     fi

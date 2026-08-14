@@ -412,9 +412,15 @@ post_reply_file() {
     fi
 
     log_info "Posting reply to $repo #$issue_or_pr_number"
-    forgejo_post "repos/$owner/$part/issues/$issue_or_pr_number/comments" \
+    # The status matters: the caller records the task as answered only if the
+    # comment actually went out. `|| log_error` alone would swallow it.
+    if ! forgejo_post "repos/$owner/$part/issues/$issue_or_pr_number/comments" \
         <<< "$(jq -n --arg body "$(cat "$reply_file")" '{body: $body}')" \
-        >/dev/null 2>&1 || log_error "Failed to post reply"
+        >/dev/null 2>&1; then
+        log_error "Failed to post reply to $repo #$issue_or_pr_number"
+        return 1
+    fi
+    return 0
 }
 
 post_error_comment() {
