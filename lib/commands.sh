@@ -61,7 +61,10 @@ _project_image() {
 
     if [[ -z "$image" ]]; then
         local tag="base"
-        if agent_is_autonomous "$agent"; then
+        # Autonomous agents get their own tag because each bakes in one
+        # runner - except the goal-mode agents, whose CLIs are all in :base
+        # already. Their loop is a feature of the CLI, not an install.
+        if agent_is_autonomous "$agent" && [[ "$agent" != *-goal ]]; then
             tag="$agent"
         fi
         image="${FOUNDRY_IMAGE_REPO:-foundry-agent}:${tag}"
@@ -752,6 +755,12 @@ cmd_image() {
             local variant="${1:-none}"
             local tag="$variant"
             [[ "$variant" == "none" ]] && tag="base"
+
+            if [[ "$variant" == *-goal ]]; then
+                log_error "'$variant' needs no image of its own: its CLI is in the base image"
+                echo "Build the base image instead: foundry image build" >&2
+                return 1
+            fi
 
             if ! agent_is_autonomous "$variant" && [[ "$variant" != "none" ]]; then
                 log_error "Unknown image variant: $variant"

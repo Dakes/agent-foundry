@@ -368,6 +368,58 @@ EOF
     return 0
 }
 
+# Point every agent CLI's native memory file at the project's AGENT.md.
+#
+# Each CLI loads a user-level instructions file from HOME, which inside the
+# sandbox is the volume root. Symlinking them all at one file means there is a
+# single place to write standing instructions - the ones that apply across
+# every repository in this project and that a per-repo AGENTS.md cannot carry -
+# and each agent picks it up natively, with no prompt plumbing from us.
+_project_link_agent_md() {
+    local root="$1"
+    local target
+
+    for target in ".claude/CLAUDE.md" ".gemini/GEMINI.md" ".codex/AGENTS.md"; do
+        mkdir -p "${root}/$(dirname "$target")"
+        # Leave a real file alone: it is the user's, and clobbering notes with
+        # a symlink would lose them silently.
+        if [[ -e "${root}/${target}" && ! -L "${root}/${target}" ]]; then
+            log_debug "Not linking ${target}: a real file is already there"
+            continue
+        fi
+        ln -sfn "../AGENT.md" "${root}/${target}"
+    done
+}
+
+# Pre-accept the workspace trust prompt for the agents that gate on it.
+#
+# Claude refuses to run /goal in an untrusted workspace, and the dialog cannot
+# be answered headlessly - a fresh sandbox has never seen it. Codex refuses a
+# directory that is not a trusted git repo, which the start script handles with
+# --skip-git-repo-check.
+_project_seed_trust() {
+    local root="$1"
+    local cfg="${root}/.claude.json"
+
+    if [[ -f "$cfg" ]]; then
+        log_debug "Claude config already exists, leaving trust setting alone"
+        return 0
+    fi
+
+    jq -n --arg root "$root" '{
+        projects: {
+            ($root): {
+                hasTrustDialogAccepted: true,
+                hasCompletedProjectOnboarding: true
+            }
+        }
+    }' > "$cfg" || {
+        log_error "Failed to seed workspace trust: $cfg"
+        return 1
+    }
+    chmod 600 "$cfg"
+}
+
 # Create (or complete) a project's volume root.
 # Idempotent: safe to re-run on an existing project.
 # Usage: project_scaffold "pocetude"
@@ -422,6 +474,10 @@ Context for the agent working in this project.
   real directory on the host: everything the agent writes here persists.
 EOF
     fi
+
+    # After AGENT.md exists, so the links are never left dangling.
+    _project_link_agent_md "$root"
+    _project_seed_trust "$root" || return 1
 
     # The volume root must be on local storage. sbx reaches workspaces through
     # a filesystem passthrough, so network-backed storage makes every read

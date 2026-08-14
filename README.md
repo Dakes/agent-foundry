@@ -67,6 +67,15 @@ volume root is mounted at the same absolute path inside as on the host.
 | `ralph` | autonomous | `frankbria/ralph-claude-code` |
 | `ralph-orchestrator` | autonomous | `@ralph-orchestrator/ralph-cli` |
 | `kimi-ralph` | autonomous | `kimi-code`, capped at 100 iterations |
+| `claude-goal` | autonomous | Claude Code's `/goal` |
+| `codex-goal` | autonomous | Codex's `/goal` |
+| `agy-goal` | autonomous | Antigravity CLI's `/goal` |
+
+The `*-goal` agents need no image of their own — all three CLIs are in
+`foundry-agent:base`. Each keeps working across turns until a completion
+condition holds, so there is no loop for Foundry to run: a forge event supplies
+the goal, and the CLI owns the iteration. See
+[PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md#goal-mode-agents).
 
 One agent per project, set with `.agent` in `foundry.json`. The interactive
 CLIs all live in `foundry-agent:base`; each autonomous runner gets its own
@@ -146,6 +155,14 @@ in `~/.config/foundry/config.conf`. See
 Defaults come from the sandbox runtime (all host CPUs, 50% of host memory).
 Override globally with `DEFAULT_CPUS` / `DEFAULT_MEMORY`, or per project with
 `.resources` in `foundry.json`.
+
+### Standing instructions
+
+`AGENT.md` in the volume root is where project-wide instructions go — the ones
+that apply across every repository in the sandbox and that a per-repo
+`AGENTS.md` cannot carry. `foundry init` symlinks `.claude/CLAUDE.md`,
+`.gemini/GEMINI.md` and `.codex/AGENTS.md` at it, so each CLI loads it
+natively.
 
 ### SSH keys
 

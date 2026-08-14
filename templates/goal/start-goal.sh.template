@@ -1,0 +1,84 @@
+#!/bin/bash
+# Agent Foundry - goal-mode agent start script
+#
+# One template for claude-goal, codex-goal and agy-goal. All three CLIs ship a
+# /goal command that keeps working across turns until a completion condition
+# holds, so there is no loop to write here - only the invocation, which is the
+# one thing that differs between them.
+#
+# Rendered by lib/agent-sandbox.sh, which exports AGENT_WORKSPACE, AGENT_TYPE,
+# AGENT_LOG_FILE, AGENT_TASK_PROMPT_FILE and AGENT_GOAL_CONDITION.
+
+cd "$AGENT_WORKSPACE" || {
+    echo "ERROR: cannot change to workspace $AGENT_WORKSPACE" >&2
+    exit 1
+}
+
+mkdir -p "$(dirname "$AGENT_LOG_FILE")"
+
+if [[ ! -f "$AGENT_TASK_PROMPT_FILE" ]]; then
+    echo "ERROR: task prompt not found: $AGENT_TASK_PROMPT_FILE" >&2
+    echo "The watcher writes it before starting the agent." >&2
+    exit 1
+fi
+
+if [[ -z "${AGENT_GOAL_CONDITION:-}" ]]; then
+    echo "ERROR: no goal condition was rendered for $AGENT_TYPE" >&2
+    exit 1
+fi
+
+# Work happens in the repository, not the volume root. All three CLIs anchor on
+# a git repository; agy in particular falls back to an internal scratch
+# workspace when it cannot find one, and then reports success for work it did
+# somewhere else entirely.
+if [[ -n "${AGENT_REPO_PATH:-}" ]]; then
+    if [[ ! -d "$AGENT_REPO_PATH/.git" ]]; then
+        echo "ERROR: not a git repository: $AGENT_REPO_PATH" >&2
+        echo "Goal-mode agents anchor on the repository; without one they may" >&2
+        echo "work in a scratch directory and report success for it." >&2
+        exit 1
+    fi
+    cd "$AGENT_REPO_PATH" || exit 1
+fi
+
+echo "[INFO] $AGENT_TYPE starting in $(pwd)" | tee -a "$AGENT_LOG_FILE"
+echo "[INFO] goal: $AGENT_GOAL_CONDITION" | tee -a "$AGENT_LOG_FILE"
+
+case "$AGENT_TYPE" in
+    claude-goal)
+        # stream-json is not optional: with the default text output /goal
+        # prints nothing until the condition is met, so a long run is
+        # indistinguishable from a hung one in `foundry logs -f`.
+        exec claude -p "/goal ${AGENT_GOAL_CONDITION}" \
+            --permission-mode acceptEdits \
+            --output-format stream-json --verbose \
+            2>&1 | tee -a "$AGENT_LOG_FILE"
+        ;;
+
+    codex-goal)
+        # The sandbox already isolates us, so codex's own sandbox only gets in
+        # the way; --skip-git-repo-check keeps it from refusing an untrusted
+        # directory. `goals` is a stable, default-on feature flag.
+        exec codex exec \
+            --skip-git-repo-check \
+            --sandbox workspace-write \
+            "/goal ${AGENT_GOAL_CONDITION}" \
+            2>&1 | tee -a "$AGENT_LOG_FILE"
+        ;;
+
+    agy-goal)
+        # Flag order matters: -p takes the prompt as its value, so any flag
+        # placed after it is swallowed as the prompt text. --print-timeout
+        # defaults to 5 minutes, which would kill a long goal run mid-work.
+        exec agy \
+            --dangerously-skip-permissions \
+            --print-timeout "${AGENT_GOAL_TIMEOUT:-4h}" \
+            -p "/goal ${AGENT_GOAL_CONDITION}" \
+            2>&1 | tee -a "$AGENT_LOG_FILE"
+        ;;
+
+    *)
+        echo "ERROR: start-goal.sh does not handle agent type: $AGENT_TYPE" >&2
+        exit 1
+        ;;
+esac

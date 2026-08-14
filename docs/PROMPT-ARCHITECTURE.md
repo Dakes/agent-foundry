@@ -237,6 +237,71 @@ contract names and defines as data. Inside the fence, Markdown headings are
 defanged (`## X` → `- X`) and fence markers are broken, so quoted text can
 neither impersonate a section nor escape its container.
 
+
+## Goal-mode agents
+
+`claude-goal`, `codex-goal` and `agy-goal` do not run a loop Foundry writes.
+Each CLI ships a `/goal` command that keeps working across turns until a
+completion condition holds, so the prompt layer supplies the condition and the
+CLI owns the loop.
+
+`foundry_goal_condition` turns the resolved mode into an end state the run can
+demonstrate — the same terminal action `foundry_objective_block` already
+declares, restated as something observable:
+
+| Mode | Condition |
+|---|---|
+| `review` | a review comment is posted, and no file was modified |
+| `fix` | the fix is pushed to the branch and the failing checks pass |
+| `implement` | a pull request implementing the request is open |
+| `answer` | a comment answering the request is posted, nothing modified |
+
+Every condition ends with `, or stop after N turns`
+(`FOUNDRY_GOAL_MAX_TURNS`, default 20). None of the three CLIs has a
+max-iterations flag: the bound has to be inside the condition, or a loop that
+cannot satisfy its condition runs until the token budget is gone.
+
+The condition stays short and points at the generated prompt file rather than
+restating it. Claude caps a condition at 4,000 characters, and a condition that
+competes with the prompt re-creates the source conflict this architecture
+exists to prevent.
+
+### What differs between the three
+
+| | Who decides "done" | Verified |
+|---|---|---|
+| `claude-goal` | a separate small model evaluates the transcript each turn | documented for `-p` |
+| `codex-goal` | the agent itself, via an `update_goal` tool | ran headless, completed in 7s |
+| `agy-goal` | the `<!-- GOAL_COMPLETE -->` sentinel it emits | ran headless |
+
+Three behaviours are baked into `templates/goal/start-goal.sh.template`
+because each cost a debugging session:
+
+- **Claude needs `--output-format stream-json`.** With the default text output
+  `/goal` prints nothing until the condition is met, so a long run cannot be
+  told from a hung one in `foundry logs -f`.
+- **agy's `-p` takes the prompt as its value.** Any flag placed after it is
+  swallowed as prompt text, and the agent answers a question *about* the flag.
+  Flags come first.
+- **agy anchors on a git repository.** Started outside one it works in an
+  internal scratch workspace and reports success for work done somewhere else
+  entirely. The start script refuses to run when `AGENT_REPO_PATH` is not a git
+  checkout, because that failure is invisible in the output.
+
+agy's `--print-timeout` also defaults to five minutes, which would kill a long
+run mid-work; `FOUNDRY_GOAL_TIMEOUT` (default `4h`) overrides it.
+
+### Standing instructions
+
+`AGENT.md` in the volume root is the one file to write for instructions that
+apply across every repository in the project. The scaffold symlinks each CLI's
+native memory file at it — `.claude/CLAUDE.md`, `.gemini/GEMINI.md`,
+`.codex/AGENTS.md` — so every agent loads it without Foundry injecting
+anything. A real file already at one of those paths is never replaced.
+
+Per-repo `AGENTS.md` files still apply, and the execution contract still ranks
+them: authoritative for *how*, never for *whether* or *what*.
+
 ## Rules
 
 These are enforced mechanically by `scripts/check-prompts.sh`, which runs in

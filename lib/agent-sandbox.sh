@@ -82,6 +82,11 @@ _agent_render_start_script() {
         printf 'export AGENT_RALPH_VARIANT="%s"\n' "$ralph_variant"
         printf 'export AGENT_THREAD_KEY="%s"\n' "${FOUNDRY_THREAD_KEY:-}"
         printf 'export AGENT_SESSION_ID="%s"\n' "${FOUNDRY_SESSION_ID:-}"
+        # Goal-mode agents need the completion condition and a repository to
+        # anchor on. Both are empty for every other agent type.
+        printf 'export AGENT_GOAL_CONDITION=%s\n' "$(printf '%q' "${FOUNDRY_GOAL_CONDITION:-}")"
+        printf 'export AGENT_REPO_PATH="%s"\n' "${FOUNDRY_REPO_PATH:-}"
+        printf 'export AGENT_GOAL_TIMEOUT="%s"\n' "${FOUNDRY_GOAL_TIMEOUT:-4h}"
         cat "$template"
     } > "$script"
 
@@ -121,6 +126,17 @@ foundry_agent_start() {
     mkdir -p "${root}/logs"
 
     if agent_is_autonomous "$agent"; then
+        # A goal-mode agent is driven by a forge event: the request supplies
+        # the goal. Starting one from `foundry up` with nothing to work on
+        # would launch a loop with no completion condition, which is the
+        # expensive way to do nothing.
+        if [[ "$agent" == *-goal && -z "${FOUNDRY_GOAL_CONDITION:-}" ]]; then
+            log_warn "$(agent_display_name "$agent") runs from a forge event and has no task yet"
+            log_warn "It starts when a watcher receives a request naming a mode."
+            log_warn "For an interactive session instead, set .agent to 'claude'."
+            return 0
+        fi
+
         local script
         script="$(_agent_render_start_script "$root" "$agent")" || return 1
 

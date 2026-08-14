@@ -9,13 +9,14 @@
 #
 
 # Whitespace-separated list of valid agent type identifiers.
-AGENT_TYPES="ralph ralph-orchestrator kimi-ralph claude gemini codex"
+AGENT_TYPES="ralph ralph-orchestrator kimi-ralph claude gemini codex claude-goal codex-goal agy-goal"
 
 # Returns 0 if the agent type is supported.
 agent_is_valid() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator|kimi-ralph|claude|gemini|codex)
+        ralph|ralph-orchestrator|kimi-ralph|claude|gemini|codex|\
+        claude-goal|codex-goal|agy-goal)
             return 0
             ;;
         *)
@@ -32,6 +33,9 @@ agent_display_name() {
         ralph-orchestrator) echo "Ralph Orchestrator" ;;
         kimi-ralph) echo "Kimi Code CLI (Ralph mode)" ;;
         claude) echo "Claude Code CLI" ;;
+        claude-goal) echo "Claude Code (goal loop)" ;;
+        codex-goal) echo "Codex (goal loop)" ;;
+        agy-goal) echo "Antigravity (goal loop)" ;;
         gemini) echo "Gemini CLI" ;;
         codex) echo "OpenAI Codex CLI" ;;
         *) echo "$agent" ;;
@@ -50,7 +54,9 @@ agent_identity_name() {
     case "$agent" in
         ralph|ralph-orchestrator) echo "Ralph" ;;
         kimi-ralph) echo "Kimi" ;;
-        claude) echo "Claude" ;;
+        claude|claude-goal) echo "Claude" ;;
+        codex-goal) echo "Codex" ;;
+        agy-goal) echo "Antigravity" ;;
         gemini) echo "Gemini" ;;
         codex) echo "Codex" ;;
         *) echo "Agent" ;;
@@ -61,7 +67,7 @@ agent_identity_name() {
 agent_category() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator|kimi-ralph)
+        ralph|ralph-orchestrator|kimi-ralph|claude-goal|codex-goal|agy-goal)
             echo "autonomous"
             ;;
         claude|gemini|codex)
@@ -87,7 +93,7 @@ agent_is_interactive() {
 agent_session_backend() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator|kimi-ralph)
+        ralph|ralph-orchestrator|kimi-ralph|claude-goal|codex-goal|agy-goal)
             echo "tmux"
             ;;
         claude|gemini|codex)
@@ -105,7 +111,9 @@ agent_binary() {
     case "$agent" in
         ralph|ralph-orchestrator) echo "ralph" ;;
         kimi-ralph) echo "kimi" ;;
-        claude) echo "claude" ;;
+        claude|claude-goal) echo "claude" ;;
+        codex-goal) echo "codex" ;;
+        agy-goal) echo "agy" ;;
         gemini) echo "gemini" ;;
         codex) echo "codex" ;;
         *) echo "" ;;
@@ -118,7 +126,9 @@ agent_package() {
     case "$agent" in
         ralph|ralph-orchestrator) echo "ralph" ;;
         kimi-ralph) echo "kimi-code" ;;
-        claude) echo "@anthropic-ai/claude-code" ;;
+        claude|claude-goal) echo "@anthropic-ai/claude-code" ;;
+        codex-goal) echo "@openai/codex" ;;
+        agy-goal) echo "antigravity-cli" ;;
         gemini) echo "@google/gemini-cli" ;;
         codex) echo "@openai/codex" ;;
         *) echo "" ;;
@@ -131,7 +141,8 @@ agent_install_method() {
     case "$agent" in
         ralph|ralph-orchestrator) echo "ralph" ;;
         kimi-ralph) echo "kimi-code" ;;
-        claude|gemini|codex) echo "npm" ;;
+        claude|gemini|codex|claude-goal|codex-goal) echo "npm" ;;
+        agy-goal) echo "installer" ;;
         *) echo "" ;;
     esac
 }
@@ -142,7 +153,9 @@ agent_dotfolder() {
     case "$agent" in
         ralph|ralph-orchestrator) echo ".ralph" ;;
         kimi-ralph) echo ".kimi" ;;
-        claude) echo ".claude" ;;
+        claude|claude-goal) echo ".claude" ;;
+        codex-goal) echo ".codex" ;;
+        agy-goal) echo ".gemini" ;;
         gemini) echo ".gemini" ;;
         codex) echo ".codex" ;;
         *) echo "" ;;
@@ -184,6 +197,12 @@ agent_start_template() {
             ;;
         kimi-ralph)
             echo "$base_dir/templates/kimi/start-kimi-ralph.sh.template"
+            ;;
+        claude-goal|codex-goal|agy-goal)
+            # One template for all three: they differ only in the command line,
+            # which it selects on AGENT_TYPE. The loop itself belongs to the
+            # CLI, so there is nothing per-agent left to script.
+            echo "$base_dir/templates/goal/start-goal.sh.template"
             ;;
         *)
             echo ""

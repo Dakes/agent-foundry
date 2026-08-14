@@ -286,6 +286,45 @@ check_mode issue "cc @touya — @touya answer why this times out"         answer
 check_mode pr "@touya was here. @touya later maybe"                     help
 unset TRIGGER_KEYWORD
 
+echo "== the goal condition states a verifiable end state per mode =="
+goal_ctx() { _ctx "$1" "$2"; }
+g_review=$(foundry_goal_condition review "$(goal_ctx pr '@touya review this')")
+check_contains "goal/review" "$g_review" "review comment"
+check_contains "goal/review" "$g_review" "https://example.com/42"
+check_not_contains "goal/review" "$g_review" "pull request is open"
+
+g_fix=$(foundry_goal_condition fix "$(goal_ctx pr '@touya fix this')")
+check_contains "goal/fix" "$g_fix" "feat/x"
+
+g_impl=$(foundry_goal_condition implement "$(goal_ctx issue '@touya implement this')")
+check_contains "goal/implement" "$g_impl" "pull request"
+
+g_ans=$(foundry_goal_condition answer "$(goal_ctx issue '@touya answer this')")
+check_contains "goal/answer" "$g_ans" "comment"
+
+echo "== every goal condition is bounded =="
+# /goal has no max-iterations flag: the bound has to live in the condition,
+# or a loop that cannot satisfy its condition runs until the budget is gone.
+for _m in review implement fix answer; do
+    _g=$(foundry_goal_condition "$_m" "$(goal_ctx pr "@touya $_m this")")
+    check_contains "goal/bound/$_m" "$_g" "stop after"
+done
+bounded=$(FOUNDRY_GOAL_MAX_TURNS=7 foundry_goal_condition review "$(goal_ctx pr '@touya review')")
+check_contains "goal/bound/custom" "$bounded" "stop after 7 turns"
+
+echo "== the condition points at the generated prompt =="
+check_contains "goal/prompt-ref" "$g_review" "task_prompt.md"
+
+echo "== help mode has no goal condition =="
+g_help=$(foundry_goal_condition help "$(goal_ctx pr 'thoughts?')" 2>/dev/null)
+help_rc=$?
+if [[ "$help_rc" -ne 0 && -z "$g_help" ]]; then
+    PASS=$((PASS + 1))
+else
+    printf 'FAIL: goal condition for help mode: rc=%s out=%s\n' "$help_rc" "$g_help"
+    FAIL=$((FAIL + 1))
+fi
+
 echo
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

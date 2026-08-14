@@ -555,6 +555,73 @@ foundry_background_block() {
 }
 
 # ---------------------------------------------------------------------------
+# Goal conditions
+# ---------------------------------------------------------------------------
+
+# How many turns a goal loop may run before it must stop.
+#
+# /goal takes no max-iterations flag in any of the three CLIs: the bound has to
+# be part of the condition text, or a loop that can never satisfy its condition
+# runs until the token budget is gone.
+FOUNDRY_GOAL_MAX_TURNS="${FOUNDRY_GOAL_MAX_TURNS:-20}"
+
+# The completion condition for a goal-mode run.
+#
+# The evaluator - a second model for claude, the agent itself for codex, a
+# sentinel for agy - judges this against what the run has surfaced. So it has
+# to name an end state the transcript can demonstrate, not an intention.
+# Each mode already declares a terminal action in foundry_objective_block;
+# this restates it as something observable, and adds the turn bound.
+#
+# The condition deliberately stays short and points at the generated prompt
+# for the rest: claude caps a condition at 4000 characters, and a condition
+# that restates the whole task competes with it.
+#
+# Usage: foundry_goal_condition <mode> <context_file>
+foundry_goal_condition() {
+    local mode="$1" context_file="$2"
+    local url branch repo prompt_ref
+
+    if [[ "$mode" == "help" ]] || ! foundry_mode_is_valid "$mode"; then
+        printf 'foundry_goal_condition: no goal for mode "%s"\n' "$mode" >&2
+        return 2
+    fi
+
+    url=$(_foundry_jq "$context_file" '.html_url' "the originating issue or pull request")
+    branch=$(_foundry_jq "$context_file" '.branch')
+    repo=$(_foundry_jq "$context_file" '.repo')
+    prompt_ref="${FOUNDRY_TASK_PROMPT_REF:-task_prompt.md}"
+
+    printf 'Follow the instructions in %s. ' "$prompt_ref"
+
+    case "$mode" in
+        review)
+            printf 'The goal is met when a review comment has been posted on %s ' "$url"
+            printf 'and no file in the repository has been modified'
+            ;;
+        implement)
+            printf 'The goal is met when a pull request implementing the request '
+            printf 'is open against %s and its checks have been run' "$repo"
+            ;;
+        fix)
+            printf 'The goal is met when the fix is committed and pushed to branch %s ' "${branch:-the existing branch}"
+            printf 'and the checks that were failing now pass'
+            ;;
+        answer)
+            printf 'The goal is met when a comment answering the request has been '
+            printf 'posted on %s and nothing has been modified' "$url"
+            ;;
+        default | *)
+            printf 'The goal is met when the request has been satisfied by the '
+            printf 'least destructive action that answers it, and the outcome '
+            printf 'has been reported in a comment on %s' "$url"
+            ;;
+    esac
+
+    printf ', or stop after %s turns and report what is blocking you.\n' "$FOUNDRY_GOAL_MAX_TURNS"
+}
+
+# ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
 

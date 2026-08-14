@@ -30,7 +30,7 @@ ok() {
     RULE_FAILED=0
 }
 
-ADAPTERS=(templates/ralph/*.sh templates/kimi/*_watcher_agent_*.sh)
+ADAPTERS=(templates/ralph/*.sh templates/kimi/*_watcher_agent_*.sh templates/goal/watcher_agent_goal.sh)
 
 # ---------------------------------------------------------------------------
 # 1. Identity strings must come from the prompt library, not be hardcoded.

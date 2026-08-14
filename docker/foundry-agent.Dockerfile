@@ -64,6 +64,23 @@ RUN npm install -g \
         @google/gemini-cli \
         @openai/codex
 
+# Antigravity CLI (agy), which ships no image of its own.
+#
+# The installer drops the binary in $HOME/.local/bin, and HOME is the project
+# volume root at runtime - a different directory per project, and not one that
+# exists at build time. Installing under /opt and linking into /usr/local/bin
+# puts it on PATH for every project, the same treatment kimi-code needs.
+#
+# agy stores its state under ~/.gemini/antigravity-cli, which lands in the
+# volume root and therefore survives restarts: log in once per project.
+RUN set -eux; \
+    export HOME=/opt/agy; \
+    mkdir -p "$HOME"; \
+    curl -fsSL https://antigravity.google/cli/install.sh | bash; \
+    ln -sf "$HOME/.local/bin/agy" /usr/local/bin/agy; \
+    chmod -R a+rX /opt/agy; \
+    /usr/local/bin/agy --version
+
 # Optional autonomous agent variant.
 #
 # These recipes are the ones lib/workspace.sh used to run per-VM, not npm
@@ -109,6 +126,10 @@ RUN chmod 0755 /opt/foundry/agent-session.sh
 # it instead.
 COPY templates/prompt-lib.sh /opt/foundry/prompt-lib.sh
 RUN chmod 0755 /opt/foundry/prompt-lib.sh
+
+# The goal-mode adapter, shared by claude-goal, codex-goal and agy-goal.
+COPY templates/goal/watcher_agent_goal.sh /opt/foundry/watcher_agent_goal.sh
+RUN chmod 0755 /opt/foundry/watcher_agent_goal.sh
 
 # forgejo-cli, used by the Forgejo watcher adapters.
 COPY binaries/fj/ /tmp/fj/
