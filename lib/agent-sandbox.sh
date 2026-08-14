@@ -85,8 +85,8 @@ _agent_render_start_script() {
         # Goal-mode agents need the completion condition and a repository to
         # anchor on. Both are empty for every other agent type.
         printf 'export AGENT_GOAL_CONDITION=%s\n' "$(printf '%q' "${FOUNDRY_GOAL_CONDITION:-}")"
-        printf 'export AGENT_REPO_PATH="%s"\n' "${FOUNDRY_REPO_PATH:-}"
-        printf 'export AGENT_GOAL_TIMEOUT="%s"\n' "${FOUNDRY_GOAL_TIMEOUT:-4h}"
+        printf 'export AGENT_REPO_PATH=%s\n' "$(printf '%q' "${FOUNDRY_REPO_PATH:-}")"
+        printf 'export AGENT_GOAL_TIMEOUT=%s\n' "$(printf '%q' "${FOUNDRY_GOAL_TIMEOUT:-4h}")"
         cat "$template"
     } > "$script"
 

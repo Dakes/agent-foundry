@@ -127,9 +127,12 @@ RUN chmod 0755 /opt/foundry/agent-session.sh
 COPY templates/prompt-lib.sh /opt/foundry/prompt-lib.sh
 RUN chmod 0755 /opt/foundry/prompt-lib.sh
 
-# The goal-mode adapter, shared by claude-goal, codex-goal and agy-goal.
+# The goal-mode adapter and the launcher it runs, shared by claude-goal,
+# codex-goal and agy-goal. The launcher is the single copy of each CLI's
+# invocation: the adapter execs it rather than restating the command lines.
 COPY templates/goal/watcher_agent_goal.sh /opt/foundry/watcher_agent_goal.sh
-RUN chmod 0755 /opt/foundry/watcher_agent_goal.sh
+COPY templates/goal/start-goal.sh.template /opt/foundry/start-goal.sh
+RUN chmod 0755 /opt/foundry/watcher_agent_goal.sh /opt/foundry/start-goal.sh
 
 # forgejo-cli, used by the Forgejo watcher adapters.
 COPY binaries/fj/ /tmp/fj/

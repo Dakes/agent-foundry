@@ -20,8 +20,10 @@ if [[ -f "$FOUNDRY_PROMPT_LIB" ]]; then
     source "$FOUNDRY_PROMPT_LIB"
 fi
 
-# The goal condition is prose for a model to judge, never a checklist.
-FOUNDRY_OBJECTIVE_STYLE="bullet"
+# Objectives render as a plain list here, which is already the library default.
+# A goal agent reads its objective as prose, not as a checklist to tick off, so
+# nothing should set "checklist" for these - but an operator override still wins.
+FOUNDRY_OBJECTIVE_STYLE="${FOUNDRY_OBJECTIVE_STYLE:-bullet}"
 
 # Where the agent's CLI looks for its own state, per lib/agent-registry.sh.
 _goal_dotfolder() {
@@ -93,6 +95,60 @@ prepare_goal_workspace() {
 
     log_info "Prepared ${AGENT_TYPE:-goal} workspace: $prompt_file"
     log_info "Goal: $condition"
+}
+
+# The launcher shipped in the image. One copy of each CLI's invocation, so the
+# adapter never restates a command line.
+FOUNDRY_GOAL_LAUNCHER="${FOUNDRY_GOAL_LAUNCHER:-/opt/foundry/start-goal.sh}"
+
+# Start the agent.
+#
+# The watcher's contract is prepare_agent_workspace followed by
+# start_agent_loop; an adapter that defines only the first prepares a workspace
+# nothing ever runs in.
+#
+# The goal condition and the paths are written into a runner script rather than
+# inherited, so quoting survives the trip through tmux - a condition is a
+# sentence, and sentences contain quotes.
+start_agent_loop() {
+    local runner log_file
+
+    if [[ -z "${FOUNDRY_GOAL_CONDITION:-}" ]]; then
+        log_error "No goal condition; prepare_agent_workspace must run first"
+        return 1
+    fi
+
+    if [[ ! -x "$FOUNDRY_GOAL_LAUNCHER" ]]; then
+        log_error "Goal launcher missing: $FOUNDRY_GOAL_LAUNCHER"
+        return 1
+    fi
+
+    log_file="${AGENT_LOG_FILE:-${AGENT_WORKSPACE}/logs/${AGENT_TYPE}.log}"
+    runner="$(mktemp "/tmp/foundry-goal-XXXXXX.sh")"
+
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'export AGENT_TYPE=%q\n'              "$AGENT_TYPE"
+        printf 'export AGENT_WORKSPACE=%q\n'         "$AGENT_WORKSPACE"
+        printf 'export AGENT_LOG_FILE=%q\n'          "$log_file"
+        printf 'export AGENT_TASK_PROMPT_FILE=%q\n'  "$FOUNDRY_TASK_PROMPT_REF"
+        printf 'export AGENT_GOAL_CONDITION=%q\n'    "$FOUNDRY_GOAL_CONDITION"
+        printf 'export AGENT_REPO_PATH=%q\n'         "${FOUNDRY_REPO_PATH:-}"
+        printf 'export AGENT_GOAL_TIMEOUT=%q\n'      "${FOUNDRY_GOAL_TIMEOUT:-4h}"
+        printf 'exec %q\n'                           "$FOUNDRY_GOAL_LAUNCHER"
+    } > "$runner"
+    chmod +x "$runner"
+
+    log_info "Starting $(agent_display_name "$AGENT_TYPE" 2>/dev/null || echo "$AGENT_TYPE")"
+    start_tmux_runner "$runner"
+
+    if tmux has-session -t ralph-loop 2>/dev/null; then
+        log_info "Started $AGENT_TYPE in tmux session 'ralph-loop'"
+        return 0
+    fi
+
+    log_error "Failed to start $AGENT_TYPE tmux session"
+    return 1
 }
 
 # The watcher calls prepare_agent_workspace; keep the shared name.

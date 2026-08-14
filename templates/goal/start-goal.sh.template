@@ -9,6 +9,12 @@
 # Rendered by lib/agent-sandbox.sh, which exports AGENT_WORKSPACE, AGENT_TYPE,
 # AGENT_LOG_FILE, AGENT_TASK_PROMPT_FILE and AGENT_GOAL_CONDITION.
 
+# Without pipefail the status of `cmd | tee` is tee's, so a CLI that crashes
+# immediately reports success to the watcher. And `exec` in a pipeline only
+# replaces the subshell, so it buys nothing here - run the command and read
+# PIPESTATUS instead.
+set -o pipefail
+
 cd "$AGENT_WORKSPACE" || {
     echo "ERROR: cannot change to workspace $AGENT_WORKSPACE" >&2
     exit 1
@@ -49,8 +55,15 @@ case "$AGENT_TYPE" in
         # stream-json is not optional: with the default text output /goal
         # prints nothing until the condition is met, so a long run is
         # indistinguishable from a hung one in `foundry logs -f`.
-        exec claude -p "/goal ${AGENT_GOAL_CONDITION}" \
-            --permission-mode acceptEdits \
+        #
+        # Permissions are skipped, not merely relaxed. acceptEdits auto-approves
+        # file writes but still prompts for Bash, and the fix and implement
+        # conditions require committing, pushing and opening a pull request - a
+        # loop that cannot run git can never satisfy them, so it would burn
+        # every one of its turns failing. The sandbox is the boundary here, the
+        # permission prompt is not.
+        claude -p "/goal ${AGENT_GOAL_CONDITION}" \
+            --dangerously-skip-permissions \
             --output-format stream-json --verbose \
             2>&1 | tee -a "$AGENT_LOG_FILE"
         ;;
@@ -59,9 +72,9 @@ case "$AGENT_TYPE" in
         # The sandbox already isolates us, so codex's own sandbox only gets in
         # the way; --skip-git-repo-check keeps it from refusing an untrusted
         # directory. `goals` is a stable, default-on feature flag.
-        exec codex exec \
+        codex exec \
             --skip-git-repo-check \
-            --sandbox workspace-write \
+            --dangerously-bypass-approvals-and-sandbox \
             "/goal ${AGENT_GOAL_CONDITION}" \
             2>&1 | tee -a "$AGENT_LOG_FILE"
         ;;
@@ -70,7 +83,7 @@ case "$AGENT_TYPE" in
         # Flag order matters: -p takes the prompt as its value, so any flag
         # placed after it is swallowed as the prompt text. --print-timeout
         # defaults to 5 minutes, which would kill a long goal run mid-work.
-        exec agy \
+        agy \
             --dangerously-skip-permissions \
             --print-timeout "${AGENT_GOAL_TIMEOUT:-4h}" \
             -p "/goal ${AGENT_GOAL_CONDITION}" \
@@ -82,3 +95,6 @@ case "$AGENT_TYPE" in
         exit 1
         ;;
 esac
+
+# The CLI's status, not tee's.
+exit "${PIPESTATUS[0]}"

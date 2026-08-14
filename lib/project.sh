@@ -400,23 +400,43 @@ _project_link_agent_md() {
 _project_seed_trust() {
     local root="$1"
     local cfg="${root}/.claude.json"
+    local dir tmp
 
-    if [[ -f "$cfg" ]]; then
-        log_debug "Claude config already exists, leaving trust setting alone"
-        return 0
+    # Trust is keyed per directory, and the agent works in the repository, not
+    # in the volume root - the launcher changes into it before starting. So
+    # every repository needs its own entry, or the run stops at the dialog it
+    # cannot answer. Repos appear after the first clone, so this re-runs on
+    # every `up` and adds whatever is there now.
+    local -a paths=("$root")
+    for dir in "$root"/repos/*/; do
+        [[ -d "$dir" ]] || continue
+        paths+=("${dir%/}")
+    done
+
+    if [[ ! -f "$cfg" ]]; then
+        printf '{"projects":{}}\n' > "$cfg"
+        chmod 600 "$cfg"
     fi
 
-    jq -n --arg root "$root" '{
-        projects: {
-            ($root): {
+    for dir in "${paths[@]}"; do
+        # Never overwrite an existing entry: the user may have revoked trust
+        # deliberately, and this runs on every up.
+        if jq -e --arg d "$dir" '.projects[$d] != null' "$cfg" >/dev/null 2>&1; then
+            continue
+        fi
+
+        tmp="$(mktemp)"
+        if ! jq --arg d "$dir" '.projects[$d] = {
                 hasTrustDialogAccepted: true,
                 hasCompletedProjectOnboarding: true
-            }
-        }
-    }' > "$cfg" || {
-        log_error "Failed to seed workspace trust: $cfg"
-        return 1
-    }
+            }' "$cfg" > "$tmp"; then
+            log_error "Failed to seed workspace trust for: $dir"
+            rm -f "$tmp"
+            return 1
+        fi
+        mv "$tmp" "$cfg"
+    done
+
     chmod 600 "$cfg"
 }
 

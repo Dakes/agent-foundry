@@ -223,6 +223,15 @@ for agent in $AGENT_TYPES; do
                 fail "agent '$agent': $forge watcher will not resolve $base"
         fi
 
+        # Existence is not enough: the watcher calls prepare_agent_workspace
+        # and then start_agent_loop. An adapter defining only the first
+        # prepares a workspace that nothing ever runs in, and the failure is a
+        # "command not found" at the moment a forge event arrives.
+        for fn in prepare_agent_workspace start_agent_loop; do
+            grep -q "^${fn}()" "$adapter" || \
+                fail "adapter $(basename "$adapter") does not define ${fn}()"
+        done
+
         # The watcher also gates on an agent-type allowlist before it ever
         # resolves an adapter. An agent missing from it is rejected at startup
         # with "Unsupported watcher agent type", which no adapter can fix.

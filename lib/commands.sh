@@ -257,6 +257,10 @@ cmd_up() {
     project_fix_ssh_perms "$FOUNDRY_ROOT"
     project_clone_repos "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
 
+    # Repositories that appeared just now need their own trust entry: a goal
+    # agent works inside the checkout, and trust is keyed per directory.
+    _project_seed_trust "$FOUNDRY_ROOT" || return 1
+
     # 4. Agent.
     if [[ "$no_agent" == "true" ]]; then
         log_info "Skipping agent start (--no-agent)"

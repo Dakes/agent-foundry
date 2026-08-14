@@ -589,7 +589,7 @@ foundry_goal_condition() {
 
     url=$(_foundry_jq "$context_file" '.html_url' "the originating issue or pull request")
     branch=$(_foundry_jq "$context_file" '.branch')
-    repo=$(_foundry_jq "$context_file" '.repo')
+    repo=$(_foundry_jq "$context_file" '.repo' "the repository")
     prompt_ref="${FOUNDRY_TASK_PROMPT_REF:-task_prompt.md}"
 
     printf 'Follow the instructions in %s. ' "$prompt_ref"
