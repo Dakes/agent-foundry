@@ -223,6 +223,18 @@ for agent in $AGENT_TYPES; do
                 fail "agent '$agent': $forge watcher will not resolve $base"
         fi
 
+        # The watcher also gates on an agent-type allowlist before it ever
+        # resolves an adapter. An agent missing from it is rejected at startup
+        # with "Unsupported watcher agent type", which no adapter can fix.
+        for wf in "templates/${forge}-watcher/${forge}_watcher.sh" \
+                  "templates/${forge}/${forge}_watcher.sh"; do
+            [[ -f "$wf" ]] || continue
+            if grep -q 'Unsupported watcher agent type' "$wf" && \
+               ! grep -qE "^[[:space:]]*[a-z|-]*\\b${agent}\\b[a-z|-]*\\)" "$wf"; then
+                fail "agent '$agent' is not in the $forge watcher's allowlist"
+            fi
+        done
+
         # And it has to be in the image, or the watcher finds nothing.
         if ! grep -q "$base" docker/foundry-agent.Dockerfile 2>/dev/null; then
             case "$base" in

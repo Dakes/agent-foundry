@@ -207,7 +207,7 @@ EOF
     fi
 
     case "$AGENT_TYPE" in
-        ralph|ralph-orchestrator|kimi-ralph)
+        ralph|ralph-orchestrator|kimi-ralph|claude-goal|codex-goal|agy-goal)
             ;;
         *)
             log_error "Unsupported watcher agent type: $AGENT_TYPE"
