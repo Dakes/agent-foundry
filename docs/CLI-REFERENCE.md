@@ -74,7 +74,16 @@ foundry policy ls [project]
 ```
 
 `baseline` initializes the global policy as `allow-all` (full internet egress)
-and then denies every private, loopback and link-local range. Sandboxes already
+and then denies the LAN ranges worth denying: `192.168.0.0/16`, where home and
+small-office networks live, and `169.254.0.0/16`, which carries the cloud
+metadata endpoint. Set `FOUNDRY_PRIVATE_RANGES` in `config.conf` for a LAN on
+a different range.
+
+The rest of RFC1918 is deliberately left reachable. Container networking lives
+there — `172.17.0.0/16` on a default Docker install — and denying the range a
+sandbox's own DNS resolver sits in disables name resolution for every sandbox
+on the host. No allow rule can undo that: sbx resolves a conflict in favour of
+the deny. Sandboxes already
 block private space by default; Foundry adds explicit denies so the posture
 survives a preset change and cannot be widened by a kit. The result: the open
 internet is reachable — including a self-hosted forge on a public URL — while

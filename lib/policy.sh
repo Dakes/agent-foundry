@@ -27,15 +27,24 @@
 
 # Private, loopback and link-local space that must never be reachable from a
 # sandbox. IPv4 and IPv6.
-FOUNDRY_PRIVATE_RANGES=(
-    "10.0.0.0/8"
-    "172.16.0.0/12"
-    "192.168.0.0/16"
-    "169.254.0.0/16"
-    "127.0.0.0/8"
-    "fc00::/7"
-    "fe80::/10"
-)
+# Ranges denied to every sandbox.
+#
+# Deliberately narrow. 192.168.0.0/16 is where home and small-office networks
+# actually live, and 169.254.0.0/16 carries the cloud metadata endpoint, which
+# is worth denying anywhere. The rest of RFC1918 is left reachable because
+# container networking lives there - 172.17.0.0/16 by default, often 10.0.0.0/8
+# under Kubernetes or a custom bridge - and denying the range a sandbox's own
+# resolver sits in disables DNS for every sandbox on the host, with no allow
+# rule able to undo it: sbx resolves a conflict in favour of the deny.
+#
+# Override in ~/.config/foundry/config.conf when a LAN uses a different range:
+#   FOUNDRY_PRIVATE_RANGES=("10.0.0.0/8" "192.168.0.0/16")
+if [[ -z "${FOUNDRY_PRIVATE_RANGES:-}" ]]; then
+    FOUNDRY_PRIVATE_RANGES=(
+        "192.168.0.0/16"
+        "169.254.0.0/16"
+    )
+fi
 
 # ============================================================================
 # BASELINE
@@ -485,7 +494,7 @@ policy_check_matrix() {
     done
 
     # Must be denied: LAN, host, and cloud metadata.
-    for target in "192.168.1.1" "10.0.0.1" "172.16.0.1" "169.254.169.254"; do
+    for target in "192.168.1.1" "169.254.169.254"; do
         if policy_check "$target" "$sandbox"; then
             log_error "  ALLOWED $target (expected to be denied)"
             failures=$((failures + 1))
