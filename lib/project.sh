@@ -476,6 +476,85 @@ _project_seed_trust() {
     chmod 600 "$cfg"
 }
 
+# Log the agent's forgejo-cli into the project's instance.
+#
+# fj keeps its credentials in a single JSON file under the data directory,
+# which is the volume root inside the sandbox, so writing it from the host is
+# enough - no sandbox needs to be running. The file is the same one
+# `fj auth add-key` produces.
+#
+# The account name is not in foundry.json and fj records it alongside the
+# token, so it is read from the instance: /api/v1/user returns the login the
+# token belongs to, which also proves the token works before an agent depends
+# on it. .watcher.user overrides the lookup for instances that refuse it.
+#
+# Note this only fixes credentials. fj resolves *which* instance a command
+# talks to from the git remote of the working directory, so it works inside a
+# clone and still needs -H anywhere else - the home directory included.
+_project_seed_fj_auth() {
+    local name="$1" root="$2"
+
+    local instance token_file
+    instance="$(project_get "$name" '.watcher.instance_url' "")"
+    token_file="$(project_get "$name" '.watcher.token_file' "")"
+    [[ -n "$instance" && -n "$token_file" ]] || return 0
+
+    local token_path="$token_file"
+    [[ "$token_path" != /* ]] && token_path="${root}/${token_file}"
+    [[ -r "$token_path" ]] || return 0
+
+    local host="${instance#*://}"
+    host="${host%%/*}"
+
+    local cfg="${root}/.local/share/forgejo-cli/keys.json"
+    local token
+    token="$(<"$token_path")"
+    token="${token//[$'\r\n\t ']/}"
+    [[ -n "$token" ]] || return 0
+
+    # Already logged in with this token: nothing to do, and no request to make.
+    if [[ -f "$cfg" ]] \
+        && jq -e --arg h "$host" --arg t "$token" \
+            '.hosts[$h].token == $t' "$cfg" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local user
+    user="$(project_get "$name" '.watcher.user' "")"
+    if [[ -z "$user" ]]; then
+        user="$(curl -fsS --max-time 10 \
+            -H "Authorization: token ${token}" \
+            "${instance%/}/api/v1/user" 2>/dev/null | jq -r '.login // empty')"
+    fi
+
+    if [[ -z "$user" ]]; then
+        log_warn "Could not confirm the Forgejo token against ${instance}"
+        log_warn "  fj is left unconfigured; check ${token_file}, or set"
+        log_warn "  .watcher.user to skip the lookup."
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$cfg")"
+    [[ -f "$cfg" ]] || printf '{"hosts":{},"aliases":{},"default_ssh":[]}\n' > "$cfg"
+    chmod 600 "$cfg"
+
+    local tmp
+    tmp="$(mktemp)"
+    chmod 600 "$tmp"
+    if ! jq --arg h "$host" --arg u "$user" --arg t "$token" \
+        '.hosts[$h] = {type: "Application", name: $u, token: $t}' \
+        "$cfg" > "$tmp"; then
+        log_error "Failed to write fj credentials for ${host}"
+        rm -f "$tmp"
+        return 1
+    fi
+    mv "$tmp" "$cfg"
+    chmod 600 "$cfg"
+
+    log_info "fj authenticated against ${host} as ${user}"
+    return 0
+}
+
 # Create (or complete) a project's volume root.
 # Idempotent: safe to re-run on an existing project.
 # Usage: project_scaffold "pocetude"

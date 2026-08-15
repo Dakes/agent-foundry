@@ -215,6 +215,8 @@ cmd_init() {
         project_clone_repos "$name" "$box" "$root" || return 1
     fi
 
+    _project_seed_fj_auth "$name" "$root" || return 1
+
     log_info "Project '${name}' initialized"
     echo ""
     echo "  Volume root : $root"
@@ -304,6 +306,7 @@ cmd_up() {
     # Repositories that appeared just now need their own trust entry: a goal
     # agent works inside the checkout, and trust is keyed per directory.
     _project_seed_trust "$FOUNDRY_ROOT" || return 1
+    _project_seed_fj_auth "$FOUNDRY_PROJECT" "$FOUNDRY_ROOT" || return 1
 
     # 4. Agent.
     if [[ "$no_agent" == "true" ]]; then
