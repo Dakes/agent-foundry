@@ -3,7 +3,7 @@
 Scaffolding template. Copy it into your project and edit:
 
 ```bash
-cp templates/AGENT.md.template projects/my-project/.ralph/AGENT.md
+cp templates/AGENT.md.template <volume-root>/AGENT.md
 ```
 
 `AGENT.md` answers **how** to work in this repository: build commands, test

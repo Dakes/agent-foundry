@@ -30,7 +30,7 @@ ok() {
     RULE_FAILED=0
 }
 
-ADAPTERS=(templates/ralph/*.sh templates/kimi/*_watcher_agent_*.sh templates/goal/watcher_agent_goal.sh)
+ADAPTERS=(templates/goal/watcher_agent_goal.sh)
 
 # ---------------------------------------------------------------------------
 # 1. Identity strings must come from the prompt library, not be hardcoded.
@@ -174,7 +174,7 @@ ok "untrusted tracker text is fenced"
 while IFS= read -r f; do
     [[ -f "$f" ]] || continue
     # Comments may name the old path when explaining why it went away.
-    hits=$(grep -nE '/root/(repos|\.ralph|\.kimi)' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+    hits=$(grep -nE '/root/(repos|\.claude|\.codex|\.gemini)' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
     if [[ -n "$hits" ]]; then
         fail "$f hardcodes a pre-sandbox path:"
         printf '%s\n' "$hits" | sed 's/^/      /'
@@ -203,7 +203,10 @@ for agent in $AGENT_TYPES; do
         fail "agent '$agent' has no start template on disk (${tmpl:-<none>})"
     fi
 
-    for forge in gh forgejo; do
+    # Forgejo is the only forge with a watcher; the loop that used to cover
+    # GitHub as well went with it.
+    forge=forgejo
+    {
         adapter=$(agent_watcher_adapter_for "$agent" "$forge")
         if [[ -z "$adapter" || ! -f "$adapter" ]]; then
             fail "agent '$agent' has no $forge watcher adapter (${adapter:-<none>})"
@@ -251,7 +254,7 @@ for agent in $AGENT_TYPES; do
                 *) fail "agent '$agent': $base is not copied into the image" ;;
             esac
         fi
-    done
+    }
 done
 ok "every autonomous agent has a reachable template and adapter"
 

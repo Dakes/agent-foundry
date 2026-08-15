@@ -76,9 +76,9 @@ EOF
 start_tmux_runner() {
     local command="$1"
 
-    tmux kill-session -t ralph-loop 2>/dev/null || true
+    tmux kill-session -t foundry-work 2>/dev/null || true
     write_tmux_runner_script "$command"
-    tmux new-session -d -s ralph-loop "/tmp/start-agent-watcher.sh 2>&1 | tee -a $AGENT_WORKSPACE/logs/agent-watcher.log"
+    tmux new-session -d -s foundry-work "/tmp/start-agent-watcher.sh 2>&1 | tee -a $AGENT_WORKSPACE/logs/agent-watcher.log"
 }
 
 get_run_exit_code() {

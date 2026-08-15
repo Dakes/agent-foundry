@@ -142,8 +142,8 @@ start_agent_loop() {
     log_info "Starting $(agent_display_name "$AGENT_TYPE" 2>/dev/null || echo "$AGENT_TYPE")"
     start_tmux_runner "$runner"
 
-    if tmux has-session -t ralph-loop 2>/dev/null; then
-        log_info "Started $AGENT_TYPE in tmux session 'ralph-loop'"
+    if tmux has-session -t foundry-work 2>/dev/null; then
+        log_info "Started $AGENT_TYPE in tmux session 'foundry-work'"
         return 0
     fi
 

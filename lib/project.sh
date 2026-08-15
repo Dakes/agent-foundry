@@ -170,7 +170,7 @@ project_list() {
 # ============================================================================
 
 # Read a value from foundry.json with a fallback.
-# Usage: agent="$(project_get "pocetude" '.agent' "ralph")"
+# Usage: agent="$(project_get "pocetude" '.agent' "claude")"
 project_get() {
     local name="$1"
     local query="$2"
@@ -574,7 +574,6 @@ project_scaffold() {
         "$root/repos" \
         "$root/logs" \
         "$root/secrets" \
-        "$root/.ralph" \
         "$root/.claude" \
         "$root/.codex" \
         "$root/.gemini" \
@@ -604,7 +603,7 @@ project_scaffold() {
 Context for the agent working in this project.
 
 - Repositories live in \`repos/\`.
-- Agent memory and plans live in \`.ralph/\`.
+- This file is the agent's standing instructions: every CLI loads it natively.
 - This whole directory is the agent's home inside the sandbox, and it is a
   real directory on the host: everything the agent writes here persists.
 EOF

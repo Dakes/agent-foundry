@@ -234,7 +234,7 @@ stop_receiver() {
 # ============================================================================
 
 is_agent_running() {
-    tmux has-session -t ralph-loop 2>/dev/null
+    tmux has-session -t foundry-work 2>/dev/null
 }
 
 wait_for_agent() {
@@ -246,7 +246,7 @@ wait_for_agent() {
         now=$(date +%s)
         if [[ "$now" -ge "$deadline" ]]; then
             log_warn "$AGENT_DISPLAY_NAME did not finish within ${AGENT_TIMEOUT}m; killing tmux session"
-            tmux kill-session -t ralph-loop 2>/dev/null || true
+            tmux kill-session -t foundry-work 2>/dev/null || true
             break
         fi
         sleep 30

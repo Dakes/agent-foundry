@@ -47,27 +47,16 @@ _resolve_existing() {
 
 # Resolve the image for a project.
 #
-# Interactive agents (claude, gemini, codex) all run from the single ':base'
-# image, which carries every interactive CLI. Only the autonomous Ralph
-# variants need a dedicated tag, because each bakes in one variant's runner.
+# Every agent runs from the single ':base' image, which carries all of the
+# CLIs. A project can still pin .image to something else.
 _project_image() {
     local name="$1"
-    local agent
-
-    agent="$(project_get "$name" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
 
     local image
     image="$(project_get "$name" '.image' "")"
 
     if [[ -z "$image" ]]; then
-        local tag="base"
-        # Autonomous agents get their own tag because each bakes in one
-        # runner - except the goal-mode agents, whose CLIs are all in :base
-        # already. Their loop is a feature of the CLI, not an install.
-        if agent_is_autonomous "$agent" && [[ "$agent" != *-goal ]]; then
-            tag="$agent"
-        fi
-        image="${FOUNDRY_IMAGE_REPO:-foundry-agent}:${tag}"
+        image="${FOUNDRY_IMAGE_REPO:-foundry-agent}:base"
     fi
 
     printf '%s\n' "$image"
@@ -852,22 +841,14 @@ cmd_image() {
 
     case "$action" in
         build)
-            # No argument builds the base image: the interactive CLIs, which
-            # is what most projects run. A variant name adds one autonomous
-            # Ralph runner and tags the image after it.
-            local variant="${1:-none}"
-            local tag="$variant"
-            [[ "$variant" == "none" ]] && tag="base"
+            # One image serves every agent: each CLI's goal loop is a feature
+            # of the CLI, not a separate runner to bake in. The tag is fixed
+            # so nothing has to guess which image a project wants.
+            local tag="base"
 
-            if [[ "$variant" == *-goal ]]; then
-                log_error "'$variant' needs no image of its own: its CLI is in the base image"
-                echo "Build the base image instead: foundry image build" >&2
-                return 1
-            fi
-
-            if ! agent_is_autonomous "$variant" && [[ "$variant" != "none" ]]; then
-                log_error "Unknown image variant: $variant"
-                echo "Variants: none (default), ralph, ralph-orchestrator, kimi-ralph" >&2
+            if [[ $# -gt 0 ]]; then
+                log_error "'foundry image build' takes no arguments"
+                echo "There is one image now: ${repo}:base, which carries every agent CLI." >&2
                 return 1
             fi
 
@@ -890,7 +871,6 @@ cmd_image() {
             log_info "Building ${repo}:${tag} (agent uid ${uid}:${gid})"
             docker build \
                 -f "$dockerfile" \
-                --build-arg "RALPH_VARIANT=${variant}" \
                 --build-arg "AGENT_UID=${uid}" \
                 --build-arg "AGENT_GID=${gid}" \
                 -t "${repo}:${tag}" \
@@ -911,7 +891,7 @@ cmd_image() {
             ;;
         *)
             log_error "Unknown image action: ${action:-<none>}"
-            echo "Actions: build [ralph|ralph-orchestrator|kimi-ralph], push [tag]" >&2
+            echo "Actions: build, push [tag]" >&2
             return 1
             ;;
     esac

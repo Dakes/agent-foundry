@@ -26,7 +26,7 @@ FOUNDRY_PROMPT_LIB_VERSION="1"
 FOUNDRY_TASK_MODES="review implement fix answer default"
 
 # Objective bullets are rendered as a plain list by default. Adapters whose
-# agent consumes a checklist (ralph-claude-code reads fix_plan.md as one) set
+# agent consumes a checklist rather than prose, set
 # FOUNDRY_OBJECTIVE_STYLE=checklist to get "- [ ]" markers instead.
 FOUNDRY_OBJECTIVE_STYLE="${FOUNDRY_OBJECTIVE_STYLE:-bullet}"
 
@@ -168,7 +168,7 @@ _foundry_kind_label() {
 #   3. AGENT_DISPLAY_NAME, then a generic fallback.
 #
 # AGENT_DISPLAY_NAME is deliberately last: it is the verbose log form
-# ("Kimi Code CLI (Ralph mode)") and reads badly as a comment header.
+# ("Claude Code (goal loop)") and reads badly as a comment header.
 foundry_identity() {
     if [[ -n "${AGENT_IDENTITY:-}" ]]; then
         printf '%s' "$AGENT_IDENTITY"
@@ -203,7 +203,7 @@ foundry_error_header() {
 #
 #     @touya review   please check the last commit
 #     @touya fix      the bug you introduced
-#     !ralph implement a retry helper
+#     @agent implement a retry helper
 #
 # An earlier version inferred the mode from the phrasing of the request:
 # synonym tables, politeness stripping, clause splitting. It failed on

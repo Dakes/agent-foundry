@@ -5,24 +5,18 @@
 # auth, agent memory, prompts, repos - lives in the mounted volume root, so
 # nothing here needs to be baked per project.
 #
-# The interactive CLIs (claude, gemini, codex) are the primary target and are
-# always present. The autonomous Ralph variants are optional extras: one per
-# image, matching the pre-migration rule that a VM hosts a single variant.
+# One image serves every project and every agent: the CLIs (claude, gemini,
+# codex, agy) are all present, and goal mode is a feature of the CLI rather
+# than a separate install.
 #
 # Build:
-#   foundry image build                    -> foundry-agent:base (claude/gemini/codex)
-#   foundry image build ralph              -> + frankbria/ralph-claude-code
-#   foundry image build ralph-orchestrator -> + @ralph-orchestrator/ralph-cli
-#   foundry image build kimi-ralph         -> + kimi-code
+#   foundry image build     -> foundry-agent:base
 #
 # Use:
 #   set .image in a project's foundry.json, or FOUNDRY_IMAGE_REPO globally.
 
 ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE}
-
-# "none" builds the base image: the interactive CLIs only.
-ARG RALPH_VARIANT=none
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -100,7 +94,7 @@ RUN npm install -g \
 # The installer drops the binary in $HOME/.local/bin, and HOME is the project
 # volume root at runtime - a different directory per project, and not one that
 # exists at build time. Installing under /opt and linking into /usr/local/bin
-# puts it on PATH for every project, the same treatment kimi-code needs.
+# puts it on PATH for every project.
 #
 # agy stores its state under ~/.gemini/antigravity-cli, which lands in the
 # volume root and therefore survives restarts: log in once per project.
@@ -111,39 +105,6 @@ RUN set -eux; \
     ln -sf "$HOME/.local/bin/agy" /usr/local/bin/agy; \
     chmod -R a+rX /opt/agy; \
     /usr/local/bin/agy --version
-
-# Optional autonomous agent variant.
-#
-# These recipes are the ones lib/workspace.sh used to run per-VM, not npm
-# guesses: "ralph" is a git checkout with its own installer (there is no
-# ralph-claude-code package on npm), ralph-orchestrator is a scoped npm
-# package, and kimi-code ships its own install script. Each ends with
-# /usr/local/bin/<binary> so agent_binary() from the registry resolves.
-# HOME is redirected to /opt/agent-tools for the installers that drop files
-# into the home directory: as root that would be /root, which is mode 700 and
-# therefore unreadable by the unprivileged agent user this image runs as.
-RUN set -eux; \
-    export HOME=/opt/agent-tools; \
-    mkdir -p "$HOME"; \
-    case "${RALPH_VARIANT}" in \
-        none) \
-            echo "No autonomous variant requested; interactive CLIs only" ;; \
-        ralph) \
-            git clone --depth 1 https://github.com/frankbria/ralph-claude-code.git /opt/ralph; \
-            cd /opt/ralph; \
-            ./install.sh; \
-            ln -sf "$(command -v ralph)" /usr/local/bin/ralph ;; \
-        ralph-orchestrator) \
-            npm install -g @ralph-orchestrator/ralph-cli; \
-            ln -sf "$(command -v ralph)" /usr/local/bin/ralph ;; \
-        kimi-ralph) \
-            curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash; \
-            ln -sf "${HOME}/.kimi-code/bin/kimi" /usr/local/bin/kimi ;; \
-        *) \
-            echo "Unknown RALPH_VARIANT: ${RALPH_VARIANT}" >&2; exit 1 ;; \
-    esac; \
-    chmod -R a+rX /opt; \
-    printf '%s\n' "${RALPH_VARIANT}" > /etc/foundry-ralph-variant
 
 # Shared session-ledger helpers, sourced by the agent start scripts and watcher
 # adapters. The golden image used to install these; the image carries them now.
@@ -233,5 +194,4 @@ WORKDIR /
 # the engine installed above is inert and /var/run/docker.sock never appears.
 LABEL org.opencontainers.image.title="Agent Foundry sandbox" \
       org.opencontainers.image.description="Sandbox image for Agent Foundry projects" \
-      io.foundry.ralph-variant="${RALPH_VARIANT}" \
       com.docker.sandboxes.start-docker="true"

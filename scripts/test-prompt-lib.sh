@@ -85,8 +85,8 @@ check_mode issue "implement a retry helper"                       help
 check_mode pr    "fix the failing test"                           help
 
 echo "== a different configured keyword works the same way =="
-TRIGGER_KEYWORD="!ralph" check_mode pr "!ralph review this"       review
-TRIGGER_KEYWORD="!ralph" check_mode pr "@touya review this"       help
+TRIGGER_KEYWORD="!bot" check_mode pr "!bot review this"           review
+TRIGGER_KEYWORD="!bot" check_mode pr "@touya review this"         help
 
 echo "== explicit directives still work without a mention =="
 check_mode pr    "/review"                              review
@@ -109,11 +109,11 @@ check_mode pipeline_failure ""                          fix
 unset TRIGGER_KEYWORD
 
 echo "== review mode must forbid the observed failure mode =="
-review_prompt=$(AGENT_IDENTITY=Kimi foundry_build_task_prompt "$(_ctx pr "@touya review this MR")" review)
+review_prompt=$(AGENT_IDENTITY=Codex foundry_build_task_prompt "$(_ctx pr "@touya review this MR")" review)
 check_contains "review" "$review_prompt" "Mode: **review**"
 check_contains "review" "$review_prompt" "Do not open a pull request."
 check_contains "review" "$review_prompt" "Do not modify, commit, or push any code."
-check_contains "review" "$review_prompt" "## 🤖 Kimi - Task Completed"
+check_contains "review" "$review_prompt" "## 🤖 Codex - Task Completed"
 check_not_contains "review" "$review_prompt" "Create a new branch"
 
 echo "== contract resolves the repo-AGENTS.md conflict =="
@@ -150,13 +150,13 @@ check_contains "identity/none" "$fallback" "Agent - Task Completed"
 # AGENT_IDENTITY existed rely on this.
 # shellcheck source=../lib/agent-registry.sh
 source "$ROOT_DIR/lib/agent-registry.sh"
-derived=$(AGENT_IDENTITY="" AGENT_TYPE="kimi-ralph" \
-    AGENT_DISPLAY_NAME="Kimi Code CLI (Ralph mode)" foundry_completion_header)
-check_contains "identity/derived" "$derived" "🤖 Kimi - Task Completed"
-check_not_contains "identity/derived" "$derived" "Ralph mode"
+derived=$(AGENT_IDENTITY="" AGENT_TYPE="claude-goal" \
+    AGENT_DISPLAY_NAME="Claude Code (goal loop)" foundry_completion_header)
+check_contains "identity/derived" "$derived" "🤖 Claude - Task Completed"
+check_not_contains "identity/derived" "$derived" "goal loop"
 
-explicit=$(AGENT_IDENTITY="Ralph" AGENT_TYPE="kimi-ralph" foundry_completion_header)
-check_contains "identity/explicit" "$explicit" "🤖 Ralph - Task Completed"
+explicit=$(AGENT_IDENTITY="Touya" AGENT_TYPE="claude-goal" foundry_completion_header)
+check_contains "identity/explicit" "$explicit" "🤖 Touya - Task Completed"
 
 echo "== checklist style is honoured, negatives stay unchecked =="
 checklist=$(AGENT_WORKSPACE=/vol/proj FOUNDRY_OBJECTIVE_STYLE=checklist \
@@ -217,9 +217,9 @@ for _m in $FOUNDRY_TASK_MODES; do
     check_contains "help/$_m" "$help" "\`$_m\`"
 done
 # The keyword is taken from the watcher config, not hardcoded.
-help_ralph=$(TRIGGER_KEYWORD="!ralph" foundry_help_comment)
-check_contains "help/keyword" "$help_ralph" "!ralph review"
-check_not_contains "help/keyword" "$help_ralph" "@touya"
+help_kw=$(TRIGGER_KEYWORD="!bot" foundry_help_comment)
+check_contains "help/keyword" "$help_kw" "!bot review"
+check_not_contains "help/keyword" "$help_kw" "@touya"
 
 echo "== the builder refuses to build a prompt with no mode stated =="
 # A forgetful adapter must not silently get a real objective.
