@@ -165,6 +165,12 @@ COPY templates/goal/watcher_agent_goal.sh /opt/foundry/watcher_agent_goal.sh
 COPY templates/goal/start-goal.sh.template /opt/foundry/start-goal.sh
 RUN chmod 0755 /opt/foundry/watcher_agent_goal.sh /opt/foundry/start-goal.sh
 
+# The Forgejo watcher: receiver, main loop, shared helpers and hook manager.
+# It reads its configuration from the agent's home, which is the project's
+# volume root, so one image serves every project.
+COPY templates/forgejo/ /opt/foundry/forgejo/
+RUN chmod 0755 /opt/foundry/forgejo/*.sh
+
 # forgejo-cli, used by the Forgejo watcher adapters.
 COPY binaries/fj/ /tmp/fj/
 RUN set -eux; \

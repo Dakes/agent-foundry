@@ -315,13 +315,15 @@ cmd_up() {
         foundry_agent_start "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
     fi
 
-    # 5. Watchers are not wired into the sandbox transport yet (Phase 4).
+    # 5. Watcher. A configured watcher is meant to be listening whenever the
+    #    project is up: a forge that gets a connection refused does not retry
+    #    later, so a watcher that must be started by hand silently drops work.
     local watcher_kind
     watcher_kind="$(project_get "$FOUNDRY_PROJECT" '.watcher.kind' "")"
-    if [[ -n "$watcher_kind" ]]; then
-        log_warn "Watcher '${watcher_kind}' is configured but not started:"
-        log_warn "  watcher support on the sandbox transport is not implemented yet."
-        log_warn "  The receiver port is published, so the forge can reach it once it is."
+    if [[ -n "$watcher_kind" ]] && ! watcher_is_configured "$FOUNDRY_PROJECT"; then
+        log_warn "Watcher kind '${watcher_kind}' is not supported; only 'forgejo' is."
+    elif watcher_is_configured "$FOUNDRY_PROJECT"; then
+        watcher_start "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
     fi
 
     log_info "Project '${FOUNDRY_PROJECT}' is up"
@@ -338,6 +340,7 @@ cmd_down() {
     _resolve_existing "$name" || return 1
     sandbox_require || return 1
 
+    watcher_stop "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || true
     foundry_agent_stop "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || true
     sandbox_stop "$FOUNDRY_BOX" || return 1
 
@@ -909,6 +912,67 @@ cmd_image() {
         *)
             log_error "Unknown image action: ${action:-<none>}"
             echo "Actions: build [ralph|ralph-orchestrator|kimi-ralph], push [tag]" >&2
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================================
+# watcher
+# ============================================================================
+
+cmd_watcher() {
+    local action="${1:-status}"
+    shift || true
+    local name="${1:-}"
+
+    _resolve_existing "$name" || return 1
+    sandbox_require || return 1
+
+    case "$action" in
+        start)
+            sandbox_is_running "$FOUNDRY_BOX" || {
+                log_error "Sandbox is not running: foundry up ${FOUNDRY_PROJECT}"
+                return 1
+            }
+            watcher_start "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT"
+            ;;
+        stop)
+            watcher_stop "$FOUNDRY_BOX" "$FOUNDRY_ROOT"
+            log_info "Watcher stopped"
+            ;;
+        restart)
+            watcher_stop "$FOUNDRY_BOX" "$FOUNDRY_ROOT"
+            watcher_start "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT"
+            ;;
+        status)
+            if ! watcher_is_configured "$FOUNDRY_PROJECT"; then
+                echo "No Forgejo watcher configured for '${FOUNDRY_PROJECT}'"
+                return 0
+            fi
+            if ! sandbox_is_running "$FOUNDRY_BOX"; then
+                echo "Watcher: stopped (sandbox is not running)"
+                return 0
+            fi
+            sandbox_exec "$FOUNDRY_BOX" "$FOUNDRY_ROOT" \
+                /opt/foundry/forgejo/forgejo_watcher.sh status
+            ;;
+        logs)
+            local log="${FOUNDRY_ROOT}/.config/forgejo-watcher/watcher.log"
+            [[ -f "$log" ]] || { log_error "No watcher log yet: $log"; return 1; }
+            tail -n "${FOUNDRY_LOG_LINES:-50}" -f "$log"
+            ;;
+        register|unregister|list)
+            sandbox_is_running "$FOUNDRY_BOX" || {
+                log_error "Sandbox is not running: foundry up ${FOUNDRY_PROJECT}"
+                return 1
+            }
+            watcher_hooks "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" "$action"
+            ;;
+        *)
+            log_error "Unknown watcher action: $action"
+            echo "Actions: start, stop, restart, status, logs," >&2
+            echo "         register, unregister, list (Forgejo webhooks)" >&2
             return 1
             ;;
     esac

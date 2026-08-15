@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Paths and defaults (overridden by config file or environment)
-CONFIG_DIR="${CONFIG_DIR:-/root/.config/forgejo-watcher}"
+CONFIG_DIR="${CONFIG_DIR:-${HOME:?HOME is not set}/.config/forgejo-watcher}"
 CONFIG_FILE="${CONFIG_FILE:-$CONFIG_DIR/config.conf}"
 PROCESSED_FILE="${PROCESSED_FILE:-$CONFIG_DIR/processed.json}"
 RETRY_FILE="${RETRY_FILE:-$CONFIG_DIR/retries.json}"
@@ -19,17 +19,13 @@ FORGEJO_TOKEN_FILE="${FORGEJO_TOKEN_FILE:-$CONFIG_DIR/token}"
 FORGEJO_TOKEN="${FORGEJO_TOKEN:-}"
 WEBHOOK_SECRET_FILE="${WEBHOOK_SECRET_FILE:-$CONFIG_DIR/webhook-secret}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-}"
-TRIGGER_KEYWORD="${TRIGGER_KEYWORD:-!ralph}"
+TRIGGER_KEYWORD="${TRIGGER_KEYWORD:-@agent}"
 WATCHED_REPOS="${WATCHED_REPOS:-}"
 AGENT_TYPE="${AGENT_TYPE:-}"
-AGENT_WORKSPACE="${AGENT_WORKSPACE:-/root}"
+AGENT_WORKSPACE="${AGENT_WORKSPACE:-$HOME}"
 POST_ERROR_COMMENTS="${POST_ERROR_COMMENTS:-true}"
 DRY_RUN="${DRY_RUN:-false}"
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
-
-# Legacy / shared variables used by adapters
-RALPH_WORKSPACE="$AGENT_WORKSPACE"
-KIMI_WORKSPACE="$AGENT_WORKSPACE"
 
 # ============================================================================
 # AGENT RUNNER HELPERS
@@ -58,17 +54,9 @@ write_tmux_runner_script() {
 set -euo pipefail
 set -o pipefail
 
-# Ensure the Kimi Code CLI binary is on PATH.
-export PATH="/root/.kimi-code/bin:/root/.local/bin:/usr/local/bin:\$PATH"
-
-# Initialize NVM if it exists
-export NVM_DIR="/root/.nvm"
-if [[ -s "\$NVM_DIR/nvm.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "\$NVM_DIR/nvm.sh"
-    # Use default node version
-    nvm use default >/dev/null 2>&1 || true
-fi
+# The agent CLIs are installed globally in the image; \$HOME/.local/bin is
+# where a per-project install would land.
+export PATH="\$HOME/.local/bin:/usr/local/bin:\$PATH"
 
 cd "$AGENT_WORKSPACE"
 rm -f "$RUN_STATUS_FILE"

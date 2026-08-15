@@ -64,6 +64,7 @@ source "${LIB_DIR}/sandbox.sh"
 source "${LIB_DIR}/policy.sh"
 source "${LIB_DIR}/project.sh"
 source "${LIB_DIR}/agent-sandbox.sh"
+source "${LIB_DIR}/watcher.sh"
 source "${LIB_DIR}/commands.sh"
 
 # Enable color output by default
@@ -263,6 +264,9 @@ main() {
             ;;
         image|img)
             cmd_image "$@"
+            ;;
+        watcher)
+            cmd_watcher "$@"
             ;;
         vm|agent|workspace|ws|template|tpl|host|network|net)
             log_error "'foundry ${domain}' was removed with the Firecracker backend."

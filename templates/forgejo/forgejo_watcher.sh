@@ -5,10 +5,17 @@
 # Receives Forgejo webhooks, detects trigger mentions, builds agent-specific
 # task context, and triggers the configured autonomous agent to work.
 #
-# Configuration: /root/.config/forgejo-watcher/config.conf
-# State:         /root/.config/forgejo-watcher/processed.json
-# Queue:         /root/.config/forgejo-watcher/queue/
-# Logs:          /root/.config/forgejo-watcher/watcher.log
+# Everything lives under the agent's home, which is the project's volume root:
+#
+#   Configuration: ~/.config/forgejo-watcher/config.conf
+#   State:         ~/.config/forgejo-watcher/processed.json
+#   Queue:         ~/.config/forgejo-watcher/queue/
+#   Logs:          ~/.config/forgejo-watcher/watcher.log
+#
+# The host writes config.conf from foundry.json; the rest is the watcher's own
+# state. Because the home is the mounted volume root, all of it survives the
+# sandbox being stopped, recreated or rebuilt - which is what makes "already
+# processed" mean anything across restarts.
 #
 
 set -euo pipefail
@@ -17,7 +24,7 @@ set -euo pipefail
 # CONFIGURATION
 # ============================================================================
 
-CONFIG_DIR="/root/.config/forgejo-watcher"
+CONFIG_DIR="${CONFIG_DIR:-${HOME:?HOME is not set}/.config/forgejo-watcher}"
 CONFIG_FILE="$CONFIG_DIR/config.conf"
 PROCESSED_FILE="$CONFIG_DIR/processed.json"
 RETRY_FILE="$CONFIG_DIR/retries.json"
@@ -30,7 +37,9 @@ CONTEXT_FILE="$CONFIG_DIR/current_context.json"
 # mode. Exported so the adapter writes it somewhere the watcher can find,
 # rather than defaulting to a cwd-relative path.
 export FOUNDRY_REPLY_FILE="${FOUNDRY_REPLY_FILE:-$CONFIG_DIR/last_reply.md}"
-HELPER_DIR="/opt/foundry/forgejo"
+HELPER_DIR="${HELPER_DIR:-/opt/foundry/forgejo}"
+# Adapters shared by every forge (the goal adapter) sit one level up.
+FOUNDRY_LIB_DIR="${FOUNDRY_LIB_DIR:-/opt/foundry}"
 
 # Defaults (overridden by config file)
 WATCHER_ENABLED="${WATCHER_ENABLED:-false}"
@@ -40,18 +49,13 @@ FORGEJO_TOKEN_FILE="${FORGEJO_TOKEN_FILE:-$CONFIG_DIR/token}"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-120}"
 POST_ERROR_COMMENTS="${POST_ERROR_COMMENTS:-true}"
 DRY_RUN="${DRY_RUN:-false}"
-TRIGGER_KEYWORD="${TRIGGER_KEYWORD:-!ralph}"
+TRIGGER_KEYWORD="${TRIGGER_KEYWORD:-@agent}"
 RATE_LIMIT_RETRY_SECONDS="${RATE_LIMIT_RETRY_SECONDS:-3600}"
 RECEIVER_PORT="${RECEIVER_PORT:-8080}"
 RECEIVER_INTERFACE="${RECEIVER_INTERFACE:-0.0.0.0}"
-AGENT_WORKSPACE="/root"
+AGENT_WORKSPACE="${AGENT_WORKSPACE:-$HOME}"
 AGENT_TYPE="${AGENT_TYPE:-}"
 AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-Agent}"
-
-# Legacy compatibility
-RALPH_VARIANT_MARKER="${RALPH_VARIANT_MARKER:-/opt/foundry/ralph-agent-type}"
-RALPH_VARIANT_CLAUDE_CODE="${RALPH_VARIANT_CLAUDE_CODE:-ralph-claude-code}"
-RALPH_VARIANT_ORCHESTRATOR="${RALPH_VARIANT_ORCHESTRATOR:-ralph-orchestrator}"
 
 # ============================================================================
 # LOGGING
@@ -84,9 +88,6 @@ source_watcher_helpers() {
     # shellcheck source=/dev/null
     source "$common_helper"
 
-    RALPH_WORKSPACE="$AGENT_WORKSPACE"
-    KIMI_WORKSPACE="$AGENT_WORKSPACE"
-
     local adapter_file
     adapter_file=$(_agent_adapter_file)
     if [[ -n "$adapter_file" && -f "$adapter_file" ]]; then
@@ -108,7 +109,7 @@ _agent_adapter_file() {
     # belongs to the CLI, so there is nothing per-agent left to adapt.
     case "$AGENT_TYPE" in
         *-goal)
-            echo "$HELPER_DIR/watcher_agent_goal.sh"
+            echo "$FOUNDRY_LIB_DIR/watcher_agent_goal.sh"
             return
             ;;
     esac
@@ -135,7 +136,7 @@ init_watcher() {
         log_info "Loaded configuration from $CONFIG_FILE"
     else
         log_error "Configuration file not found: $CONFIG_FILE"
-        log_error "Run 'foundry agent forgejo-watcher init <vm-name>' first"
+        log_error "The host writes it from foundry.json: run 'foundry up <project>'"
         return 1
     fi
 
@@ -168,12 +169,13 @@ init_watcher() {
     fi
 
     if [[ -z "$AGENT_TYPE" ]]; then
-        AGENT_TYPE=$(detect_legacy_agent_type)
-        log_warn "AGENT_TYPE not configured; falling back to legacy detection: $AGENT_TYPE"
+        log_error "AGENT_TYPE is not set in $CONFIG_FILE"
+        log_error "It comes from .agent in foundry.json; re-run 'foundry up'."
+        return 1
     fi
 
     case "$AGENT_TYPE" in
-        ralph|ralph-orchestrator|kimi-ralph|claude-goal|codex-goal|agy-goal)
+        claude-goal|codex-goal|agy-goal)
             ;;
         *)
             log_error "Unsupported watcher agent type: $AGENT_TYPE"
@@ -189,40 +191,6 @@ init_watcher() {
     log_info "  Agent type: $AGENT_TYPE"
 
     return 0
-}
-
-detect_legacy_agent_type() {
-    if [[ -f "$RALPH_VARIANT_MARKER" ]]; then
-        local variant
-        variant=$(tr -d '[:space:]' < "$RALPH_VARIANT_MARKER")
-        case "$variant" in
-            "$RALPH_VARIANT_ORCHESTRATOR")
-                echo "ralph-orchestrator"
-                ;;
-            *)
-                echo "ralph"
-                ;;
-        esac
-        return 0
-    fi
-
-    if [[ -d /opt/ralph ]]; then
-        echo "ralph"
-        return 0
-    fi
-
-    if command -v ralph >/dev/null 2>&1; then
-        local version
-        version=$(ralph --version 2>/dev/null | head -n 1 || true)
-        if echo "$version" | grep -qi "orchestrator"; then
-            echo "ralph-orchestrator"
-            return 0
-        fi
-        echo "ralph"
-        return 0
-    fi
-
-    echo "ralph"
 }
 
 # ============================================================================

@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-CONFIG_DIR="${CONFIG_DIR:-/root/.config/forgejo-watcher}"
+CONFIG_DIR="${CONFIG_DIR:-${HOME:?HOME is not set}/.config/forgejo-watcher}"
 CONFIG_FILE="${CONFIG_FILE:-$CONFIG_DIR/config.conf}"
 QUEUE_DIR="${QUEUE_DIR:-$CONFIG_DIR/queue}"
 LOG_FILE="${LOG_FILE:-$CONFIG_DIR/receiver.log}"
