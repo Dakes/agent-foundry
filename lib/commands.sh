@@ -699,8 +699,18 @@ cmd_rm() {
         return 0
     fi
 
+    watcher_stop "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || true
     foundry_agent_stop "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || true
     sandbox_rm "$FOUNDRY_BOX" || return 1
+
+    # Hooks live on the forge and outlive the sandbox. Deliveries will fail
+    # until the project is back up, which reads on the forge as the agent
+    # having broken rather than as a sandbox that is simply gone.
+    if watcher_is_configured "$FOUNDRY_PROJECT"; then
+        log_warn "Webhooks on the forge still point at this project's receiver"
+        log_warn "  Deliveries fail until 'foundry init ${FOUNDRY_PROJECT}' brings it back."
+        log_warn "  To remove them: foundry watcher unregister ${FOUNDRY_PROJECT} (needs the sandbox)"
+    fi
 
     if [[ "$purge" == "true" ]]; then
         log_warn "This deletes the volume root and everything in it:"
@@ -875,6 +885,59 @@ cmd_doctor() {
                 echo "  FAIL   receiver port $port is NOT published"
                 echo "         publish it with: foundry up $name"
                 failures=$((failures + 1))
+            fi
+        fi
+
+        # The rest of the watcher's wiring. Each of these has failed in a way
+        # that produced silence on the forge rather than an error anywhere.
+        if watcher_is_configured "$name"; then
+            local agent_type
+            agent_type="$(project_get "$name" '.agent' "")"
+            if [[ "$agent_type" == *-goal ]]; then
+                echo "  ok     agent '${agent_type}' can be driven by a watcher"
+            else
+                echo "  FAIL   agent '${agent_type}' cannot be driven by a watcher"
+                echo "         use claude-goal, codex-goal or agy-goal"
+                failures=$((failures + 1))
+            fi
+
+            local tok
+            tok="$(_watcher_token_path "$name" "$root" 2>/dev/null || true)"
+            if [[ -n "$tok" && -s "$tok" ]]; then
+                echo "  ok     Forgejo token present"
+            else
+                echo "  FAIL   Forgejo token missing or empty (${tok:-.watcher.token_file unset})"
+                failures=$((failures + 1))
+            fi
+
+            if watcher_public_url "$name" >/dev/null 2>&1; then
+                echo "  ok     webhook URL: $(watcher_public_url "$name")"
+            else
+                echo "  warn   no .watcher.public_url; hooks must be added by hand"
+            fi
+
+            if sandbox_is_running "$box"; then
+                if sandbox_exec "$box" "$root" test -x "$WATCHER_SCRIPT" 2>/dev/null; then
+                    echo "  ok     watcher present in the image"
+                    if sandbox_exec "$box" "$root" \
+                        sh -c 'command -v socat >/dev/null' 2>/dev/null; then
+                        echo "  ok     socat present (the receiver needs it)"
+                    else
+                        echo "  FAIL   socat missing from the image; the receiver cannot listen"
+                        echo "         rebuild it with: foundry image build"
+                        failures=$((failures + 1))
+                    fi
+                else
+                    echo "  FAIL   the image predates watcher support"
+                    echo "         foundry image build, then foundry rm $name && foundry init $name"
+                    failures=$((failures + 1))
+                fi
+
+                if watcher_is_running "$box" "$root"; then
+                    echo "  ok     watcher running"
+                else
+                    echo "  warn   watcher not running (foundry up $name)"
+                fi
             fi
         fi
     fi

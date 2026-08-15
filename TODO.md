@@ -38,7 +38,10 @@ maintained against the code.
       scanning open issues, so a fresh watcher can re-trigger on old comments
 
 ### Autostart
-- [ ] Honor `.autostart` in `foundry.json` via a systemd user unit
+- [ ] Honor `.autostart` in `foundry.json` via a systemd user unit. **The
+      field is seeded into every new project and read by nothing**, so it
+      currently promises something Foundry does not do - either implement it
+      or drop it from `_project_seed_config`.
 - [ ] `templates/systemd/` unit that runs `foundry up` for flagged projects
 
 ### Testing
