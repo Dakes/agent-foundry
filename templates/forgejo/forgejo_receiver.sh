@@ -196,6 +196,14 @@ run_socat_server() {
 
 start_server() {
     load_config
+
+    # config.conf names the port RECEIVER_PORT, because that is what it is
+    # called in foundry.json and in the published port mapping. Without this
+    # the receiver silently kept its own default and listened on 8080, so
+    # every webhook was refused on the port the forge had been told to use.
+    LISTEN_PORT="${RECEIVER_PORT:-$LISTEN_PORT}"
+    LISTEN_INTERFACE="${RECEIVER_INTERFACE:-$LISTEN_INTERFACE}"
+
     mkdir -p "$QUEUE_DIR"
 
     if ! command -v socat >/dev/null 2>&1; then
