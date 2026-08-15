@@ -99,6 +99,13 @@ Note that these denies apply to *egress*. A service the agent runs on its own
 loopback inside the sandbox is unaffected, so denying `127.0.0.0/8` does not
 break a dev server started in the box.
 
+**DNS follows the policy.** The sandbox resolver answers only for hosts the
+policy allows, so a denied host does not resolve at all — git reports
+`Could not resolve hostname`, which reads like broken DNS and is not. A host
+reachable on a non-standard port therefore needs two rules: `host:port` for the
+connection and the bare `host` so the name resolves. `init` and `up` derive
+both from your remotes.
+
 Resources are hostnames, `host:port`, IP addresses, or CIDR ranges. Non-HTTP
 TCP (git over SSH on port 22) needs an explicit `host:22` rule — `init` and
 `up` derive these from the project's git remotes automatically. UDP and ICMP

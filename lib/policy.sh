@@ -224,15 +224,31 @@ policy_baseline() {
     log_info "Applying Foundry network baseline (open internet, closed LAN)"
 
     if [[ "$reset" == "true" ]]; then
-        log_warn "Resetting the sbx policy store - running sandboxes will be stopped"
-        if ! _sbx_checked "resetting the policy store" policy reset --force; then
-            return 1
-        fi
+        # Not automated on purpose. `sbx policy reset` re-initializes the
+        # policy as part of the reset, choosing the preset through an
+        # interactive menu - so a scripted reset either blocks on that prompt
+        # or silently accepts a default, and the `policy init` that used to
+        # follow here always failed with "already initialized".
+        log_error "Resetting the policy store is a manual step:"
+        log_error ""
+        log_error "  sbx policy reset      # then choose 1. Open"
+        log_error ""
+        log_error "It stops every running sandbox and asks which preset to"
+        log_error "install. Choose Open for the posture Foundry documents, then"
+        log_error "run 'foundry doctor --fix' to re-apply the deny rules."
+        return 1
     fi
 
     if policy_is_initialized; then
         log_info "Global network policy already initialized - keeping the current preset"
-        log_debug "Use 'foundry policy baseline --reset' to re-initialize as allow-all"
+        # Worth naming, because a default-deny preset changes what a project
+        # needs: sbx gates DNS on policy, so a host that is not allowed does
+        # not resolve, and git reports it as "Could not resolve hostname"
+        # rather than as a denial.
+        if ! policy_has_allow "**"; then
+            log_info "  The preset is default-deny: a host must be allowed before"
+            log_info "  it will even resolve. Project remotes are allowed for you."
+        fi
     elif ! _sbx_checked "initializing the global network policy" \
         policy init allow-all; then
         return 1
