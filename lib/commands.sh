@@ -221,10 +221,23 @@ cmd_init() {
     echo "  Sandbox     : $box"
     echo "  Config      : ${root}/foundry.json"
     echo ""
+    # Only advise what is actually still missing. foundry.json is init's input,
+    # not its output, so telling someone who just cloned from it to go and edit
+    # it - and to set up the ssh key the clone plainly already used - reads as
+    # boilerplate and teaches people to skip the whole block.
+    local -a next=()
+
+    if [[ "$(project_get_array "$name" '.repos[].url' | grep -c . || true)" -eq 0 ]]; then
+        next+=("  \$EDITOR ${root}/foundry.json     # add repos, then 'up' clones them")
+        if ! project_has_ssh_key "$root"; then
+            next+=("  ${root}/.ssh/                    # add a key for SSH remotes")
+        fi
+    fi
+
+    next+=("  foundry up ${name}")
+
     echo "Next:"
-    echo "  \$EDITOR ${root}/foundry.json     # agent, repos, watcher"
-    echo "  \$EDITOR ${root}/.ssh/config      # git keys (manual, see comments)"
-    echo "  foundry up ${name}"
+    printf '%s\n' "${next[@]}"
 
     return 0
 }
