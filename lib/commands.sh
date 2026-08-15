@@ -736,12 +736,12 @@ cmd_doctor() {
 
         # Watcher ports must actually be published, or the forge cannot reach us.
         local port
-        port="$(project_get "$name" '.watcher.port' "")"
+        port="$(project_receiver_port "$name")"
         if [[ -n "$port" && "$port" != "0" ]] && check_command "$SBX_BIN"; then
             if sandbox_is_running "$box" && sandbox_port_published "$box" "$port"; then
-                echo "  ok     watcher port $port published"
+                echo "  ok     receiver port $port published (forge -> sandbox)"
             else
-                echo "  FAIL   watcher port $port is NOT published"
+                echo "  FAIL   receiver port $port is NOT published"
                 echo "         port mappings do not survive a restart - run: foundry up $name"
                 failures=$((failures + 1))
             fi

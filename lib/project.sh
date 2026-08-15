@@ -211,7 +211,7 @@ project_get_array() {
 }
 
 # Write a value into foundry.json (creating the file if needed).
-# Usage: project_set "pocetude" '.watcher.port' '9101'
+# Usage: project_set "pocetude" '.watcher.receiver_port' '9100'
 project_set() {
     local name="$1"
     local query="$2"
@@ -264,12 +264,28 @@ project_validate_config() {
     # A privileged host port cannot be bound without extra daemon privileges,
     # and sbx reports it as a 403 from the port mapper - which reads like a
     # policy denial rather than "pick a higher number".
+    # The field was renamed; a leftover "port" would otherwise publish nothing
+    # and the forge would get connection refused with no clue why.
+    if [[ -n "$(project_get "$name" '.watcher.port' "")" ]]; then
+        log_error "Unknown field .watcher.port in ${cfg}"
+        log_error "It is now .watcher.receiver_port - the port the forge POSTs to."
+        return 1
+    fi
+
     local wport
-    wport="$(project_get "$name" '.watcher.port' "")"
+    wport="$(project_receiver_port "$name")"
+
+    # A configured watcher with nothing published can never receive an event.
+    if [[ -n "$(project_get "$name" '.watcher.kind' "")" && -z "$wport" ]]; then
+        log_error "Watcher configured but .watcher.receiver_port is not set in ${cfg}"
+        log_error "That is the port the forge POSTs webhooks to, e.g. 9100."
+        return 1
+    fi
     if [[ -n "$wport" && "$wport" =~ ^[0-9]+$ ]] && [[ "$wport" -gt 0 ]] && [[ "$wport" -lt 1024 ]]; then
-        log_error "Watcher port ${wport} is privileged and cannot be published"
-        log_error "Set .watcher.port to 1024 or above in ${cfg}"
-        log_error "  e.g. 9100, and point the forge webhook at that port"
+        log_error "Watcher receiver port ${wport} is privileged and cannot be published"
+        log_error "This is the port the forge POSTs webhooks TO, not a port on the forge."
+        log_error "Set .watcher.receiver_port to 1024 or above in ${cfg}"
+        log_error "  e.g. 9100, then point the forge webhook at http://<host>:9100/"
         return 1
     fi
 
@@ -734,6 +750,18 @@ project_has_ssh_key() {
 # PORTS
 # ============================================================================
 
+# The port the watcher's receiver listens on, and that gets published to the
+# host so the forge can POST to it.
+#
+# Named receiver_port because "port" reads as "the port I talk to the forge on",
+# which is the opposite direction: outbound calls to the forge API use the
+# instance URL and need nothing published.
+#
+# Usage: port="$(project_receiver_port "pocetude")"
+project_receiver_port() {
+    project_get "$1" '.watcher.receiver_port' ""
+}
+
 # Publish specs for a project, derived from its watcher config.
 # Watcher receivers must be reachable from the forge, so they bind 0.0.0.0
 # rather than the loopback default.
@@ -742,7 +770,7 @@ project_publish_specs() {
     local name="$1"
 
     local port
-    port="$(project_get "$name" '.watcher.port' "")"
+    port="$(project_receiver_port "$name")"
 
     if [[ -n "$port" && "$port" != "0" ]]; then
         # 0.0.0.0 rather than loopback: a forge on another host has to reach

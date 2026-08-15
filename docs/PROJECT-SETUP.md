@@ -77,10 +77,11 @@ $EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
   a bare number is read as MiB. Empty means "let the sandbox decide".
 - `network.allow` — rules derived from your remotes are written back here by
   `init`, so every exception is visible in a diff. You can add your own.
-- `watcher.port` — the receiver port, published as `0.0.0.0:<port>:<port>` so
-  the forge can reach it. Must be **1024 or above**: binding a privileged port
-  needs daemon privileges the sandbox runtime does not have, and it fails as a
-  403 from the port mapper.
+- `watcher.receiver_port` — the port **the forge POSTs webhooks to**, not a
+  port on the forge. Published as `0.0.0.0:<port>:<port>` so the forge can
+  reach into the sandbox. Must be **1024 or above**: binding a privileged port
+  needs daemon privileges the sandbox runtime does not have, and it surfaces as
+  a 403 from the port mapper.
 - `watcher.kind` / `watcher.token_file` — forge watcher
   config. **Not yet ported to the sandbox transport**; the port is published
   but nothing listens on it.
@@ -142,6 +143,20 @@ Verify the whole picture with:
 foundry doctor my-project
 foundry status my-project
 ```
+
+## Which way does the traffic go?
+
+Two directions, and only one of them needs a port published:
+
+| | Direction | Configured by |
+|---|---|---|
+| **Webhook** | forge → sandbox | `watcher.receiver_port` — published to the host |
+| **Forge API** (posting comments, reading PRs) | sandbox → forge | `watcher.instance_url` — outbound, nothing published |
+
+So `receiver_port` is a port on *your* machine that the forge dials into. Set
+the webhook in the forge to `http://<your-host>:<receiver_port>/`. It never has
+to be 80 — a webhook URL carries its own port — and 80 usually cannot be bound
+anyway.
 
 ## Network access to your forge
 

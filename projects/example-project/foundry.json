@@ -20,12 +20,12 @@
   },
   "watcher": {
     "kind": "github",
-    "port": 9100,
     "token_file": "secrets/github-token.txt",
     "watched_repos": [
       "myorg/backend",
       "myorg/frontend"
-    ]
+    ],
+    "receiver_port": 9100
   },
   "network": {
     "allow": [],
