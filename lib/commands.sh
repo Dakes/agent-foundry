@@ -184,6 +184,11 @@ cmd_init() {
 
     # 5. Network rules for this project's remotes, now that there is a sandbox
     #    to scope them to. Before the clone, which is what needs them.
+    #
+    #    The resolver check comes first: the baseline ran before any sandbox
+    #    existed and may have denied the range the resolver is in, which
+    #    disables DNS entirely and cannot be undone by an allow rule.
+    policy_unblock_resolvers "$box" || true
     project_apply_network_rules "$name" "$box" || return 1
 
     # 6. Clone declared repositories inside the sandbox. This is the first real
@@ -270,6 +275,7 @@ cmd_up() {
 
     # 3. Network rules. Re-applied every up: they are scoped to the sandbox and
     #    do not survive its removal, so a re-created box starts with none.
+    policy_unblock_resolvers "$FOUNDRY_BOX" || true
     project_apply_network_rules "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" || return 1
 
     # 4. Repos: clone anything declared but missing.
@@ -614,6 +620,29 @@ cmd_doctor() {
     else
         echo "  FAIL   jq not installed"
         failures=$((failures + 1))
+    fi
+
+    # A denied resolver disables DNS for every sandbox on the host, and no
+    # allow rule can undo it, so doctor names it rather than leaving the
+    # operator to read "Temporary failure in name resolution" as broken DNS.
+    if [[ -n "$name" ]] && project_exists "$name" && check_command "$SBX_BIN"; then
+        local dns_box
+        dns_box="$(sandbox_name_for "$name")"
+        if sandbox_is_running "$dns_box"; then
+            local -a dns_res=()
+            mapfile -t dns_res < <(policy_resolver_addresses "$dns_box" 2>/dev/null || true)
+            local blocked=0 dns_range
+            for dns_range in "${FOUNDRY_PRIVATE_RANGES[@]}"; do
+                [[ ${#dns_res[@]} -gt 0 ]] || break
+                if policy_has_deny "$dns_range" && \
+                   policy_range_covers_resolver "$dns_range" "${dns_res[@]}"; then
+                    echo "  FAIL   ${dns_range} is denied but holds the sandbox resolver"
+                    echo "         DNS cannot work; run 'foundry up' to repair"
+                    blocked=$((blocked + 1))
+                fi
+            done
+            [[ "$blocked" -eq 0 ]] && echo "  ok     sandbox resolver reachable"
+        fi
     fi
 
     # Advisory: sandboxes are containers on Linux and do not need KVM. Only
