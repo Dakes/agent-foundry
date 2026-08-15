@@ -162,16 +162,39 @@ post() {
 code="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://localhost:${PORT}/" 2>/dev/null)"
 [[ "$code" == "404" ]] && pass "wrong path rejected" || fail "wrong path rejected (got $code)"
 
+# A body ending in a newline, which is what Go's json.Encoder sends and what
+# the forge signs. Reading it through $(...) stripped that byte, so the digest
+# never matched and every real delivery was rejected as a forgery - while
+# curl's newline-free bodies verified fine.
+printf '%s\n' "$body" > "$WORK/body_nl.json"
+sig_nl="$(openssl dgst -sha256 -hmac "$secret" < "$WORK/body_nl.json" | awk '{print $NF}')"
+code="$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST "http://localhost:${PORT}/webhook" \
+    -H 'Content-Type: application/json' -H 'X-Forgejo-Event: issue_comment' \
+    -H "X-Hub-Signature-256: sha256=$sig_nl" --data-binary "@$WORK/body_nl.json")"
+[[ "$code" == "200" ]] \
+    && pass "newline-terminated body verifies" \
+    || fail "newline-terminated body verifies (got $code)"
+
+# Forgejo's own header carries a bare hex digest, with no sha256= prefix.
+code="$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST "http://localhost:${PORT}/webhook" \
+    -H 'Content-Type: application/json' -H 'X-Forgejo-Event: issue_comment' \
+    -H "X-Forgejo-Signature: $sig_nl" --data-binary "@$WORK/body_nl.json")"
+[[ "$code" == "200" ]] \
+    && pass "X-Forgejo-Signature accepted" \
+    || fail "X-Forgejo-Signature accepted (got $code)"
+
 sleep 4
 grep -q "Found trigger in issue_comment" "$cfg/watcher.log" 2>/dev/null \
     && pass "watcher picks the trigger up" \
     || fail "watcher picks the trigger up"
 
-# The forged event must never have reached the queue or the ledger.
+# Every signed post above carries the same comment id, so the ledger must hold
+# exactly one entry: the forged one never got in, and the repeats were seen as
+# already processed.
 if jq -e '.processed | keys | length == 1' "$cfg/processed.json" >/dev/null 2>&1; then
-    pass "only the signed event was processed"
+    pass "only signed events reached the ledger"
 else
-    fail "only the signed event was processed"
+    fail "only signed events reached the ledger ($(jq -c '.processed|keys' "$cfg/processed.json" 2>/dev/null))"
 fi
 
 # sbx stops a sandbox about a minute after the last exec returns, and what
