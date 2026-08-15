@@ -5,8 +5,9 @@
 # source tree, then rebuild: foundry image build [variant]
 #
 # Base packages (always installed, see docker/foundry-agent.Dockerfile):
-#   ca-certificates, curl, git, gnupg, jq, openssh-client, python3,
-#   python3-pip, python3-venv, ripgrep, tmux, unzip, vim, nodejs, gh, sudo
+#   build-essential, ca-certificates, curl, file, git, gnupg, jq, less,
+#   openssh-client, patch, python3, python3-pip, python3-venv, ripgrep, tmux,
+#   unzip, vim, wget, xz-utils, nodejs, gh, sudo, docker (engine + compose)
 #
 # Add your custom packages below:
 

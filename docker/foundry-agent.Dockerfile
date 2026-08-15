@@ -27,13 +27,19 @@ ARG RALPH_VARIANT=none
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 
+# Language toolchains stop here on purpose: Go, Rust, JDK and database clients
+# are wanted by one project each and belong in config/packages.txt.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         curl \
+        file \
         git \
         gnupg \
         jq \
+        less \
         openssh-client \
+        patch \
         python3 \
         python3-pip \
         python3-venv \
@@ -41,6 +47,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tmux \
         unzip \
         vim \
+        wget \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js (agent CLIs are npm-distributed)
@@ -56,6 +64,29 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Docker engine, for repositories whose tests or dev loop are containers.
+#
+# sbx runs a real dockerd inside the sandbox, nested, but only starts it when
+# the image asks for it with com.docker.sandboxes.start-docker (set at the
+# bottom of this file) and only from binaries the image carries - which is why
+# the daemon is installed here and not just the client. The daemon runs
+# privileged while the agent keeps no capabilities of its own; it reaches the
+# engine through the socket, which dockerd creates as root:docker, so the agent
+# is added to that group where it is created below.
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /usr/share/keyrings/docker.asc \
+    && chmod go+r /usr/share/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        containerd.io \
+        docker-ce \
+        docker-ce-cli \
+        docker-buildx-plugin \
+        docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 # Interactive agent CLIs
@@ -175,7 +206,10 @@ RUN set -eux; \
     # are the ones on the host. A real directory here would be in the way, and
     # ssh - which resolves ~ from the passwd entry, not $HOME - would read it
     # instead of the project's .ssh.
-    useradd -M -d "/home/${AGENT_USER}" -u "${AGENT_UID}" -g "${AGENT_GID}" -s /bin/bash "${AGENT_USER}"; \
+    # The docker package creates this group, but not on a rebuild that skips
+    # that layer; either way the agent must be in it to reach the socket.
+    getent group docker >/dev/null || groupadd docker; \
+    useradd -M -d "/home/${AGENT_USER}" -u "${AGENT_UID}" -g "${AGENT_GID}" -G docker -s /bin/bash "${AGENT_USER}"; \
     apt-get update && apt-get install -y --no-install-recommends sudo; \
     rm -rf /var/lib/apt/lists/*; \
     echo "${AGENT_USER} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${AGENT_USER}"; \
@@ -189,6 +223,9 @@ USER ${AGENT_USER}
 # from /home/${AGENT_USER}; this is only the fallback for a bare shell.
 WORKDIR /
 
+# start-docker is what makes sbx launch the nested daemon: without this label
+# the engine installed above is inert and /var/run/docker.sock never appears.
 LABEL org.opencontainers.image.title="Agent Foundry sandbox" \
       org.opencontainers.image.description="Sandbox image for Agent Foundry projects" \
-      io.foundry.ralph-variant="${RALPH_VARIANT}"
+      io.foundry.ralph-variant="${RALPH_VARIANT}" \
+      com.docker.sandboxes.start-docker="true"
