@@ -429,10 +429,13 @@ cmd_shell() {
     _resolve_existing "$name" || return 1
     sandbox_require || return 1
 
+    # A sandbox stops itself after a short idle period, so refusing here would
+    # send the user to `foundry up` - which also clones and starts an agent -
+    # when all they asked for is a shell. sbx exec starts a stopped sandbox by
+    # itself; do the same explicitly so the ssh path behaves identically.
     if ! sandbox_is_running "$FOUNDRY_BOX"; then
-        log_error "Sandbox is not running: $FOUNDRY_BOX"
-        log_error "Start it with: foundry up $FOUNDRY_PROJECT"
-        return 1
+        log_info "Sandbox is stopped; starting it"
+        sandbox_start "$FOUNDRY_BOX" || return 1
     fi
 
     if [[ "$use_ssh" == "true" ]]; then
@@ -458,9 +461,11 @@ cmd_attach() {
     _resolve_existing "$name" || return 1
     sandbox_require || return 1
 
+    # Attaching to a stopped box is not an error either: starting it is what
+    # the user wants, and the agent-session check below is the real gate.
     if ! sandbox_is_running "$FOUNDRY_BOX"; then
-        log_error "Sandbox is not running: $FOUNDRY_BOX"
-        return 1
+        log_info "Sandbox is stopped; starting it"
+        sandbox_start "$FOUNDRY_BOX" || return 1
     fi
 
     local agent session
