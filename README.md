@@ -8,8 +8,8 @@ posture, and unattended operation.
 
 ## Features
 
-- **🤖 Autonomous or interactive** — `claude`, `gemini`, `codex`, plus the
-  Ralph family (`ralph`, `ralph-orchestrator`, `kimi-ralph`)
+- **🤖 Autonomous or interactive** — `claude`, `gemini`, `codex` by hand, or
+  their `/goal` loops running unattended
 - **🔒 Isolated** — one sandbox per project, zero host pollution
 - **📂 No sync step** — the volume root is a live-mounted host directory, and
   files the agent writes stay owned by you
@@ -17,6 +17,8 @@ posture, and unattended operation.
   exceptions written back into the project config
 - **🔄 Multi-repo** — agents work across several repositories
 - **🎯 Three verbs** — `init`, `up`, `down` cover the common path
+- **💬 Forge-driven** — a comment on an issue or PR starts a run, with the
+  task mode stated explicitly rather than guessed
 
 ## Quick Start
 
@@ -33,13 +35,16 @@ sbx policy reset          # then choose "1. Open"
 foundry doctor --fix
 foundry image build
 
-# Create a project, add git keys, run it
+# Create a project, add git keys and repos, run it
 foundry init my-project
 $EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
 $EDITOR ~/.local/share/foundry/volumes/my-project/.ssh/config
 foundry up my-project
 foundry logs -f my-project
 ```
+
+New here? **[GETTING-STARTED.md](docs/GETTING-STARTED.md)** walks the whole
+path, including the Forgejo watcher.
 
 ## Architecture
 
@@ -53,7 +58,7 @@ Host
 │  ├ repos/    │  ├ repos/    │  ├ repos/    │
 │  ├ .ssh/     │  ├ .ssh/     │  ├ .ssh/     │
 │  └ logs/     │  └ logs/     │  └ logs/     │
-│  claude      │  ralph       │  codex       │
+│  claude      │  claude-goal │  codex       │
 └──────────────┴──────────────┴──────────────┘
 ```
 
@@ -67,9 +72,6 @@ volume root is mounted at the same absolute path inside as on the host.
 | `claude` | interactive | `@anthropic-ai/claude-code` |
 | `gemini` | interactive | `@google/gemini-cli` |
 | `codex` | interactive | `@openai/codex` |
-| `ralph` | autonomous | `frankbria/ralph-claude-code` |
-| `ralph-orchestrator` | autonomous | `@ralph-orchestrator/ralph-cli` |
-| `kimi-ralph` | autonomous | `kimi-code`, capped at 100 iterations |
 | `claude-goal` | autonomous | Claude Code's `/goal` |
 | `codex-goal` | autonomous | Codex's `/goal` |
 | `agy-goal` | autonomous | Antigravity CLI's `/goal` |
@@ -80,44 +82,40 @@ condition holds, so there is no loop for Foundry to run: a forge event supplies
 the goal, and the CLI owns the iteration. See
 [PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md#goal-mode-agents).
 
-One agent per project, set with `.agent` in `foundry.json`. The interactive
-CLIs all live in `foundry-agent:base`; each autonomous runner gets its own
-image tag (`foundry image build ralph`).
+One agent per project, set with `.agent` in `foundry.json`. There is a single
+image, `foundry-agent:base`, carrying every CLI.
+
+A **watcher can only drive a `*-goal` agent**: it runs headless, and an
+interactive CLI would sit waiting for a human nobody can provide.
 
 ## Use Cases
 
-- **Autonomous features**: define the mission in `PROMPT.md`, the agent
-  implements it across repos
+- **Forge-driven work**: comment `@yourbot implement ...` on an issue and the
+  agent opens the pull request
 - **Unattended work**: start an agent on a refactor, review progress later
 - **Parallel development**: several sandboxes on different projects at once
 - **Shared context**: `~/.local/share/foundry/shared/` is mounted read-only
   into every sandbox
 
-## Ralph File Structure
+## Project Layout
 
-`ralph-claude-code` projects use this layout inside the volume root:
+The volume root is the agent's home inside the sandbox, and a real directory
+on the host:
 
 ```
 <volume root>/
-├── .ralphrc                    # Config (optional, overrides default)
-├── .ralph/
-│   ├── PROMPT.md               # Mission: what to do
-│   ├── fix_plan.md             # Tasks: - [ ] checklist
-│   ├── AGENT.md                # Commands: npm test, etc
-│   ├── specs/                  # Requirements (optional)
-│   └── logs/                   # Execution logs
-└── repos/
-    ├── backend/
-    └── frontend/
+├── foundry.json     # project settings; init and up both read this
+├── AGENT.md         # standing instructions, loaded by every agent CLI
+├── repos/           # clones
+│   ├── backend/
+│   └── frontend/
+├── secrets/         # tokens (0700)
+├── logs/
+├── .ssh/            # per-project git keys (0700)
+└── .config/forgejo-watcher/    # watcher config and state, if configured
 ```
 
-1. Ralph reads `PROMPT.md` → understands the mission
-2. Reads `fix_plan.md` → gets the next task
-3. Reads `AGENT.md` → knows how to test
-4. Makes changes → runs tests → checks off the task
-5. Repeats until done
-
-For `ralph-orchestrator`, use a top-level `ralph.yml` and `PROMPT.md`.
+Nothing is copied in or out: the agent writes here directly, as your user.
 
 ## Task Modes
 
@@ -220,6 +218,7 @@ foundry shell [project]    # shell inside the sandbox
 foundry rm [project]       # remove the sandbox; volume root is kept
 foundry doctor [project]   # check host, policy, ports, keys (--fix repairs)
 
+foundry watcher <action>   # start | stop | status | logs | register
 foundry policy <action>    # baseline | allow | deny | check | ls
 foundry image <action>     # build | push
 foundry config <action>    # get | set | edit | show
@@ -240,12 +239,13 @@ Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
 
 ## Documentation
 
+- [GETTING-STARTED.md](docs/GETTING-STARTED.md) — **start here**: a complete first run
+- [FORGEJO-WATCHER.md](docs/FORGEJO-WATCHER.md) — the watcher in depth
 - [VISION.md](docs/VISION.md) — project goals and philosophy
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — complete architecture overview
 - [PROJECT-SETUP.md](docs/PROJECT-SETUP.md) — creating and configuring projects
 - [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) — full command reference
 - [PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md) — how agent prompts are built, and the rules that keep them consistent
-- [RALPH-INTEGRATION.md](docs/RALPH-INTEGRATION.md) — Ralph integration details
 - [TODO.md](TODO.md) — implementation roadmap
 
 ## Development
@@ -263,7 +263,7 @@ nix-shell
 ./scripts/test-prompt-lib.sh
 
 # Build the agent image
-foundry image build [ralph|ralph-orchestrator|kimi-ralph]
+foundry image build
 ```
 
 The release bundle is built automatically by `install.sh` if needed.
@@ -271,8 +271,8 @@ The release bundle is built automatically by `install.sh` if needed.
 ## Project Status
 
 🚧 **Early development.** The sandbox core (project verbs, policy, images,
-agents) is implemented. Forge watchers are not yet ported to the sandbox
-transport — `foundry up` publishes the receiver port and says so.
+agents) and the Forgejo watcher are implemented and run on the sandbox
+transport. There is no GitHub watcher.
 
 See [TODO.md](TODO.md) for the roadmap.
 
@@ -289,11 +289,9 @@ MIT License — See [LICENSE](LICENSE)
 
 ## Credits
 
-Built on [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) • Supports
-[ralph-claude-code](https://github.com/frankbria/ralph-claude-code),
-[ralph-orchestrator](https://github.com/mikeyobrien/ralph-orchestrator) and
-[kimi-cli](https://github.com/MoonshotAI/kimi-cli) • Inspired by the Ralph
-Wiggum technique
+Built on [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) •
+Drives [Claude Code](https://github.com/anthropics/claude-code), Codex,
+Gemini CLI and Antigravity CLI
 
 ---
 

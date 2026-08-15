@@ -22,15 +22,14 @@ Agent Foundry provides **isolated sandboxes** where AI agents can work autonomou
 ### 1. True Autonomy
 Agents work continuously without supervision:
 - Start the agent, log out, it keeps working
-- ralph-claude-code orchestrates tasks until completion
-- Built-in circuit breakers prevent infinite loops
-- Session continuity across restarts
+- Each CLI's own goal loop runs until its completion condition holds
+- A forge comment is enough to start work; the result comes back as a comment
+- State lives on the host, so a restart resumes rather than repeats
 
 ### 2. Multi-Project Support
 Run many concurrent sandboxes:
-- Each project gets dedicated VM
-- 4 vCPUs + 8GB RAM per VM by default (configurable)
-- Dynamic IP allocation (172.16.0.10-254)
+- Each project gets its own sandbox and its own host directory
+- Resources default to the sandbox runtime's choice, configurable per project
 - Maximize AI subscription usage across projects
 
 ### 3. Rich Context for Agents
@@ -42,11 +41,11 @@ Workspaces provide comprehensive project understanding:
 
 ### 4. Multiple AI Providers
 Leverage best tools for each task:
-- **Claude Code** - Primary coding agent (via ralph-claude-code)
-- **Gemini CLI** - Alternative for specific tasks
-- **OpenAI Codex** - Additional option
-- **Kimi Code CLI** - Autonomous agent via kimi-ralph mode
-- Pluggable architecture for future agents
+- **Claude Code** - primary coding agent, interactive or `/goal`
+- **Codex** - interactive or `/goal`
+- **Antigravity CLI** - `/goal`
+- **Gemini CLI** - interactive
+- A registry that keeps agent differences in one file
 
 ### 5. Simple, Powerful UX
 A host-based CLI, three verbs for the common path:
@@ -73,10 +72,10 @@ foundry shell my-project
 ## Use Cases
 
 ### Autonomous Feature Development
-1. Define feature in `PROMPT.md`
-2. Set `.agent` to `ralph` and run `foundry up`
-3. Agent implements across multiple repos
-4. Commits to feature branch
+1. Write the standing instructions in `AGENT.md`
+2. Set `.agent` to a goal agent and run `foundry up`
+3. Comment `@yourbot implement ...` on an issue
+4. The agent works across repos and opens a pull request
 5. Review and merge
 
 ### 24/7 Background Work
@@ -92,10 +91,10 @@ foundry shell my-project
 4. Each isolated, no conflicts
 
 ### Experimentation & Testing
-1. Clone production agent VM
+1. Clone the production agent sandbox
 2. Test risky changes in copy
 3. Iterate until working
-4. Destroy test VM
+4. Remove the test sandbox
 5. Apply learnings to production
 
 ### Team Collaboration
@@ -122,25 +121,24 @@ foundry shell my-project
 - All code lives in git repos
 - Agent commits as it works
 - Workspace is disposable
-- VMs are ephemeral, git is permanent
+- Sandboxes are ephemeral, git and the volume root are permanent
 
 ### Workspace-Centric
 - Workspace = project universe
 - Multiple repos, rich context, agent memory
 - Self-contained, portable
-- Ralph orchestrates at workspace level
+- The volume root is the agent's home, mounted at the same path inside
 
 ### Host-Based Management
-- All commands run from host
-- Framework handles SSH connections
-- Users never need to remember IPs
+- All commands run from the host
+- Users never need to know how the sandbox is addressed
 - Clean, docker-like UX
 
 ## Non-Goals
 
 - Not a container orchestration system (use k8s for that)
 - Not for production workload hosting
-- Not a general-purpose VM manager
+- Not a general-purpose sandbox or VM manager
 - Not a replacement for local development
 
 ## Success Metrics
@@ -150,15 +148,15 @@ A successful Agent Foundry:
 2. Users manage 3-5 concurrent projects effortlessly
 3. Templates are reused across team/organization
 4. Setup time: < 5 minutes from config to agent running
-5. 90% of work happens in VMs, 10% reviewing/merging
+5. 90% of work happens in sandboxes, 10% reviewing/merging
 
 ## Future Vision
 
 ### Phase 1 (MVP)
-- Ubuntu Linux VMs (22.04)
-- ralph-claude-code as primary agent
-- Basic CLI (create, start, stop, destroy)
-- Manual template building
+- Ubuntu sandboxes on Docker Sandboxes
+- Goal-mode agents as the autonomous path
+- Project verbs (init, up, down, status)
+- Forgejo watcher
 
 ### Phase 2
 - Additional guest OS support (Fedora, Alpine)
@@ -173,7 +171,7 @@ A successful Agent Foundry:
 - Template marketplace
 
 ### Phase 4
-- Remote VM hosting (run on cloud)
+- Remote hosting (run sandboxes in the cloud)
 - Team features (shared templates, workspaces)
 - Advanced orchestration
 - AI agent improvements feedback loop
@@ -202,7 +200,7 @@ the host cut off at the network layer, that is the right trade.
 
 ## Success Stories (Envisioned)
 
-**Backend Developer**: "I start a Ralph agent on API refactoring before bed. Next morning, it's done - tests passing, PRs created. I review, merge, move on."
+**Backend Developer**: "I comment `@bot implement` on the refactoring issue before bed. Next morning it's done - tests passing, PR opened. I review, merge, move on."
 
 **Full-Stack Team**: "We have a company agent image with our standards. Everyone builds it, creates a sandbox per feature. Agents work on frontend/backend simultaneously."
 

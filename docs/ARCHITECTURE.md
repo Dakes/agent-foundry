@@ -56,7 +56,7 @@ mounted volume root, so nothing needs baking per project.
 - `foundry-agent:base` — git, tmux, node, gh, jq, ripgrep, plus the interactive
   CLIs (claude, gemini, codex). This is what most projects use.
 - `foundry-agent:<variant>` — the above plus exactly one autonomous runner
-  (`ralph`, `ralph-orchestrator`, `kimi-ralph`).
+  (`claude-goal`, `codex-goal`, `agy-goal`).
 
 `foundry image build` also imports the result into the sandbox runtime's own
 image store, which is separate from the local docker daemon's.
@@ -92,7 +92,7 @@ no-op.
 ├── repos/                  # git repositories, cloned inside the sandbox
 ├── .ssh/                   # git keys + hand-editable config (700 / 600)
 ├── .foundry/               # generated start scripts
-├── .ralph/ .kimi/ .claude/ # per-agent state, whichever applies
+├── .claude/ .codex/ .gemini/  # per-agent state, whichever applies
 └── logs/                   # agent logs, readable directly on the host
 ```
 
@@ -109,9 +109,6 @@ and survived the migration unchanged.
 | `claude` | interactive | `@anthropic-ai/claude-code` |
 | `gemini` | interactive | `@google/gemini-cli` |
 | `codex` | interactive | `@openai/codex` |
-| `ralph` | autonomous | `frankbria/ralph-claude-code` |
-| `ralph-orchestrator` | autonomous | `@ralph-orchestrator/ralph-cli` |
-| `kimi-ralph` | autonomous | `kimi-code` |
 
 Both kinds run in a tmux session inside the sandbox: autonomous agents run a
 generated start script, interactive ones run the bare CLI so you can

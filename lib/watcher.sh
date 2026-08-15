@@ -48,11 +48,24 @@ watcher_public_url() {
     url="$(project_get "$name" '.watcher.public_url' "")"
     [[ -n "$url" ]] || return 1
 
-    # A bare host or scheme://host gets the receiver port appended, so the
-    # common case needs no port arithmetic from the user.
-    if [[ "$url" != */hook && "$url" != *:[0-9]* ]]; then
-        port="$(project_get "$name" '.watcher.receiver_port' "")"
-        [[ -n "$port" ]] && url="${url%/}:${port}"
+    url="${url%/}"
+
+    # No scheme means http: the receiver speaks plain HTTP, and anything in
+    # front of it doing TLS is named explicitly.
+    [[ "$url" == *://* ]] || url="http://${url}"
+
+    # The path is fixed: the receiver answers POST /webhook and nothing else,
+    # so a URL without it registers a hook that Forgejo will report as
+    # delivered and the receiver will refuse.
+    local rest="${url#*://}"
+    if [[ "$rest" != */* ]]; then
+        # A bare host gets the receiver port appended, so the common case
+        # needs no port arithmetic from the user.
+        if [[ "$rest" != *:[0-9]* ]]; then
+            port="$(project_get "$name" '.watcher.receiver_port' "")"
+            [[ -n "$port" ]] && url="${url}:${port}"
+        fi
+        url="${url}/webhook"
     fi
 
     printf '%s\n' "$url"

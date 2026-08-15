@@ -116,19 +116,16 @@ are blocked at the network layer and cannot be allowed.
 
 ```bash
 foundry image build                     # -> foundry-agent:base
-foundry image build ralph               # -> foundry-agent:ralph
-foundry image build ralph-orchestrator
-foundry image build kimi-ralph
 foundry image push [tag]
 ```
 
 Builds `docker/foundry-agent.Dockerfile`. The image carries binaries only: all
 per-project state lives in the mounted volume root.
 
-`:base` carries the interactive CLIs (claude, gemini, codex) and is what every
-interactive project uses; a variant argument adds one autonomous Ralph runner
-and tags the image after it. Projects pick their image implicitly from
-`.agent`, or explicitly via `.image` in `foundry.json`.
+There is one image. `:base` carries every agent CLI (claude, gemini, codex,
+agy), the Forgejo watcher, a Docker engine and a compiler toolchain; goal mode
+is a feature of each CLI rather than a separate install, so nothing needs a tag
+of its own. A project can still pin `.image` in `foundry.json`.
 
 Two things this command does that are easy to miss:
 
@@ -157,8 +154,7 @@ optional:
 ```jsonc
 {
   "name": "pocetude",
-  "agent": "kimi-ralph",
-  "image": "foundry-agent:kimi-ralph",
+  "agent": "claude-goal",
   "resources": { "cpus": 4, "memory": "8g" },
   "autostart": false,
   "repos": [
@@ -170,8 +166,12 @@ optional:
   },
   "watcher": {
     "kind": "forgejo",
-    "port": 9101,
-    "token_file": "secrets/forge-token"
+    "instance_url": "https://forge.example.com",
+    "receiver_port": 9174,
+    "trigger_keyword": "@mybot",
+    "watched_repos": ["org/api"],
+    "token_file": "secrets/forge-token",
+    "public_url": "http://localhost"
   }
 }
 ```
@@ -186,8 +186,8 @@ reviewable in a diff.
 ~/.local/share/foundry/volumes/<project>/
 ├── repos/          # git checkouts
 ├── .ssh/           # keys and config (user-managed, see below)
-├── .ralph/         # prompts, plans, memories
-├── .claude/ .codex/ .gemini/ .config/gh/
+├── .claude/ .codex/ .gemini/ .config/gh/    # per-agent state
+├── .config/forgejo-watcher/                 # watcher config and state
 ├── logs/           # agent and watcher logs
 ├── secrets/        # token files
 ├── foundry.json

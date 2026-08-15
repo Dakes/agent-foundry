@@ -28,14 +28,14 @@ maintained against the code.
 ## Next
 
 ### Watchers on the sandbox transport
-- [ ] Port `templates/gh-watcher/` to run inside a sandbox (no SSH, no VM IP)
-- [ ] Port `templates/forgejo/` receiver + hook manager
-- [ ] Derive the webhook URL from the published port instead of the VM IP
-- [ ] Start/stop the watcher from `foundry up` / `foundry down`
-- [ ] Ship `fj` (forgejo-cli) in the agent image — the golden image used to
-      provide it
-- [ ] Drop the "not implemented yet" warning from `cmd_up` and the banners from
-      the watcher docs
+- [x] Port `templates/forgejo/` receiver, watcher and hook manager
+- [x] Start/stop the watcher from `foundry up` / `foundry down`
+- [x] Ship `fj` (forgejo-cli) in the agent image
+- [x] Drop the "not implemented yet" warning and the doc banners
+- [ ] End-to-end test against a real forge event (only the config path is
+      covered by tests so far)
+- [ ] `mark-all` is still a stub: it logs "not yet implemented" instead of
+      scanning open issues, so a fresh watcher can re-trigger on old comments
 
 ### Autostart
 - [ ] Honor `.autostart` in `foundry.json` via a systemd user unit

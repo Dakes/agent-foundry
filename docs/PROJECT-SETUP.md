@@ -67,10 +67,11 @@ $EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
 
 **Fields** — all optional except what you actually use:
 
-- `agent` — `claude`, `gemini`, `codex`, `ralph`, `ralph-orchestrator`,
-  `kimi-ralph`. Defaults to `claude`. At most one agent per project.
-- `image` — override the image; otherwise derived from `agent`
-  (`foundry-agent:base` for interactive agents).
+- `agent` — interactive (`claude`, `gemini`, `codex`) or autonomous
+  (`claude-goal`, `codex-goal`, `agy-goal`). Defaults to `claude`. At most one
+  agent per project, and a **watcher needs one of the `*-goal` agents**.
+- `image` — override the image; otherwise `foundry-agent:base`, which carries
+  every CLI.
 - `repos[].url` — any git URL. `branch` and `dir` are optional; `dir` defaults
   to the repo name.
 - `resources.cpus` / `resources.memory` — memory takes a unit (`8g`, `4096m`);
@@ -82,9 +83,9 @@ $EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
   reach into the sandbox. Must be **1024 or above**: binding a privileged port
   needs daemon privileges the sandbox runtime does not have, and it surfaces as
   a 403 from the port mapper.
-- `watcher.kind` / `watcher.token_file` — forge watcher
-  config. **Not yet ported to the sandbox transport**; the port is published
-  but nothing listens on it.
+- `watcher.*` — the Forgejo watcher; it starts with `foundry up` whenever
+  `.watcher.kind` is set. Full reference in
+  [FORGEJO-WATCHER.md](FORGEJO-WATCHER.md).
 
 Apply any change with `foundry up` — it reconciles rather than recreating.
 
@@ -175,7 +176,7 @@ foundry policy check forge.example.com:22
 
 Anything you drop in the volume root is visible to the agent at the same path
 inside the sandbox — `overview.md`, `architecture.md`, coding standards, and
-the agent's own dotfolder (`.claude/`, `.ralph/`, `.kimi/`).
+the agent's own dotfolder (`.claude/`, `.codex/`, `.gemini/`).
 
 For context that should be available to *every* project, use the shared
 directory, which is mounted read-only into every sandbox:
