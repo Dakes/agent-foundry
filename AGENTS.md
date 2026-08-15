@@ -128,6 +128,20 @@ Rules, enforced by `./scripts/check-prompts.sh`:
 
 Full reasoning: `docs/PROMPT-ARCHITECTURE.md`.
 
+# Choosing a Language
+
+The CLI is bash. Two areas would be better in Python, and `TODO.md` records
+why: `lib/project.sh` / `lib/policy.sh` (JSON handling through `jq` string
+filters, which has shipped real bugs) and `scripts/test-prompt-lib.sh` (a
+hand-rolled harness that keeps breaking on shell mechanics).
+
+For new code: Python when the work is parsing, comparing or transforming
+structured data, or when it needs tests that assert on more than strings. Bash
+when it orchestrates processes, and always for anything under `templates/`,
+which runs inside a sandbox where only the image's tools exist.
+
+Do not rewrite working shell for its own sake.
+
 # Validation
 
 Run all four before committing:
