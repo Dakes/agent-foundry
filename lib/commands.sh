@@ -96,6 +96,27 @@ _project_memory() {
     printf '%s\n' "$memory"
 }
 
+# Apply the network rules this project's remotes need, and record them.
+#
+# Rules are scoped to the sandbox, and `sbx rm` takes a sandbox's scoped rules
+# with it - so a project that is removed and re-created loses them silently.
+# Both init and up call this, and both are idempotent.
+project_apply_network_rules() {
+    local name="$1" box="$2"
+
+    local -a resources=()
+    mapfile -t resources < <(project_policy_resources "$name")
+    [[ ${#resources[@]} -gt 0 ]] || return 0
+
+    log_info "Allowing ${#resources[@]} project network resource(s)"
+    policy_apply_rules "$box" "${resources[@]}" || return 1
+
+    # Record derived rules so every exception is reviewable in the config.
+    local json_rules
+    json_rules="$(printf '%s\n' "${resources[@]}" | jq -R . | jq -s .)"
+    project_set "$name" '.network.allow' "$json_rules" || return 1
+}
+
 # ============================================================================
 # init
 # ============================================================================
@@ -141,22 +162,12 @@ cmd_init() {
     # 2. Validate config before anything expensive happens.
     project_validate_config "$name" || return 1
 
-    # 3. Network policy: baseline, then the rules this project's remotes need.
-    #    Applied BEFORE the box is created so the first clone can succeed.
+    # 3. Host-wide network baseline. Project rules come after the sandbox
+    #    exists: they are scoped to it, and sbx rejects a scoped rule naming a
+    #    sandbox it cannot find. Ordering them the other way looked safer and
+    #    simply meant the rules were never added, which surfaced later as
+    #    "Could not resolve hostname" during the clone.
     policy_baseline || return 1
-
-    local -a resources=()
-    mapfile -t resources < <(project_policy_resources "$name")
-
-    if [[ ${#resources[@]} -gt 0 ]]; then
-        log_info "Allowing ${#resources[@]} project network resource(s)"
-        policy_apply_rules "$box" "${resources[@]}" || return 1
-
-        # Record derived rules so every exception is reviewable in the config.
-        local json_rules
-        json_rules="$(printf '%s\n' "${resources[@]}" | jq -R . | jq -s .)"
-        project_set "$name" '.network.allow' "$json_rules" || return 1
-    fi
 
     # 4. Create the sandbox.
     local image cpus memory shared
@@ -171,7 +182,11 @@ cmd_init() {
     sandbox_create "$box" "$image" "$cpus" "$memory" "$root" "$shared" "${specs[@]}" || return 1
     sandbox_start "$box" || return 1
 
-    # 5. Clone declared repositories inside the sandbox. This is the first real
+    # 5. Network rules for this project's remotes, now that there is a sandbox
+    #    to scope them to. Before the clone, which is what needs them.
+    project_apply_network_rules "$name" "$box" || return 1
+
+    # 6. Clone declared repositories inside the sandbox. This is the first real
     #    exercise of the SSH key and the network policy, and it happens before
     #    any agent runs.
     if [[ "$no_clone" == "true" ]]; then
@@ -253,7 +268,11 @@ cmd_up() {
         sandbox_publish "$FOUNDRY_BOX" "${specs[@]}" || return 1
     fi
 
-    # 3. Repos: clone anything declared but missing.
+    # 3. Network rules. Re-applied every up: they are scoped to the sandbox and
+    #    do not survive its removal, so a re-created box starts with none.
+    project_apply_network_rules "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" || return 1
+
+    # 4. Repos: clone anything declared but missing.
     project_fix_ssh_perms "$FOUNDRY_ROOT"
     project_clone_repos "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
 

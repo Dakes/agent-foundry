@@ -300,6 +300,14 @@ _project_seed_ssh_config() {
     cat > "$config" <<'EOF'
 # Agent Foundry - SSH configuration for this project's agent
 #
+# The first connection to a forge has no known_hosts entry, and a headless git
+# cannot answer the "continue connecting?" prompt - it just fails. accept-new
+# records an unknown host on first contact and still refuses a *changed* key,
+# which is the protection that matters once the entry exists.
+StrictHostKeyChecking accept-new
+UserKnownHostsFile ~/.ssh/known_hosts
+
+#
 # This directory is the agent's ~/.ssh inside the sandbox. Keys placed here
 # are used by git for clones, fetches and pushes.
 #
@@ -620,11 +628,15 @@ project_clone_repos() {
         if ! sandbox_exec "$box" "$root" \
             env GIT_TERMINAL_PROMPT=0 "${clone_cmd[@]}"; then
             log_error "Clone failed inside the sandbox: $url"
-            log_error "Common causes:"
-            log_error "  - No usable key in ${root}/.ssh (see the seeded config there)"
-            log_error "  - The forge host is not allowed by network policy"
-            log_error "    check with: foundry policy check <host>:22"
-            log_error "  - Wrong branch name"
+            log_error "Read the git error above first - it names the cause:"
+            log_error "  'Could not resolve hostname'  -> network policy, not DNS."
+            log_error "     The sandbox resolves only hosts it is allowed to reach."
+            log_error "     Fix: foundry policy allow <host> && foundry policy allow <host>:<port>"
+            log_error "  'Host key verification failed' -> no known_hosts entry."
+            log_error "     Fix: foundry up re-adds the accept-new setting to .ssh/config"
+            log_error "  'Permission denied (publickey)' -> the key is wrong or missing."
+            log_error "     Check ${root}/.ssh and that the public key is on the forge."
+            log_error "  'Repository not found' / 'couldn't find remote ref' -> wrong URL or branch."
             return 1
         fi
 
@@ -648,6 +660,25 @@ project_fix_ssh_perms() {
     [[ -d "$ssh_dir" ]] || return 0
 
     chmod 700 "$ssh_dir" 2>/dev/null || true
+
+    # Projects scaffolded before this setting existed have a config that
+    # cannot complete a first connection: headless git has no way to accept an
+    # unknown host key, so the clone fails with "Host key verification failed".
+    local cfg="${ssh_dir}/config"
+    if [[ -f "$cfg" ]] && ! grep -qi '^[[:space:]]*StrictHostKeyChecking' "$cfg"; then
+        log_info "Adding host-key policy to ${cfg}"
+        local tmp
+        tmp="$(mktemp)"
+        {
+            printf '# Added by Agent Foundry: a headless git cannot answer the\n'
+            printf '# "continue connecting?" prompt, so an unknown host is accepted on\n'
+            printf '# first contact. A *changed* key is still refused.\n'
+            printf 'StrictHostKeyChecking accept-new\n'
+            printf 'UserKnownHostsFile ~/.ssh/known_hosts\n\n'
+            cat "$cfg"
+        } > "$tmp" && mv "$tmp" "$cfg"
+        chmod 600 "$cfg"
+    fi
 
     local file
     for file in "$ssh_dir"/*; do

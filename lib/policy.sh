@@ -248,6 +248,12 @@ policy_check() {
 #   ssh://git@host:2222/org/repo -> host:2222
 #   https://host/org/repo.git    -> host       (evaluated against :443)
 #
+# A port-qualified rule is emitted together with the bare host, because the
+# sandbox resolver answers only for hosts that have a rule and a "host:2222"
+# rule does not satisfy it. Without the bare host, git fails with "Could not
+# resolve hostname" - which reads like broken DNS rather than a denied host,
+# and sends you looking in the wrong place entirely.
+#
 # Prints nothing for URLs with no network component (local paths).
 # Usage: resource="$(policy_resource_for_remote "$url")"
 policy_resource_for_remote() {
@@ -263,8 +269,12 @@ policy_resource_for_remote() {
             hostport="${hostport##*@}"
             if [[ "$hostport" == *:* ]]; then
                 printf '%s\n' "$hostport"
+                # The resolver needs the bare host too, or the name never
+                # resolves and the port rule is never reached.
+                printf '%s\n' "${hostport%%:*}"
             else
                 printf '%s:22\n' "$hostport"
+                printf '%s\n' "$hostport"
             fi
             ;;
         *://*)
@@ -275,12 +285,15 @@ policy_resource_for_remote() {
             rest="${rest%%/*}"
             rest="${rest##*@}"
             printf '%s\n' "$rest"
+            # Same resolver requirement as the ssh forms.
+            [[ "$rest" == *:* ]] && printf '%s\n' "${rest%%:*}"
             ;;
         *@*:*)
             # scp-style: user@host:org/repo.git
             local hostpart="${url#*@}"
             hostpart="${hostpart%%:*}"
             printf '%s:22\n' "$hostpart"
+            printf '%s\n' "$hostpart"
             ;;
         *)
             # Local path or unrecognized - nothing to allow.
