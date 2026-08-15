@@ -124,8 +124,6 @@ _agent_adapter_file() {
 
 init_watcher() {
     mkdir -p "$CONFIG_DIR" "$QUEUE_DIR"
-    ensure_processed_file_valid
-    ensure_retry_file_valid
     touch "$LOG_FILE"
 
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -143,6 +141,13 @@ init_watcher() {
     if ! source_watcher_helpers; then
         return 1
     fi
+
+    # After the helpers, which is where these two are defined. Calling them
+    # first left the state files uncreated: init_watcher runs inside an `if !`,
+    # which suspends set -e for the whole function, so "command not found" was
+    # reported on stderr - discarded under tmux - and the watcher carried on.
+    ensure_processed_file_valid
+    ensure_retry_file_valid
 
     if [[ "$WATCHER_ENABLED" != "true" ]]; then
         log_warn "Watcher is disabled in config (WATCHER_ENABLED=false)"
@@ -219,6 +224,21 @@ start_receiver() {
     fi
 
     log_error "Failed to start Forgejo receiver"
+
+    # The receiver logs its own reason - a missing socat, a port already
+    # taken - and dies. Without this the watcher only ever reported that it
+    # failed, which says nothing about what to fix.
+    local receiver_log="$CONFIG_DIR/receiver.log"
+    if [[ -f "$receiver_log" ]]; then
+        local line
+        while IFS= read -r line; do
+            log_error "  ${line#*] }"
+        done < <(grep -i 'error' "$receiver_log" 2>/dev/null | tail -n 3)
+    else
+        log_error "  It wrote no log, so it died before it could start:"
+        log_error "  check that socat is installed in the image."
+    fi
+
     return 1
 }
 
