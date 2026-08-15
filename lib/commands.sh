@@ -935,7 +935,7 @@ cmd_watcher() {
                 return 0
             fi
             sandbox_exec "$FOUNDRY_BOX" "$FOUNDRY_ROOT" \
-                /opt/foundry/forgejo/forgejo_watcher.sh status
+                "$WATCHER_SCRIPT" status
             ;;
         logs)
             local log="${FOUNDRY_ROOT}/.config/forgejo-watcher/watcher.log"

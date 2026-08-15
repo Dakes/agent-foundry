@@ -12,6 +12,11 @@
 # by hand is pointless. The watcher's own state - processed events, retries,
 # the queue - is never touched from the host.
 
+# Where the watcher lives inside the sandbox.
+WATCHER_DIR="${WATCHER_DIR:-/opt/foundry/forgejo}"
+WATCHER_SCRIPT="${WATCHER_DIR}/forgejo_watcher.sh"
+WATCHER_HOOK_MANAGER="${WATCHER_DIR}/forgejo_hook_manager.sh"
+
 # Directory the watcher reads, expressed as a host path into the volume root.
 # Inside the sandbox the same directory is ~/.config/forgejo-watcher, because
 # the agent's home is that volume root.
@@ -204,11 +209,23 @@ watcher_start() {
         return 0
     fi
 
+    # The watcher ships in the image. An image built before it did leaves tmux
+    # starting a script that is not there: the session dies instantly and the
+    # log the failure would be in is never created, so the only symptom is a
+    # dead session and a path that does not exist.
+    if ! sandbox_exec "$box" "$root" \
+        test -x "$WATCHER_SCRIPT" 2>/dev/null; then
+        log_error "This sandbox's image has no watcher (${WATCHER_SCRIPT} is missing)"
+        log_error "  It predates watcher support. Rebuild and re-create:"
+        log_error "    foundry image build"
+        log_error "    foundry rm ${name} && foundry init ${name}"
+        return 1
+    fi
+
     # tmux keeps the loop alive after this exec returns; the watcher starts the
     # receiver in a second session once its config validates.
     if ! sandbox_exec "$box" "$root" \
-        tmux new-session -d -s forgejo-watcher \
-        "/opt/foundry/forgejo/forgejo_watcher.sh start"; then
+        tmux new-session -d -s forgejo-watcher "$WATCHER_SCRIPT start"; then
         log_error "Could not start the watcher session"
         return 1
     fi
@@ -219,7 +236,24 @@ watcher_start() {
     sleep 2
     if ! watcher_is_running "$box" "$root"; then
         log_error "Watcher exited immediately after starting"
-        log_error "  Check ${root}/.config/forgejo-watcher/watcher.log"
+
+        # Say what happened rather than naming a log. The watcher logs to a
+        # file, but everything that kills it before that file exists - a
+        # missing helper, an unreadable config - leaves nothing to read, and
+        # pointing at an absent path is worse than no advice at all.
+        local out
+        out="$(sandbox_exec "$box" "$root" "$WATCHER_SCRIPT" start 2>&1 | tail -n 5)"
+        if [[ -n "$out" ]]; then
+            local line
+            while IFS= read -r line; do
+                log_error "  ${line}"
+            done <<< "$out"
+        fi
+
+        local log="${root}/.config/forgejo-watcher/watcher.log"
+        if [[ -f "$log" ]]; then
+            log_error "  Full log: ${log}"
+        fi
         return 1
     fi
 
@@ -235,7 +269,7 @@ watcher_stop() {
 
     sandbox_is_running "$box" || return 0
     sandbox_exec "$box" "$root" \
-        /opt/foundry/forgejo/forgejo_watcher.sh stop >/dev/null 2>&1 || true
+        "$WATCHER_SCRIPT" stop >/dev/null 2>&1 || true
     return 0
 }
 
@@ -260,5 +294,5 @@ watcher_hooks() {
     watcher_write_config "$name" "$root" || return 1
 
     sandbox_exec "$box" "$root" \
-        /opt/foundry/forgejo/forgejo_hook_manager.sh "$action"
+        "$WATCHER_HOOK_MANAGER" "$action"
 }
