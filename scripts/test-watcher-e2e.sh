@@ -28,8 +28,33 @@ cd "$ROOT_DIR" || exit 1
 
 BOX="foundry-e2e-watcher"
 IMAGE="foundry-agent:e2e"
-PORT="${FOUNDRY_E2E_PORT:-9174}"
 WORK="$(mktemp -d)"
+
+# A free port, not a fixed one: the obvious choice (9174) is a port real
+# projects publish, so running this on a host with a project up failed on a
+# collision that had nothing to do with the watcher.
+pick_free_port() {
+    local port attempt
+    for attempt in $(seq 1 50); do
+        port=$(( 20000 + RANDOM % 30000 ))
+        if command -v ss >/dev/null 2>&1; then
+            ss -lnt 2>/dev/null | grep -q ":${port} " && continue
+        fi
+        # Nothing may hold it on the host, and no sandbox may publish it.
+        sbx ls 2>/dev/null | grep -q ":${port}->" && continue
+        (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null && { exec 3>&- 2>/dev/null; continue; }
+        printf '%s\n' "$port"
+        return 0
+    done
+    return 1
+}
+
+if [[ -n "${FOUNDRY_E2E_PORT:-}" ]]; then
+    PORT="$FOUNDRY_E2E_PORT"
+elif ! PORT="$(pick_free_port)"; then
+    echo "could not find a free port; set FOUNDRY_E2E_PORT" >&2
+    exit 1
+fi
 
 PASS=0
 FAIL=0
@@ -48,11 +73,22 @@ trap cleanup EXIT
 command -v sbx >/dev/null || { echo "sbx is required" >&2; exit 1; }
 
 echo "== building $IMAGE (minutes)"
-docker build -f docker/foundry-agent.Dockerfile \
+# Keep the output: a swallowed build error leaves "build failed" and nothing
+# to act on, which is exactly the shape of bug this script exists to catch.
+if ! docker build -f docker/foundry-agent.Dockerfile \
     --build-arg "AGENT_UID=$(id -u)" --build-arg "AGENT_GID=$(id -g)" \
-    -t "$IMAGE" . >/dev/null 2>&1 || { echo "build failed" >&2; exit 1; }
+    -t "$IMAGE" . > "$WORK/build.log" 2>&1; then
+    echo "build failed:" >&2
+    tail -20 "$WORK/build.log" >&2
+    exit 1
+fi
+
 docker save "$IMAGE" -o "$WORK/img.tar" >/dev/null 2>&1
-sbx template load "$WORK/img.tar" >/dev/null 2>&1 || { echo "template load failed" >&2; exit 1; }
+if ! sbx template load "$WORK/img.tar" > "$WORK/load.log" 2>&1; then
+    echo "template load failed:" >&2
+    tail -10 "$WORK/load.log" >&2
+    exit 1
+fi
 
 export FOUNDRY_BASE="$ROOT_DIR"
 # shellcheck source=../lib/utils.sh
@@ -80,9 +116,14 @@ jq --arg p "$PORT" '.agent="claude-goal" | .watcher={kind:"forgejo",
     token_file:"secrets/forgejo-token.txt", public_url:"http://localhost"}' \
     "$root/foundry.json" > "$root/t" && mv "$root/t" "$root/foundry.json"
 
-echo "== starting sandbox"
+echo "== starting sandbox on port $PORT"
 sbx rm --force "$BOX" >/dev/null 2>&1
-sandbox_create "$BOX" "$IMAGE" "" "" "$root" "" "0.0.0.0:${PORT}:${PORT}" >/dev/null 2>&1
+if ! sandbox_create "$BOX" "$IMAGE" "" "" "$root" "" "0.0.0.0:${PORT}:${PORT}" \
+        > "$WORK/create.log" 2>&1; then
+    echo "could not create the sandbox:" >&2
+    tail -10 "$WORK/create.log" >&2
+    exit 1
+fi
 sandbox_start "$BOX" >/dev/null 2>&1
 sandbox_link_home "$BOX" "$root" >/dev/null 2>&1
 
