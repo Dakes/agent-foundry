@@ -261,6 +261,18 @@ project_validate_config() {
     local root
     root="$(project_root "$name")"
 
+    # A privileged host port cannot be bound without extra daemon privileges,
+    # and sbx reports it as a 403 from the port mapper - which reads like a
+    # policy denial rather than "pick a higher number".
+    local wport
+    wport="$(project_get "$name" '.watcher.port' "")"
+    if [[ -n "$wport" && "$wport" =~ ^[0-9]+$ ]] && [[ "$wport" -gt 0 ]] && [[ "$wport" -lt 1024 ]]; then
+        log_error "Watcher port ${wport} is privileged and cannot be published"
+        log_error "Set .watcher.port to 1024 or above in ${cfg}"
+        log_error "  e.g. 9100, and point the forge webhook at that port"
+        return 1
+    fi
+
     local token_file
     token_file="$(project_get "$name" '.watcher.token_file' "")"
     if [[ -n "$token_file" ]]; then
@@ -733,6 +745,8 @@ project_publish_specs() {
     port="$(project_get "$name" '.watcher.port' "")"
 
     if [[ -n "$port" && "$port" != "0" ]]; then
+        # 0.0.0.0 rather than loopback: a forge on another host has to reach
+        # the receiver, which is the whole point of publishing it.
         printf '0.0.0.0:%s:%s\n' "$port" "$port"
     fi
 

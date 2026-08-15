@@ -220,6 +220,40 @@ sandbox_is_running() {
 # LIFECYCLE
 # ============================================================================
 
+# Make sure the image is in the sandbox runtime's store before creating a box.
+#
+# The runtime keeps its own image store, separate from the local docker daemon,
+# and `sbx reset` empties it - so an image built earlier disappears and
+# `sbx create -t` tries to *pull* the tag, failing with "403 Forbidden: pull
+# failed", which reads like an authentication problem rather than a missing
+# local image. If docker still has it, re-import rather than making the user
+# rebuild.
+#
+# Usage: sandbox_ensure_image <tag>
+sandbox_ensure_image() {
+    local tag="$1"
+    [[ -n "$tag" ]] || return 0
+
+    # Already known to the runtime?
+    local repo want_tag
+    repo="${tag%:*}"
+    want_tag="${tag##*:}"
+    if "$SBX_BIN" template ls 2>/dev/null \
+        | awk -v r="$repo" -v t="$want_tag" '
+            $1 ~ r"$" && $2 == t { found = 1 } END { exit !found }'; then
+        return 0
+    fi
+
+    if ! check_command docker || ! docker image inspect "$tag" >/dev/null 2>&1; then
+        log_error "Image not available to the sandbox runtime: $tag"
+        log_error "Build it first:  foundry image build"
+        return 1
+    fi
+
+    log_info "Image missing from the sandbox runtime; re-importing $tag"
+    sandbox_load_image "$tag"
+}
+
 # Create a sandbox for a project.
 #
 # Usage: sandbox_create <name> <image> <cpus> <memory> <volume_root> \
@@ -256,6 +290,8 @@ sandbox_create() {
         log_debug "Sandbox already exists: $name"
         return 0
     fi
+
+    sandbox_ensure_image "$image" || return 1
 
     local -a args=(create shell --name "$name")
 

@@ -77,7 +77,11 @@ $EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
   a bare number is read as MiB. Empty means "let the sandbox decide".
 - `network.allow` — rules derived from your remotes are written back here by
   `init`, so every exception is visible in a diff. You can add your own.
-- `watcher.kind` / `watcher.port` / `watcher.token_file` — forge watcher
+- `watcher.port` — the receiver port, published as `0.0.0.0:<port>:<port>` so
+  the forge can reach it. Must be **1024 or above**: binding a privileged port
+  needs daemon privileges the sandbox runtime does not have, and it fails as a
+  403 from the port mapper.
+- `watcher.kind` / `watcher.token_file` — forge watcher
   config. **Not yet ported to the sandbox transport**; the port is published
   but nothing listens on it.
 
