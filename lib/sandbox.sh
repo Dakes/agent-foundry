@@ -432,6 +432,87 @@ sandbox_load_image() {
 # EXECUTION
 # ============================================================================
 
+# The agent's home inside the sandbox.
+#
+# A normal Linux home, symlinked at the project's volume root. sbx mounts a
+# workspace at its host path and offers no way to remap it, so the volume lands
+# on ~/.local/share/foundry/volumes/<project> - a long, unfamiliar place for an
+# agent to live. The agent is the one working in these paths; the host path
+# stays valid for the human, since both names reach the same files.
+#
+# The link also fixes ssh, which is why it exists at all: OpenSSH resolves
+# ~/.ssh from the passwd entry, not from $HOME. Without a passwd home that
+# reaches the volume root, ssh reads /home/agent/.ssh - empty - and neither the
+# config, the keys nor known_hosts are ever seen. That surfaces as
+# "Host key verification failed" or "Permission denied (publickey)" while the
+# files sit in plain view.
+sandbox_home() {
+    printf '%s\n' "${FOUNDRY_SANDBOX_HOME:-/home/agent}"
+}
+
+# Script run inside the sandbox to point the home at the volume root.
+# $1 = home, $2 = volume root.
+# shellcheck disable=SC2016  # deliberately unexpanded: these are the inner shell's args
+_FOUNDRY_LINK_HOME='
+set -e
+home="$1"
+root="$2"
+
+if [ -L "$home" ] && [ "$(readlink "$home")" = "$root" ]; then
+    exit 0
+fi
+
+if [ -L "$home" ]; then
+    rm -f "$home"
+elif [ -d "$home" ]; then
+    # sbx puts its own files here - a .gitconfig among them - and useradd
+    # copies /etc/skel. Carry anything across that the volume root does not
+    # already have, so replacing the directory loses nothing, then require it
+    # to be empty: whatever is left is unexpected and worth stopping for.
+    for entry in "$home"/* "$home"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        base=$(basename "$entry")
+        if [ ! -e "$root/$base" ]; then
+            mv "$entry" "$root/$base"
+        else
+            rm -rf "$entry"
+        fi
+    done
+    rmdir "$home" 2>/dev/null || {
+        echo "refusing to replace non-empty $home" >&2
+        exit 1
+    }
+fi
+
+mkdir -p "$(dirname "$home")"
+ln -sfn "$root" "$home"
+'
+
+# Point the sandbox home at the volume root.
+#
+# Idempotent, and careful with the image is own /home/agent: a directory left by
+# useradd is empty and gets replaced, while one holding anything is kept.
+#
+# Usage: sandbox_link_home <name> <root>
+sandbox_link_home() {
+    local name="$1" root="$2"
+    local home
+    home="$(sandbox_home)"
+
+    [[ -n "$name" && -n "$root" ]] || return 0
+    [[ "$home" == "$root" ]] && return 0
+
+    if ! sandbox_exec_root "$name" / sh -c "$_FOUNDRY_LINK_HOME" -- "$home" "$root"; then
+        log_error "Could not point ${home} at the volume root"
+        log_error "  ssh reads ~/.ssh from the passwd entry, so git will not see"
+        log_error "  the project's keys until this works."
+        return 1
+    fi
+
+    log_debug "Sandbox home ${home} -> ${root}"
+    return 0
+}
+
 # The user commands run as inside the sandbox.
 #
 # This is the host user's numeric UID, not root. Everything the agent writes
@@ -458,7 +539,9 @@ sandbox_exec() {
         return 1
     fi
 
-    "$SBX_BIN" exec -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
+    local box_home
+    box_home="$(sandbox_home)"
+    "$SBX_BIN" exec -u "$(sandbox_user)" -e "HOME=${box_home}" -w "$box_home" "$name" "$@"
 }
 
 # Same, with a TTY attached (interactive shells, tmux attach).
@@ -468,7 +551,9 @@ sandbox_exec_tty() {
     local home="$2"
     shift 2
 
-    "$SBX_BIN" exec -it -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
+    local box_home
+    box_home="$(sandbox_home)"
+    "$SBX_BIN" exec -it -u "$(sandbox_user)" -e "HOME=${box_home}" -w "$box_home" "$name" "$@"
 }
 
 # Run a command detached inside the sandbox.
@@ -478,7 +563,9 @@ sandbox_exec_detached() {
     local home="$2"
     shift 2
 
-    "$SBX_BIN" exec -d -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
+    local box_home
+    box_home="$(sandbox_home)"
+    "$SBX_BIN" exec -d -u "$(sandbox_user)" -e "HOME=${box_home}" -w "$box_home" "$name" "$@"
 }
 
 # Run a command as root inside the sandbox (package installs, chown).

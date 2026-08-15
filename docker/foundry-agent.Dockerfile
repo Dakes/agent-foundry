@@ -170,7 +170,12 @@ RUN set -eux; \
     if ! getent group "${AGENT_GID}" >/dev/null; then \
         groupadd -g "${AGENT_GID}" "${AGENT_USER}"; \
     fi; \
-    useradd -m -u "${AGENT_UID}" -g "${AGENT_GID}" -s /bin/bash "${AGENT_USER}"; \
+    # No -m: the home is created at runtime as a symlink to the project's
+    # volume root, so the agent lives in a normal /home/agent while its files
+    # are the ones on the host. A real directory here would be in the way, and
+    # ssh - which resolves ~ from the passwd entry, not $HOME - would read it
+    # instead of the project's .ssh.
+    useradd -M -d "/home/${AGENT_USER}" -u "${AGENT_UID}" -g "${AGENT_GID}" -s /bin/bash "${AGENT_USER}"; \
     apt-get update && apt-get install -y --no-install-recommends sudo; \
     rm -rf /var/lib/apt/lists/*; \
     echo "${AGENT_USER} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${AGENT_USER}"; \
@@ -180,7 +185,9 @@ USER ${AGENT_USER}
 
 # HOME is set per-exec by Foundry to the mounted volume root; this is only the
 # fallback for a bare shell.
-WORKDIR /home/${AGENT_USER}
+# The real working directory is the volume root, mounted at runtime and linked
+# from /home/${AGENT_USER}; this is only the fallback for a bare shell.
+WORKDIR /
 
 LABEL org.opencontainers.image.title="Agent Foundry sandbox" \
       org.opencontainers.image.description="Sandbox image for Agent Foundry projects" \

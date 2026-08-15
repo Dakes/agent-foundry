@@ -182,6 +182,10 @@ cmd_init() {
     sandbox_create "$box" "$image" "$cpus" "$memory" "$root" "$shared" "${specs[@]}" || return 1
     sandbox_start "$box" || return 1
 
+    # The agent's home is a symlink at the volume root. ssh needs it before the
+    # clone: it reads ~/.ssh from the passwd entry, not from HOME.
+    sandbox_link_home "$box" "$root" || return 1
+
     # 5. Network rules for this project's remotes, now that there is a sandbox
     #    to scope them to. Before the clone, which is what needs them.
     #
@@ -262,6 +266,7 @@ cmd_up() {
     fi
 
     sandbox_start "$FOUNDRY_BOX" || return 1
+    sandbox_link_home "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
 
     # 2. Ports. Mappings persist for the sandbox's lifetime, so this
     #    reconciles instead of republishing: a second up would otherwise fail
@@ -438,6 +443,7 @@ cmd_shell() {
         log_info "Sandbox is stopped; starting it"
         sandbox_start "$FOUNDRY_BOX" || return 1
     fi
+    sandbox_link_home "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
 
     if [[ "$use_ssh" == "true" ]]; then
         if ! check_command ssh; then

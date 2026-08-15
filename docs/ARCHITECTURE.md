@@ -35,6 +35,16 @@ polluting the host, while the files they produce stay ordinary host files.
   copy-in/copy-out layer the VM backend needed.
 - Runs as an unprivileged user whose UID/GID match the host user's, so files
   written into the mount stay editable on the host.
+- That user's home is `/home/agent`, a symlink to the project's volume root.
+  The agent gets an ordinary Linux home; the host keeps the real path. Both
+  names reach the same files.
+
+The symlink is not cosmetic. OpenSSH resolves `~/.ssh` from the passwd entry
+rather than from `$HOME` — deliberately, so a manipulated environment cannot
+redirect which keys are used. Without a passwd home that reaches the volume
+root, ssh reads an empty `/home/agent/.ssh`, ignores the project's config, keys
+and `known_hosts`, and git fails with `Host key verification failed` or
+`Permission denied (publickey)` while the files sit in plain view.
 
 ## The Agent Image
 
