@@ -562,6 +562,10 @@ _logs_sources() {
             ;;&
         watcher|all)
             printf 'watcher\t%s\n' "${wdir}/watcher.log"
+            # The supervisor's own log: it records the sandbox being restarted
+            # and the watcher being restarted, neither of which the watcher
+            # can log itself because it is the thing that died.
+            printf 'supervisor\t%s\n' "${wdir}/supervisor.log"
             ;;&
         agent|all)
             # The run the watcher starts logs here; a manually started agent

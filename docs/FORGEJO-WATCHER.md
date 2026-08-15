@@ -24,9 +24,27 @@ Webhooks, not polling — events arrive as they happen:
 6. The agent works, pushes, opens a pull request, and the watcher posts the
    result back as a comment.
 
-Two tmux sessions inside the sandbox carry this: `forgejo-receiver` (the
-listener) and `foundry-work` (the agent run). `forgejo-watcher` is the loop
-itself.
+Inside the sandbox, `forgejo-receiver` is the listener and `foundry-work` is
+the agent run. The watcher loop itself runs as a **foreground exec held open
+from the host** - see below.
+
+### Why a host-side supervisor
+
+sbx stops a sandbox about a minute after the last exec returns, and what runs
+*inside* does not count as activity: a detached session holds nothing open. A
+watcher waiting for webhooks is idle by definition, so running it inside and
+letting go meant the sandbox stopped underneath it - and the forge got
+"connection refused" from a project that looked perfectly up.
+
+So `foundry up` starts a small supervisor on the host
+(`.config/forgejo-watcher/supervisor.sh`). It keeps one exec in the foreground,
+which is what holds the sandbox open, and restarts the watcher - and the
+sandbox - if either stops. It is detached with `setsid`, so it survives the
+command finishing and the terminal closing. Its pid is in `supervisor.pid`,
+its log in `supervisor.log`, and `foundry watcher status` reports on it.
+
+Five quick failures in a row and it gives up rather than restarting a broken
+config forever; the reason is in `supervisor.log`.
 
 **One task at a time.** New events queue until the current run finishes.
 
@@ -93,6 +111,25 @@ appended when missing:
 The path matters: the receiver answers `POST /webhook` and refuses everything
 else, so a hook registered without it delivers successfully from Forgejo's
 point of view and is rejected on arrival.
+
+### When the forge runs in a container
+
+`localhost` then means *the forge's own container*, not your host, and the
+webhook fails with `connection refused` even though the receiver is fine. Use
+the address the container reaches the host on - its default gateway:
+
+```bash
+docker compose exec forgejo sh -c 'ip route | grep default'   # -> default via 172.22.0.1
+```
+
+Then `"public_url": "http://172.22.0.1:9174/webhook"`. On a compose stack with
+several networks those subnets can renumber when the stack is recreated; adding
+`extra_hosts: ["host.docker.internal:host-gateway"]` to the forge service and
+using `http://host.docker.internal:9174/webhook` survives that.
+
+Prefer an IP to `localhost` in general: the receiver listens on IPv4, and
+`localhost` can resolve to `::1`, which fails with `dial tcp [::1]` even when
+nothing is containerized.
 
 ### Generated config
 
@@ -201,7 +238,8 @@ Under `<volume root>/.config/forgejo-watcher/`:
 | `retries.json` | rate-limit backoff |
 | `queue/` | validated events waiting their turn |
 | `current_task.json`, `current_context.json` | the run in flight |
-| `watcher.log`, `receiver.log` | logs |
+| `supervisor.sh`, `supervisor.pid` | the host-side supervisor |
+| `watcher.log`, `receiver.log`, `supervisor.log` | logs |
 
 Because the volume root is a host directory, all of this survives the sandbox
 being stopped, recreated, or rebuilt — which is what makes "already processed"

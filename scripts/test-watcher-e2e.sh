@@ -174,6 +174,24 @@ else
     fail "only the signed event was processed"
 fi
 
+# sbx stops a sandbox about a minute after the last exec returns, and what
+# runs inside does not count as activity. A watcher waiting for webhooks is
+# idle by definition, so it used to take the whole sandbox down with it and
+# the forge got "connection refused" from a project that looked up. Nothing
+# else here notices: every check above passes in the first few seconds.
+echo "== surviving the idle window (about 80s)"
+sleep 80
+
+if [[ "$(sbx ls 2>/dev/null | awk -v b="$BOX" '$1==b{print $3}')" == "running" ]]; then
+    pass "sandbox still running after the idle window"
+else
+    fail "sandbox stopped while the watcher was idle"
+fi
+
+[[ "$(post "$sig")" == "200" ]] \
+    && pass "receiver still answers after the idle window" \
+    || fail "receiver still answers after the idle window"
+
 echo
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

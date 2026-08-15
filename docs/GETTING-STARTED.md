@@ -244,17 +244,24 @@ Add to `foundry.json`:
     "trigger_keyword": "@mybot",
     "watched_repos": ["you/backend"],
     "token_file": "secrets/forgejo-token.txt",
-    "public_url": "http://localhost"
+    "public_url": "http://172.17.0.1"
   }
 }
 ```
 
 - **`receiver_port`** is the port the watcher *listens on* — what Forgejo
   POSTs **to**, not a port it talks to. It must be 1024 or above.
-- **`public_url`** is that receiver as **Forgejo sees it**. On the same
-  machine as your forge, `http://localhost` is right. The receiver port and
-  the `/webhook` path are appended for you, so this becomes
-  `http://localhost:9174/webhook`.
+- **`public_url`** is that receiver as **Forgejo sees it**. The receiver port
+  and the `/webhook` path are appended for you.
+  - Forge on the same host, not containerized: `http://127.0.0.1`
+  - **Forge in a container** (compose, the common case): its `localhost` is
+    itself, so use the container's default gateway -
+    `docker compose exec forgejo sh -c 'ip route | grep default'` - e.g.
+    `http://172.22.0.1`
+  - Forge on another machine: this host's LAN IP
+
+  Use an IP rather than `localhost`: the receiver listens on IPv4, and
+  `localhost` can resolve to `::1`.
 - **`trigger_keyword`** is what people type to summon the agent.
 
 Then:
@@ -284,7 +291,7 @@ Forgejo**, then:
 
 | Field | Value |
 |---|---|
-| Target URL | `http://localhost:9174/webhook` (your `public_url`, port and path included) |
+| Target URL | your `public_url` with port and path, e.g. `http://172.22.0.1:9174/webhook` |
 | HTTP Method | `POST` |
 | POST Content Type | `application/json` |
 | Secret | the contents of `.config/forgejo-watcher/webhook-secret` in the volume root |
