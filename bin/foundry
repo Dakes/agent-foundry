@@ -103,12 +103,16 @@ COMMANDS:
     down [project]      Stop agent and sandbox, keeping all state
     status [project]    Sandbox, agent, repos, ports and policy; no project
                         lists everything
-    logs [project]      Tail agent logs (-f to follow, --watcher for watcher)
+    logs [project]      Agent, watcher and receiver logs together, each line
+                        tagged with its source (-f follows; --agent,
+                        --watcher, --receiver narrow it; -n sets the lines)
     attach [project]    Attach to the agent's tmux session
     shell [project]     Shell inside the sandbox (--ssh to use ssh)
     rm [project]        Remove the sandbox; the volume root is kept
     doctor [project]    Check host, policy, ports and keys (--fix repairs)
 
+    watcher <action>    start | stop | restart | status | logs |
+                        register | unregister | list
     policy <action>     baseline | allow | deny | check | ls
     image <action>      build | push
     config <action>     get | set | edit | show
@@ -125,7 +129,7 @@ EXAMPLES:
     $EDITOR ~/.local/share/foundry/volumes/pocetude/.ssh/config
     foundry up                            # from inside the project
     foundry status
-    foundry logs -f
+    foundry logs -f                       # agent + watcher + receiver
     foundry shell
 
 Documentation:
@@ -291,7 +295,7 @@ main() {
         *)
             log_error "Unknown domain: $domain"
             echo ""
-            echo "Commands: init, up, down, status, logs, attach, shell, rm, doctor, policy, image, config"
+            echo "Commands: init, up, down, status, logs, attach, shell, rm, doctor, watcher, policy, image, config"
             echo "Run 'foundry --help' for usage"
             exit 1
             ;;

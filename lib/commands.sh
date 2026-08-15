@@ -497,24 +497,56 @@ cmd_attach() {
     sandbox_exec_tty "$FOUNDRY_BOX" "$FOUNDRY_ROOT" tmux attach -t "$session"
 }
 
+# Every log a project writes, as "label<TAB>path" lines.
+#
+# A watcher-driven run spreads itself over three files - the watcher decides,
+# the receiver takes the request, the agent does the work - so following one
+# of them shows a third of the story. They are listed in the order a request
+# passes through them.
+_logs_sources() {
+    local name="$1" root="$2" which="$3"
+
+    local agent agent_log
+    agent="$(project_get "$name" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
+    agent_log="$(agent_log_file "$agent" "$root" 2>/dev/null || true)"
+
+    local wdir="${root}/.config/forgejo-watcher"
+
+    case "$which" in
+        receiver|all)
+            printf 'receiver\t%s\n' "${wdir}/receiver.log"
+            ;;&
+        watcher|all)
+            printf 'watcher\t%s\n' "${wdir}/watcher.log"
+            ;;&
+        agent|all)
+            # The run the watcher starts logs here; a manually started agent
+            # logs to its own file. Both are "the agent" to the reader.
+            printf 'agent\t%s\n' "${root}/logs/agent-watcher.log"
+            [[ -n "$agent_log" ]] && printf 'agent\t%s\n' "$agent_log"
+            ;;
+    esac
+}
+
 cmd_logs() {
     local name="${1:-}"
     [[ "$name" == -* ]] && name=""
     [[ -n "$name" ]] && shift
 
     local follow=false
-    local watcher=false
+    local which="all"
+    local lines=200
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -f|--follow)
-                follow=true
-                ;;
-            --watcher)
-                watcher=true
-                ;;
+            -f|--follow)   follow=true ;;
+            --watcher)     which="watcher" ;;
+            --receiver)    which="receiver" ;;
+            --agent)       which="agent" ;;
+            -n)            shift; lines="${1:-200}" ;;
             *)
                 log_error "Unknown option for 'foundry logs': $1"
+                echo "Options: -f, -n <lines>, --agent, --watcher, --receiver" >&2
                 return 1
                 ;;
         esac
@@ -524,30 +556,65 @@ cmd_logs() {
     _resolve_existing "$name" || return 1
 
     # Logs are files in the volume root: read them on the host, no exec needed.
-    local log_file
-    if [[ "$watcher" == "true" ]]; then
-        log_file="$(find "$FOUNDRY_ROOT/logs" -maxdepth 1 -name '*watcher*.log' 2>/dev/null | head -1)"
-    else
-        local agent
-        agent="$(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
-        log_file="$(agent_log_file "$agent" "$FOUNDRY_ROOT" 2>/dev/null || true)"
-    fi
+    local -a labels=() paths=()
+    local label path
+    while IFS=$'\t' read -r label path; do
+        [[ -n "$path" ]] || continue
+        labels+=("$label")
+        paths+=("$path")
+    done < <(_logs_sources "$FOUNDRY_PROJECT" "$FOUNDRY_ROOT" "$which")
 
-    if [[ -z "$log_file" || ! -f "$log_file" ]]; then
-        log_error "No log file found${log_file:+: $log_file}"
-        log_error "Looked under: ${FOUNDRY_ROOT}/logs"
-        if [[ "$watcher" == "true" ]]; then
-            log_error "Watchers do not run on the sandbox transport yet, so"
-            log_error "no watcher log exists - see 'foundry up' for details."
+    # Only complain when nothing exists at all: a project without a watcher
+    # legitimately has no watcher log, and a fresh one has no agent log yet.
+    local -a present=() present_labels=()
+    local i
+    for i in "${!paths[@]}"; do
+        if [[ -f "${paths[$i]}" ]]; then
+            present+=("${paths[$i]}")
+            present_labels+=("${labels[$i]}")
         fi
-        return 1
+    done
+
+    if [[ ${#present[@]} -eq 0 ]]; then
+        if [[ "$follow" != "true" ]]; then
+            log_error "No logs yet for '${FOUNDRY_PROJECT}'"
+            log_error "  Looked for: $(printf '%s ' "${paths[@]}")"
+            return 1
+        fi
+        log_warn "No logs yet; waiting for them to appear"
     fi
 
-    if [[ "$follow" == "true" ]]; then
-        tail -f "$log_file"
-    else
-        tail -n 200 "$log_file"
+    if [[ "$follow" != "true" ]]; then
+        for i in "${!present[@]}"; do
+            # One source needs no prefix; several do, or the reader cannot
+            # tell the watcher's decision from the agent's output.
+            if [[ ${#present[@]} -eq 1 ]]; then
+                tail -n "$lines" "${present[$i]}"
+            else
+                printf '\n=== %s (%s)\n' "${present_labels[$i]}" "${present[$i]}"
+                tail -n "$lines" "${present[$i]}"
+            fi
+        done
+        return 0
     fi
+
+    # Follow every source at once, each line tagged with where it came from.
+    # tail -F rather than -f: the watcher and agent logs are created when work
+    # first arrives, and a follow started before that should pick them up
+    # rather than sit silent forever.
+    local -a pids=()
+    # Ctrl-C must take the tails with it; without this they survive the
+    # command and keep writing into the next prompt.
+    # shellcheck disable=SC2154  # _p is the trap's own loop variable
+    trap 'for _p in "${pids[@]}"; do kill "$_p" 2>/dev/null; done' INT TERM EXIT
+
+    for i in "${!paths[@]}"; do
+        tail -n "$lines" -F "${paths[$i]}" 2>/dev/null \
+            | sed -u "s/^/[${labels[$i]}] /" &
+        pids+=("$!")
+    done
+
+    wait
 }
 
 # ============================================================================
