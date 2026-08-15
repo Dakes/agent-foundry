@@ -263,15 +263,16 @@ cmd_up() {
 
     sandbox_start "$FOUNDRY_BOX" || return 1
 
-    # 2. Ports. Mappings do not survive a restart, so they are re-applied on
-    #    every up. Without this a watcher comes back deaf after a restart.
+    # 2. Ports. Mappings persist for the sandbox's lifetime, so this
+    #    reconciles instead of republishing: a second up would otherwise fail
+    #    with 409, and a changed port would leave the old one behind.
     local -a specs=()
     mapfile -t specs < <(project_publish_specs "$FOUNDRY_PROJECT")
 
-    if [[ ${#specs[@]} -gt 0 ]]; then
-        log_info "Publishing ${#specs[@]} port mapping(s)"
-        sandbox_publish "$FOUNDRY_BOX" "${specs[@]}" || return 1
-    fi
+    # Reconcile rather than publish: mappings outlive a restart, so a second
+    # `up` would otherwise fail with "already published", and a changed port
+    # would leave the old one behind.
+    sandbox_sync_ports "$FOUNDRY_BOX" "${specs[@]:-}" || return 1
 
     # 3. Network rules. Re-applied every up: they are scoped to the sandbox and
     #    do not survive its removal, so a re-created box starts with none.
@@ -747,7 +748,7 @@ cmd_doctor() {
                 echo "  ok     receiver port $port published (forge -> sandbox)"
             else
                 echo "  FAIL   receiver port $port is NOT published"
-                echo "         port mappings do not survive a restart - run: foundry up $name"
+                echo "         publish it with: foundry up $name"
                 failures=$((failures + 1))
             fi
         fi

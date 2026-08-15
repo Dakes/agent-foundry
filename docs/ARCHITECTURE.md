@@ -69,8 +69,10 @@ proxy.
   loopback inside the sandbox is unaffected.
 
 Ports the outside world must reach (a webhook receiver) are published
-explicitly. Port mappings do **not** survive a sandbox restart, which is why
-`foundry up` re-applies them every time.
+explicitly. Mappings persist for the sandbox's lifetime, so `foundry up`
+reconciles them: it publishes what is missing and unpublishes what the config
+no longer asks for. Re-publishing an existing mapping is an error, not a
+no-op.
 
 ## Volume Root Structure
 

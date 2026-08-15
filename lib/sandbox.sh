@@ -497,8 +497,8 @@ sandbox_exec_root() {
 
 # Publish ports on a running sandbox.
 #
-# Port mappings do NOT survive a sandbox restart, so this must be called on
-# every start. Specs are passed through verbatim:
+# Prefer sandbox_sync_ports: publishing a port that is already published is a
+# 409, and mappings persist for the sandbox's lifetime. Specs are passed through verbatim:
 #   [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTOCOL]
 #
 # Omitting HOST_IP binds loopback only - callers that need the port reachable
@@ -521,6 +521,63 @@ sandbox_publish() {
 
     log_debug "Publishing ports on $name: $*"
     _sbx_checked "publishing ports on '$name'" "${args[@]}" || return 1
+
+    return 0
+}
+
+# Bring published ports in line with the given specs.
+#
+# Port mappings persist for the sandbox's lifetime, and publishing one that is
+# already published is a 409 - so `up`, which is meant to be idempotent, failed
+# on its second run. Changing the port in the config made it worse: the old
+# mapping stayed, the new one was added, and both showed in `sbx ls`.
+#
+# Publishes only what is missing and unpublishes what the config no longer
+# asks for, which is what reconciliation is supposed to mean.
+#
+# Usage: sandbox_sync_ports <name> [spec...]
+sandbox_sync_ports() {
+    local name="$1"
+    shift
+
+    local json current=""
+    json="$("$SBX_BIN" ports "$name" --json 2>/dev/null)" || json="[]"
+    current="$(printf '%s' "$json" | jq -r '
+        .[]? | "\(.host_ip // "0.0.0.0"):\(.host_port):\(.sandbox_port)"' 2>/dev/null)"
+
+    # Normalise the desired specs to the same shape so they can be compared.
+    local -a want=()
+    local spec
+    for spec in "$@"; do
+        [[ -n "$spec" ]] || continue
+        case "$spec" in
+            *:*:*) want+=("$spec") ;;
+            *:*)   want+=("0.0.0.0:$spec") ;;
+            *)     want+=("0.0.0.0:${spec}:${spec}") ;;
+        esac
+    done
+
+    local have
+    for have in $current; do
+        local keep=false
+        for spec in "${want[@]:-}"; do
+            [[ "$spec" == "$have" ]] && { keep=true; break; }
+        done
+        if [[ "$keep" == "false" ]]; then
+            log_info "Unpublishing port no longer in the config: $have"
+            _sbx_checked "unpublishing '$have'" ports "$name" --unpublish "$have" || return 1
+        fi
+    done
+
+    for spec in "${want[@]:-}"; do
+        [[ -n "$spec" ]] || continue
+        if grep -qxF "$spec" <<< "$current"; then
+            log_debug "Port already published: $spec"
+            continue
+        fi
+        log_info "Publishing port: $spec"
+        _sbx_checked "publishing '$spec'" ports "$name" --publish "$spec" || return 1
+    done
 
     return 0
 }

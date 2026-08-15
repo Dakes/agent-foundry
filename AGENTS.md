@@ -46,7 +46,7 @@ Examples:
 
 - `forgejo-watcher init` auto-registers webhooks because `watched_repos` and `webhook_url` are in the config.
 - `forgejo-watcher start` auto-runs `mark-all` because the default lifecycle expectation is "don't reprocess old events on restart".
-- `foundry up` re-publishes the configured ports on every run, because port mappings do not survive a sandbox restart.
+- `foundry up` reconciles published ports on every run: mappings persist for the sandbox's lifetime, so re-publishing one is a 409 rather than a no-op.
 
 If a user has to run more than one command to make a configured feature work, the design is probably wrong.
 

@@ -39,8 +39,9 @@ foundry rm [project] [--purge-volume] [-y|--yes]
 - `rm` removes the sandbox. The volume root — repos, agent memory, keys, logs —
   is kept unless you pass `--purge-volume` and confirm.
 
-Port mappings do not survive a sandbox restart, which is why `up` re-publishes
-them on every run.
+Published ports persist for the sandbox's lifetime, so `up` reconciles them:
+it publishes what the config asks for and unpublishes what it no longer does.
+Re-publishing an existing mapping is a 409, not a no-op.
 
 ## Inspection
 
