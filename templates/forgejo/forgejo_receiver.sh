@@ -113,7 +113,9 @@ handle_request() {
             x-hub-signature-256)
                 signature="$header_value"
                 ;;
-            x-gitea-signature|x-gogs-signature)
+            x-forgejo-signature|x-gitea-signature|x-gogs-signature)
+                # Forgejo sends the bare hex digest under its own header;
+                # only the GitHub-style header carries the "sha256=" prefix.
                 if [[ -z "$signature" && -n "$header_value" ]]; then
                     signature="sha256=$header_value"
                 fi
@@ -124,11 +126,19 @@ handle_request() {
         esac
     done
 
-    # Read body
-    local body=""
+    # Read the body into a file, not a variable.
+    #
+    # $(...) strips trailing newlines, and the signature covers the bytes the
+    # forge actually sent - Go's json.Encoder ends its output with "\n", so
+    # hashing a stripped copy never matches. The file also keeps the body
+    # byte-exact for jq.
+    local body_file=""
     if [[ "$content_length" =~ ^[0-9]+$ ]] && [[ "$content_length" -gt 0 ]]; then
-        body=$(head -c "$content_length")
+        body_file="$(mktemp)"
+        head -c "$content_length" > "$body_file"
     fi
+    # shellcheck disable=SC2064  # expand body_file now, not at trap time
+    trap "rm -f '${body_file}'" RETURN
 
     log_debug "Received $event_type event (len=$content_length)"
 
@@ -159,9 +169,13 @@ handle_request() {
         fi
 
         local expected
-        expected="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')"
+        expected="sha256=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" \
+            < "${body_file:-/dev/null}" | awk '{print $NF}')"
         if [[ "$signature" != "$expected" ]]; then
             log_warn "Invalid webhook signature"
+            # Enough to tell a wrong secret from a mangled body, without
+            # putting either the payload or the secret in the log.
+            log_debug "  got ${signature:0:20}… expected ${expected:0:20}… over ${content_length} bytes"
             http_response 401 "Unauthorized"
             return
         fi
@@ -169,7 +183,7 @@ handle_request() {
 
     # Normalize and queue event
     local event_payload payload_json
-    payload_json=$(printf '%s' "$body" | jq -s '.[0]? // {}')
+    payload_json=$(jq -s '.[0]? // {}' < "${body_file:-/dev/null}")
     event_payload=$(jq -n \
         --arg event_type "$event_type" \
         --arg received_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
