@@ -83,13 +83,17 @@ policy_has_deny() {
     printf '%s' "$json" | jq -e --arg r "$resource" '
         (.rules // [])
         | map(select((.decision // "") == "deny"))
+        | map(select((.resource_type // "network") == "network"))
         | map(.resources // [])
         | flatten
         | any(. == $r)
     ' >/dev/null 2>&1
 }
 
-# Does an allow rule for this resource already exist?
+# Does a network allow rule for this resource already exist?
+#
+# Only network rules count. The presets ship filesystem rules whose resource is
+# "**", so an unfiltered match reports full egress on a default-deny host.
 #
 # sbx normalizes a bare host to host:443 when it stores the rule, so a rule
 # written as "github.com" comes back as "github.com:443"; both spellings count
@@ -105,6 +109,7 @@ policy_has_allow() {
     printf '%s' "$json" | jq -e --arg r "$resource" '
         (.rules // [])
         | map(select((.decision // "") == "allow"))
+        | map(select((.resource_type // "network") == "network"))
         | map(.resources // [])
         | flatten
         | any(. == $r or . == ($r + ":443"))

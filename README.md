@@ -26,6 +26,9 @@ git clone https://github.com/user/agent-foundry.git
 cd agent-foundry
 ./install.sh --prefix ~/.local
 
+# One-time, BY HAND: choose the sandbox network policy
+sbx policy reset          # then choose "1. Open"
+
 # Set up the host and build the agent image
 foundry doctor --fix
 foundry image build
@@ -155,6 +158,35 @@ in `~/.config/foundry/config.conf`. See
 Defaults come from the sandbox runtime (all host CPUs, 50% of host memory).
 Override globally with `DEFAULT_CPUS` / `DEFAULT_MEMORY`, or per project with
 `.resources` in `foundry.json`.
+
+### Network policy — a required manual step
+
+Docker Sandboxes asks once, interactively, which network policy to install, and
+there is no flag to script it. **Foundry cannot do this for you**, so do it
+before the first project:
+
+```bash
+sbx policy reset          # choose "1. Open"
+foundry doctor --fix      # then Foundry adds its own deny rules on top
+```
+
+Pick **Open**. Foundry's posture is "open internet, closed LAN": it wants full
+egress from sbx and applies the LAN denials itself, which is what
+`doctor --fix` sets up.
+
+The other presets work, with one consequence worth knowing: **sbx gates DNS on
+the policy**, so a host that is not allowed does not even resolve. On
+*Balanced* or *Locked Down* an unlisted host fails with
+`Could not resolve hostname` rather than a denial, which is a confusing way to
+learn that a rule is missing. Project git remotes are allowed automatically;
+anything else the agent needs — a package mirror, an internal API — you allow
+by hand:
+
+```bash
+foundry policy allow registry.example.com
+```
+
+`foundry doctor` reports which preset is active.
 
 ### Standing instructions
 

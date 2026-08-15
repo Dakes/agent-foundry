@@ -665,6 +665,26 @@ cmd_doctor() {
     echo ""
     echo "Network policy:"
 
+    # Which preset is installed. sbx asks this once, interactively, and there
+    # is no flag to script it - so a host can sit on a default-deny preset
+    # without anyone having chosen it, and every unlisted host then fails to
+    # resolve rather than reporting a denial.
+    if check_command "$SBX_BIN"; then
+        if ! policy_is_initialized; then
+            echo "  FAIL   no network policy chosen yet"
+            echo "         Run by hand:  sbx policy reset   (choose 1. Open)"
+            failures=$((failures + 1))
+        elif policy_has_allow "**"; then
+            echo "  ok     preset allows full egress (Open)"
+        else
+            echo "  warn   preset is default-deny (Balanced or Locked Down)"
+            echo "         A host must be allowed before it will even resolve."
+            echo "         Project remotes are handled; allow anything else with:"
+            echo "           foundry policy allow <host>"
+            echo "         For Foundry's documented posture: sbx policy reset -> 1. Open"
+        fi
+    fi
+
     # Resolve a project if one is available; its rules join the matrix.
     if [[ -z "$name" ]]; then
         name="$(project_infer_name 2>/dev/null || true)"
