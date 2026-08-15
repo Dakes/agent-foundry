@@ -401,6 +401,32 @@ cmd_status() {
             echo ""
         fi
 
+        # The watcher is the thing most likely to be quietly not running: it
+        # takes no action to break, and the symptom is silence on the forge.
+        if watcher_is_configured "$FOUNDRY_PROJECT"; then
+            echo "Watcher:"
+            local w_state="stopped"
+            if sandbox_is_running "$FOUNDRY_BOX" \
+                && watcher_is_running "$FOUNDRY_BOX" "$FOUNDRY_ROOT"; then
+                w_state="running"
+            fi
+            printf '  %-12s %s\n' "state" "$w_state"
+            printf '  %-12s %s\n' "instance" \
+                "$(project_get "$FOUNDRY_PROJECT" '.watcher.instance_url' '?')"
+            printf '  %-12s %s\n' "trigger" \
+                "$(project_get "$FOUNDRY_PROJECT" '.watcher.trigger_keyword' '?')"
+            printf '  %-12s %s\n' "receiver" \
+                "port $(project_get "$FOUNDRY_PROJECT" '.watcher.receiver_port' '?')"
+            local public
+            if public="$(watcher_public_url "$FOUNDRY_PROJECT")"; then
+                printf '  %-12s %s\n' "webhook" "$public"
+            else
+                printf '  %-12s %s\n' "webhook" \
+                    "(set .watcher.public_url to register hooks)"
+            fi
+            echo ""
+        fi
+
         echo "Network rules for this sandbox:"
         policy_list "$FOUNDRY_BOX" 2>/dev/null | sed 's/^/  /' || echo "  (unavailable)"
 
@@ -483,13 +509,31 @@ cmd_attach() {
         sandbox_start "$FOUNDRY_BOX" || return 1
     fi
 
-    local agent session
+    local agent session work_session
     agent="$(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
     session="$(agent_session_name "$agent")"
+    work_session="$(agent_watcher_session_name)"
+
+    # A watcher-driven run lives in its own session, so during exactly the
+    # work an autonomous project exists to do, the agent session is empty and
+    # attaching to it would report "no running agent". Prefer the live run.
+    if sandbox_exec "$FOUNDRY_BOX" "$FOUNDRY_ROOT" \
+        tmux has-session -t "$work_session" >/dev/null 2>&1; then
+        session="$work_session"
+        log_info "Attaching to the watcher's run '$session' (detach with Ctrl-b d)"
+        sandbox_exec_tty "$FOUNDRY_BOX" "$FOUNDRY_ROOT" tmux attach -t "$session"
+        return $?
+    fi
 
     if ! foundry_agent_running "$FOUNDRY_BOX" "$FOUNDRY_ROOT" "$agent"; then
-        log_error "No running agent session '$session' in $FOUNDRY_BOX"
-        log_error "Start it with: foundry up $FOUNDRY_PROJECT"
+        log_error "No running agent session in $FOUNDRY_BOX"
+        log_error "  Looked for '$session' and '$work_session'."
+        if watcher_is_configured "$FOUNDRY_PROJECT"; then
+            log_error "  A goal agent only runs while it has work: comment on an"
+            log_error "  issue to start one, or watch 'foundry logs -f'."
+        else
+            log_error "  Start it with: foundry up $FOUNDRY_PROJECT"
+        fi
         return 1
     fi
 

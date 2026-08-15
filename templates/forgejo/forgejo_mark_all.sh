@@ -3,7 +3,7 @@
 # Mark all currently open issues and PRs on watched Forgejo repositories as
 # processed, so the watcher does not backfill historic events on first start.
 #
-# Intended to run inside the VM as part of `foundry agent forgejo-watcher mark-all`.
+# Intended to run inside the sandbox; see 'foundry watcher'.
 
 set -uo pipefail
 
