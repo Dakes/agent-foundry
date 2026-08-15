@@ -138,6 +138,18 @@ handle_request() {
         return
     fi
 
+    # A secret that is configured but unreadable must not degrade into
+    # "accept everything": the file existing is the operator's intent.
+    if [[ -z "$WEBHOOK_SECRET" && -f "$WEBHOOK_SECRET_FILE" ]]; then
+        log_error "Webhook secret file exists but could not be read; refusing"
+        http_response 500 "Receiver misconfigured"
+        return
+    fi
+
+    if [[ -z "$WEBHOOK_SECRET" ]]; then
+        log_warn "No webhook secret configured - requests are NOT authenticated"
+    fi
+
     # Verify signature if a secret is configured
     if [[ -n "$WEBHOOK_SECRET" ]]; then
         if [[ -z "$signature" ]]; then
@@ -226,6 +238,12 @@ main() {
             start_server
             ;;
         handle-request)
+            # socat runs this as a brand-new process per connection, so it
+            # inherits nothing from the listener: without loading the config
+            # here, WEBHOOK_SECRET is empty and the signature check below is
+            # skipped for every request. That silently accepted forged events
+            # from anyone who could reach the port.
+            load_config
             handle_request
             ;;
         stop)
