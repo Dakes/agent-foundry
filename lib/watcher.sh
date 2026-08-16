@@ -276,16 +276,43 @@ SUPERVISOR
 
 # Is the watcher running? The supervisor is the thing that must be alive: if
 # it is gone, the sandbox will idle out even when the watcher is up right now.
+#
+# "A live pid" is not enough. The pid file sits in the volume root and outlives
+# a hard kill, a reboot and the sandbox itself, so the recorded number is
+# eventually reused by an unrelated process - and then `up` believes the
+# watcher is running, skips starting it, and reports success while nothing
+# listens. The process must actually be our supervisor.
 watcher_is_running() {
     local box="$1" root="$2"
 
-    local pid_file pid
+    local pid_file pid script
     pid_file="$(_watcher_supervisor_pid_file "$root")"
     [[ -f "$pid_file" ]] || return 1
 
     pid="$(cat "$pid_file" 2>/dev/null)"
-    [[ -n "$pid" ]] || return 1
-    kill -0 "$pid" 2>/dev/null
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+
+    script="$(watcher_config_dir "$root")/supervisor.sh"
+    if [[ -r "/proc/${pid}/cmdline" ]]; then
+        tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -qF "$script"
+        return $?
+    fi
+
+    # No /proc to check against: a live pid is the best signal available.
+    return 0
+}
+
+# Is the watcher actually serving? The supervisor can be alive while the thing
+# the forge talks to is not - the sandbox was stopped, or the watcher is
+# looping on a bad config - and from outside those look identical to healthy.
+watcher_is_serving() {
+    local box="$1" root="$2"
+
+    watcher_is_running "$box" "$root" || return 1
+    sandbox_is_running "$box" || return 1
+    sandbox_exec "$box" "$root" \
+        tmux has-session -t forgejo-receiver >/dev/null 2>&1
 }
 
 # Start the watcher (which starts the receiver itself).
@@ -296,9 +323,22 @@ watcher_start() {
     watcher_is_configured "$name" || return 0
     watcher_write_config "$name" "$root" || return 1
 
-    if watcher_is_running "$box" "$root"; then
+    # Reconcile on what is actually serving, not on what has a process. 'up'
+    # exists to make reality match the config, and a supervisor that is alive
+    # while nothing listens is the one state that most looks like success.
+    if watcher_is_serving "$box" "$root"; then
         log_info "Watcher already running"
         return 0
+    fi
+
+    if watcher_is_running "$box" "$root"; then
+        log_warn "Watcher supervisor is up but the receiver is not; restarting"
+        watcher_stop "$box" "$root"
+    elif [[ -f "$(_watcher_supervisor_pid_file "$root")" ]]; then
+        # A pid file with no supervisor behind it: left by a hard kill or a
+        # reboot. Clear it, or the next check inherits the same confusion.
+        log_debug "Clearing stale supervisor pid file"
+        rm -f "$(_watcher_supervisor_pid_file "$root")"
     fi
 
     # The watcher ships in the image. An image built before it did leaves tmux
@@ -337,9 +377,7 @@ watcher_start() {
     # and binding the port take longer on a loaded host than on this one.
     local waited=0 ready=false
     while [[ "$waited" -lt 25 ]]; do
-        if watcher_is_running "$box" "$root" \
-            && sandbox_exec "$box" "$root" \
-                 tmux has-session -t forgejo-receiver >/dev/null 2>&1; then
+        if watcher_is_serving "$box" "$root"; then
             ready=true
             break
         fi
