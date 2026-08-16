@@ -31,7 +31,10 @@ watcher_is_configured() {
 }
 
 # Resolve the project's Forgejo token file to a host path.
-_watcher_token_path() {
+#
+# Public: doctor reports on it too, and duplicating the resolution there would
+# let the two drift.
+watcher_token_path() {
     local name="$1" root="$2"
     local token_file
     token_file="$(project_get "$name" '.watcher.token_file' "")"
@@ -121,7 +124,7 @@ watcher_write_config() {
     esac
 
     local token_path
-    if ! token_path="$(_watcher_token_path "$name" "$root")" || [[ ! -r "$token_path" ]]; then
+    if ! token_path="$(watcher_token_path "$name" "$root")" || [[ ! -r "$token_path" ]]; then
         log_error "Forgejo token not readable: ${token_path:-<.watcher.token_file unset>}"
         return 1
     fi

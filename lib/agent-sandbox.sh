@@ -108,7 +108,7 @@ foundry_agent_start() {
 
     if ! agent_is_valid "$agent"; then
         log_error "Unknown agent type: $agent"
-        log_error "Valid types: $(agent_valid_list)"
+        log_error "Valid types: ${AGENT_TYPES// /, }"
         return 1
     fi
 

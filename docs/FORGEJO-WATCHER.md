@@ -111,6 +111,7 @@ Everything lives in `foundry.json` under `.watcher`:
 | `trigger_keyword` | yes | What people type to summon the agent |
 | `watched_repos` | yes | `owner/repo` entries |
 | `token_file` | yes | Path to the token, relative to the volume root |
+| `user` | no | The account the token belongs to. Looked up from the token when absent; set it when your instance refuses that lookup, since the watcher will not start without knowing which events are its own |
 | `public_url` | for registration | The receiver **as Forgejo sees it** |
 | `agent_timeout` | no | Minutes before a run is abandoned (default 120) |
 | `dry_run` | no | Process events and log, but start no agent |

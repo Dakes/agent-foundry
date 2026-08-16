@@ -40,8 +40,8 @@ request was never surfaced as a distinct instruction at all.
 ### 2. Interactive-session deliberation
 
 Repo-level agent files — `AGENTS.md` and `CLAUDE.md` inside the repositories
-under `/root/repos/`, loaded automatically by the CLI from its working
-directory — commonly say things like *"if something is unclear, launch an
+under `~/repos/` in the sandbox, loaded automatically by the CLI from its
+working directory — commonly say things like *"if something is unclear, launch an
 interactive session"*.
 
 Nothing in any generated prompt mentioned repo-level agent files, stated that
@@ -197,9 +197,9 @@ sentence is another opportunity to contradict something. The current shape:
 |---|---|
 | Contract, modes, objectives, assembly | `templates/prompt-lib.sh` |
 | Identity string | `agent_identity_name()` in `lib/agent-registry.sh` |
-| Per-agent wiring | the six `*_watcher_agent_*.sh` adapters |
-| Durable capabilities | project `.ralph/AGENT.md` |
-| Per-task instructions | generated `fix_plan.md` / `task_prompt.md` |
+| Per-agent wiring | `templates/goal/watcher_agent_goal.sh`, the one adapter |
+| Durable capabilities | `AGENT.md` at the volume root |
+| Per-task instructions | generated `<dotfolder>/task_prompt.md` |
 
 `templates/prompt-lib.sh` is baked into the agent image at
 `/opt/foundry/prompt-lib.sh` (see `docker/foundry-agent.Dockerfile`, alongside
@@ -354,9 +354,9 @@ The resolved mode is logged: `Resolved task mode: review (kind: pr)`. A run
 that answered with the syntax instead logs `No task mode stated; replying with
 usage` and exits 78 without starting an agent.
 
-Inspect the generated prompt in the volume root — `.ralph/fix_plan.md` for
-`ralph`, `.ralph/gh_task_prompt.md` for `ralph-orchestrator`,
-`.kimi/task_prompt.md` for `kimi-ralph`. The volume root is a host directory,
+Inspect the generated prompt in the volume root: `task_prompt.md` inside the
+agent's own dotfolder — `.claude/` for `claude-goal`, `.codex/` for
+`codex-goal`, `.gemini/` for `agy-goal`. The volume root is a host directory,
 so these are readable without entering the sandbox.
 
 If the agent did the wrong kind of work, check the `Mode:` line first. If the

@@ -37,14 +37,19 @@ INDENT = " " * 22
 
 
 def stamp(raw: str) -> str:
-    """HH:MM:SS in local time, or spaces when the event carries no timestamp."""
-    if not raw:
-        return "        "
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        return parsed.astimezone().strftime("%H:%M:%S")
-    except (ValueError, TypeError):
-        return "        "
+    """HH:MM:SS in local time.
+
+    Most events in the stream carry no timestamp, and a column of blanks reads
+    worse than the time the line was written - which, for a stream consumed as
+    it arrives, is the same thing to within a second.
+    """
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return parsed.astimezone().strftime("%H:%M:%S")
+        except (ValueError, TypeError):
+            pass
+    return datetime.now().strftime("%H:%M:%S")
 
 
 def elide(text: str, width: int = COMMAND_WIDTH) -> str:

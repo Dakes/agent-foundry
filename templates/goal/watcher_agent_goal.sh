@@ -124,7 +124,12 @@ start_agent_loop() {
     fi
 
     log_file="${AGENT_LOG_FILE:-${AGENT_WORKSPACE}/logs/${AGENT_TYPE}.log}"
-    runner="$(mktemp "/tmp/foundry-goal-XXXXXX.sh")"
+    # A fixed path, not mktemp: the watcher runs one task at a time, so there
+    # is nothing to collide with, and a new temp file per task accumulated
+    # forever in a sandbox that can live for weeks. It is also somewhere to
+    # look while a run is in flight.
+    runner="/tmp/foundry-goal-runner.sh"
+    rm -f "$runner"
 
     {
         printf '#!/usr/bin/env bash\n'

@@ -2,7 +2,7 @@
 #
 # Packages installed into the sandbox image beyond the base set. Add one
 # package per line; lines starting with # are comments. Edit this file in the
-# source tree, then rebuild: foundry image build [variant]
+# source tree, then rebuild: foundry image build
 #
 # Base packages (always installed, see docker/foundry-agent.Dockerfile):
 #   build-essential, ca-certificates, curl, file, git, gnupg, jq, less,

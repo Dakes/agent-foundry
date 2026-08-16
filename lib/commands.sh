@@ -322,7 +322,7 @@ cmd_up() {
     policy_unblock_resolvers "$FOUNDRY_BOX" || true
     project_apply_network_rules "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" || return 1
 
-    # 4. Repos: clone anything declared but missing.
+    # 5. Repos: clone anything declared but missing.
     project_fix_ssh_perms "$FOUNDRY_ROOT"
     project_clone_repos "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
 
@@ -331,14 +331,14 @@ cmd_up() {
     _project_seed_trust "$FOUNDRY_ROOT" || return 1
     _project_seed_fj_auth "$FOUNDRY_PROJECT" "$FOUNDRY_ROOT" || return 1
 
-    # 4. Agent.
+    # 6. Agent.
     if [[ "$no_agent" == "true" ]]; then
         log_info "Skipping agent start (--no-agent)"
     else
         foundry_agent_start "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
     fi
 
-    # 5. Watcher. A configured watcher is meant to be listening whenever the
+    # 7. Watcher. A configured watcher is meant to be listening whenever the
     #    project is up: a forge that gets a connection refused does not retry
     #    later, so a watcher that must be started by hand silently drops work.
     local watcher_kind
@@ -625,7 +625,14 @@ cmd_logs() {
             --watcher)     which="watcher" ;;
             --receiver)    which="receiver" ;;
             --agent)       which="agent" ;;
-            -n)            shift; lines="${1:-200}" ;;
+            -n)
+                shift
+                if [[ ! "${1:-}" =~ ^[0-9]+$ ]]; then
+                    log_error "-n needs a number of lines"
+                    return 1
+                fi
+                lines="$1"
+                ;;
             *)
                 log_error "Unknown option for 'foundry logs': $1"
                 echo "Options: -f, -n <lines>, --agent, --watcher, --receiver" >&2
@@ -737,18 +744,19 @@ cmd_rm() {
         return 0
     fi
 
+    # Before the sandbox goes: unregistering needs it, so advice printed
+    # afterwards could never be acted on.
+    if watcher_is_configured "$FOUNDRY_PROJECT"; then
+        log_warn "Webhooks on the forge still point at this project's receiver."
+        log_warn "  They keep failing until 'foundry init ${FOUNDRY_PROJECT}' brings it back."
+        log_warn "  To remove them instead, do it now, while the sandbox exists:"
+        log_warn "    foundry watcher unregister ${FOUNDRY_PROJECT}"
+    fi
+
     watcher_stop "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || true
     foundry_agent_stop "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || true
     sandbox_rm "$FOUNDRY_BOX" || return 1
 
-    # Hooks live on the forge and outlive the sandbox. Deliveries will fail
-    # until the project is back up, which reads on the forge as the agent
-    # having broken rather than as a sandbox that is simply gone.
-    if watcher_is_configured "$FOUNDRY_PROJECT"; then
-        log_warn "Webhooks on the forge still point at this project's receiver"
-        log_warn "  Deliveries fail until 'foundry init ${FOUNDRY_PROJECT}' brings it back."
-        log_warn "  To remove them: foundry watcher unregister ${FOUNDRY_PROJECT} (needs the sandbox)"
-    fi
 
     if [[ "$purge" == "true" ]]; then
         log_warn "This deletes the volume root and everything in it:"
@@ -940,7 +948,7 @@ cmd_doctor() {
             fi
 
             local tok
-            tok="$(_watcher_token_path "$name" "$root" 2>/dev/null || true)"
+            tok="$(watcher_token_path "$name" "$root" 2>/dev/null || true)"
             if [[ -n "$tok" && -s "$tok" ]]; then
                 echo "  ok     Forgejo token present"
             else

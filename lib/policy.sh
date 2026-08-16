@@ -183,13 +183,30 @@ policy_unblock_resolvers() {
     local json
     json="$("$SBX_BIN" policy ls --json 2>/dev/null)" || return 0
 
-    local removed=0 rule_id resource
+    local removed=0 rule_id resource ours range
     while IFS=$'\t' read -r rule_id resource; do
         [[ -n "$rule_id" && -n "$resource" ]] || continue
         policy_range_covers_resolver "$resource" "${resolvers[@]}" || continue
 
+        # Ours to remove, or the operator's? Only the baseline's own ranges
+        # are fair game: a hand-written deny that happens to cover the
+        # resolver is a deliberate choice, and deleting it here would be
+        # permanent - policy_baseline never re-adds a rule it did not write.
+        ours=false
+        for range in "${FOUNDRY_PRIVATE_RANGES[@]}"; do
+            [[ "$resource" == "$range" ]] && { ours=true; break; }
+        done
+        if [[ "$ours" != "true" ]]; then
+            log_warn "Deny rule for ${resource} covers the sandbox resolver, so DNS"
+            log_warn "  cannot work while it stands - but Foundry did not add it."
+            log_warn "  Remove it yourself if that is what you want:"
+            log_warn "    sbx policy rm network --id ${rule_id}"
+            continue
+        fi
+
         log_warn "Removing deny rule for ${resource}: it covers the sandbox resolver"
         log_warn "  DNS cannot work while it stands, and deny beats allow."
+        log_warn "  This is permanent: the baseline will not re-add it."
         if _sbx_checked "removing deny rule '$resource'" \
             policy rm network --id "$rule_id"; then
             removed=$((removed + 1))

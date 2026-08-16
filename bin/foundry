@@ -230,6 +230,13 @@ main() {
         esac
     done
 
+    # The user's config carries DEFAULT_CPUS, DEFAULT_MEMORY,
+    # FOUNDRY_IMAGE_REPO and FOUNDRY_PRIVATE_RANGES. It was only ever loaded
+    # by 'config show', so every one of those documented knobs was ignored by
+    # the commands that read them. Load it before dispatching; the environment
+    # still wins, because config_load only fills what is unset.
+    config_load
+
     # Get domain
     local domain="${1:-help}"
     shift || true

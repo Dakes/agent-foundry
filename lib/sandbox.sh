@@ -527,8 +527,13 @@ sandbox_user() {
     printf '%s\n' "${FOUNDRY_SANDBOX_USER:-$(resolve_host_uid)}"
 }
 
-# Run a command inside a sandbox, with HOME and cwd set to the volume root.
-# Usage: sandbox_exec <name> <home> <cmd> [args...]
+# Run a command inside a sandbox, with HOME and cwd set to the sandbox home.
+#
+# <home> is accepted and ignored: the agent's home is /home/agent inside the
+# box (a symlink to the volume root), not the host path callers pass. The
+# parameter stays because every call site passes it and a signature change is
+# not worth the churn.
+# Usage: sandbox_exec <name> <ignored-home> <cmd> [args...]
 sandbox_exec() {
     local name="$1"
     local home="$2"
@@ -545,7 +550,7 @@ sandbox_exec() {
 }
 
 # Same, with a TTY attached (interactive shells, tmux attach).
-# Usage: sandbox_exec_tty <name> <home> <cmd> [args...]
+# Usage: sandbox_exec_tty <name> <ignored-home> <cmd> [args...]
 sandbox_exec_tty() {
     local name="$1"
     local home="$2"
@@ -557,7 +562,7 @@ sandbox_exec_tty() {
 }
 
 # Run a command detached inside the sandbox.
-# Usage: sandbox_exec_detached <name> <home> <cmd> [args...]
+# Usage: sandbox_exec_detached <name> <ignored-home> <cmd> [args...]
 sandbox_exec_detached() {
     local name="$1"
     local home="$2"

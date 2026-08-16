@@ -217,24 +217,37 @@ init_watcher() {
     fi
     log_info "  Acting as: $WATCHER_BOT_USER (its own events are ignored)"
 
-    # Everything already known is treated as seen. Queued events are the
-    # forge's redeliveries and whatever arrived while we were down; acting on
-    # them means duplicate work on requests that may be weeks old.
-    WATCHER_CUTOFF_TS="$(date +%s)"
+    # Work that predates this watcher is not acted on - but "this watcher"
+    # means the first time it ever ran here, not this process.
+    #
+    # The supervisor restarts the watcher whenever it exits, so a cutoff taken
+    # per process would move forward on every crash and silently swallow
+    # everything that arrived in between. The forge does not redeliver, so
+    # those events are simply lost. The cutoff is therefore written once and
+    # kept, and the queue is left alone: process_event compares each event's
+    # own timestamp against it, which distinguishes a month-old backlog from
+    # something queued three seconds ago. A blanket wipe cannot.
     if [[ "$WATCHER_PROCESS_BACKLOG" == "true" ]]; then
-        log_warn "WATCHER_PROCESS_BACKLOG=true: acting on the existing queue"
+        log_warn "WATCHER_PROCESS_BACKLOG=true: acting on work of any age"
         WATCHER_CUTOFF_TS=""
     else
-        local stale=0
-        local queued
+        local cutoff_file="$CONFIG_DIR/cutoff"
+        if [[ -s "$cutoff_file" ]]; then
+            WATCHER_CUTOFF_TS="$(tr -d '[:space:]' < "$cutoff_file")"
+        fi
+        if [[ ! "$WATCHER_CUTOFF_TS" =~ ^[0-9]+$ ]]; then
+            WATCHER_CUTOFF_TS="$(date +%s)"
+            printf '%s\n' "$WATCHER_CUTOFF_TS" > "$cutoff_file"
+            log_info "  First run here: ignoring anything created before now"
+        fi
+        log_info "  Cutoff: work created after $(date -d "@${WATCHER_CUTOFF_TS}" -Iseconds)"
+        local queued_count=0 queued
         for queued in "$QUEUE_DIR"/*.json; do
             [[ -e "$queued" ]] || continue
-            rm -f "$queued"
-            stale=$((stale + 1))
+            queued_count=$((queued_count + 1))
         done
-        [[ "$stale" -gt 0 ]] && \
-            log_info "Discarded ${stale} queued event(s) from before this run"
-        log_info "  Cutoff: only work created after $(date -d "@${WATCHER_CUTOFF_TS}" -Iseconds) is acted on"
+        [[ "$queued_count" -gt 0 ]] && \
+            log_info "  ${queued_count} event(s) waiting in the queue"
     fi
 
     log_info "Forgejo watcher initialized"
@@ -413,7 +426,10 @@ event_to_task_json() {
                 --argjson number "$(echo "$payload" | jq -r '.issue.number')" \
                 --arg title "$(echo "$payload" | jq -r '.issue.title')" \
                 --arg body "$(echo "$payload" | jq -r '.issue.body // ""')" \
-                --arg created_at "$(echo "$payload" | jq -r '.issue.created_at')" \
+                --arg created_at "$(echo "$payload" | jq -r '
+                    if (.action // "opened") == "opened"
+                    then .issue.created_at
+                    else (.issue.updated_at // .issue.created_at) end')" \
                 --arg html_url "$(echo "$payload" | jq -r '.issue.html_url')" \
                 '{type:"issue", repo:$repo, number:$number, title:$title, body:$body, created_at:$created_at, html_url:$html_url}'
             ;;
@@ -433,7 +449,10 @@ event_to_task_json() {
                 --argjson number "$(echo "$payload" | jq -r '.pull_request.number')" \
                 --arg title "$(echo "$payload" | jq -r '.pull_request.title')" \
                 --arg body "$(echo "$payload" | jq -r '.pull_request.body // ""')" \
-                --arg created_at "$(echo "$payload" | jq -r '.pull_request.created_at')" \
+                --arg created_at "$(echo "$payload" | jq -r '
+                    if (.action // "opened") == "opened"
+                    then .pull_request.created_at
+                    else (.pull_request.updated_at // .pull_request.created_at) end')" \
                 --arg html_url "$(echo "$payload" | jq -r '.pull_request.html_url')" \
                 '{type:"pr", repo:$repo, number:$number, title:$title, body:$body, created_at:$created_at, html_url:$html_url}'
             ;;
@@ -915,10 +934,13 @@ cmd_mark_all() {
         dropped=$((dropped + 1))
     done
 
-    log_info "Discarded ${dropped} queued event(s); work created before now is ignored"
-    echo "Discarded ${dropped} queued event(s)."
-    echo "The watcher acts only on work created after it starts, so nothing"
-    echo "older than this moment will be picked up."
+    local now
+    now="$(date +%s)"
+    printf '%s\n' "$now" > "$CONFIG_DIR/cutoff"
+
+    log_info "Discarded ${dropped} queued event(s); cutoff moved to $(date -Iseconds)"
+    echo "Discarded ${dropped} queued event(s) and moved the cutoff to now."
+    echo "Nothing created before this moment will be picked up again."
 }
 
 # ============================================================================
