@@ -453,7 +453,11 @@ watcher_stop() {
             # takes the exec it is holding with it.
             kill -TERM "-${pid}" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
             sleep 1
-            kill -0 "$pid" 2>/dev/null && kill -KILL "-${pid}" 2>/dev/null || true
+            # Still there after TERM: take the group down hard, falling back
+            # to the bare pid the same way the TERM above does.
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -KILL "-${pid}" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+            fi
         fi
         rm -f "$pid_file"
     fi
