@@ -183,6 +183,13 @@ RUN set -eux; \
     echo "${AGENT_USER} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${AGENT_USER}"; \
     chmod 0440 "/etc/sudoers.d/${AGENT_USER}"
 
+# Identifies this build. A sandbox keeps the image it was created from, so a
+# rebuild changes nothing for sandboxes that already exist; 'foundry up'
+# compares this stamp and says so. It sits here, as the last root layer,
+# because the value changes on every build and everything below it is free.
+ARG FOUNDRY_IMAGE_ID=unknown
+RUN printf '%s\n' "${FOUNDRY_IMAGE_ID}" > /etc/foundry-image-id
+
 USER ${AGENT_USER}
 
 # HOME is set per-exec by Foundry to the mounted volume root; this is only the

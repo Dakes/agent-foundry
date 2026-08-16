@@ -106,6 +106,38 @@ project_apply_network_rules() {
     project_set "$name" '.network.allow' "$json_rules" || return 1
 }
 
+# Warn when the sandbox is older than the image on disk.
+#
+# A sandbox keeps the image it was created from: rebuilding a tag changes
+# nothing for sandboxes that already exist, and `up` only starts them. That
+# has now cost real debugging twice - once for nested Docker, once for a fixed
+# webhook receiver - because everything looks correct while old code runs.
+_warn_if_image_is_stale() {
+    local name="$1" box="$2" root="$3"
+
+    sandbox_is_running "$box" || return 0
+    check_command docker || return 0
+
+    local image built running
+    image="$(_project_image "$name")"
+
+    built="$(docker run --rm --entrypoint cat "$image" /etc/foundry-image-id 2>/dev/null | tr -d '[:space:]')"
+    [[ -n "$built" ]] || return 0
+
+    running="$(sandbox_exec "$box" "$root" cat /etc/foundry-image-id 2>/dev/null | tr -d '[:space:]')"
+    [[ -n "$running" ]] || return 0
+
+    [[ "$built" == "$running" ]] && return 0
+
+    log_warn "This sandbox runs an older image than ${image}"
+    log_warn "  sandbox: ${running}"
+    log_warn "  on disk: ${built}"
+    log_warn "  A sandbox keeps the image it was created from, so a rebuild"
+    log_warn "  alone changes nothing. Pick it up with:"
+    log_warn "    foundry rm ${name} && foundry init ${name}"
+    return 0
+}
+
 # ============================================================================
 # init
 # ============================================================================
@@ -271,6 +303,8 @@ cmd_up() {
 
     sandbox_start "$FOUNDRY_BOX" || return 1
     sandbox_link_home "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1
+
+    _warn_if_image_is_stale "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" "$FOUNDRY_ROOT"
 
     # 2. Ports. Mappings persist for the sandbox's lifetime, so this
     #    reconciles instead of republishing: a second up would otherwise fail
@@ -1046,9 +1080,15 @@ cmd_image() {
             uid="$(resolve_host_uid)"
             gid="$(resolve_host_gid)"
 
+            # Stamped into the image so 'up' can tell a sandbox running an
+            # older build from one running this one.
+            local image_id
+            image_id="$(date -u +%Y%m%d%H%M%S)-$(git -C "$FOUNDRY_BASE" rev-parse --short HEAD 2>/dev/null || echo local)"
+
             log_info "Building ${repo}:${tag} (agent uid ${uid}:${gid})"
             docker build \
                 -f "$dockerfile" \
+                --build-arg "FOUNDRY_IMAGE_ID=${image_id}" \
                 --build-arg "AGENT_UID=${uid}" \
                 --build-arg "AGENT_GID=${gid}" \
                 -t "${repo}:${tag}" \
@@ -1120,6 +1160,18 @@ cmd_watcher() {
             [[ -f "$log" ]] || { log_error "No watcher log yet: $log"; return 1; }
             tail -n "${FOUNDRY_LOG_LINES:-50}" -f "$log"
             ;;
+        secret)
+            # The value the forge's webhook "Secret" field must contain. It is
+            # not the API token, and pasting the token there produces a
+            # perfectly well-formed signature that can never match.
+            local secret_file
+            secret_file="$(watcher_config_dir "$FOUNDRY_ROOT")/webhook-secret"
+            if [[ ! -s "$secret_file" ]]; then
+                log_error "No webhook secret yet: run 'foundry up ${FOUNDRY_PROJECT}'"
+                return 1
+            fi
+            cat "$secret_file"
+            ;;
         register|unregister|list)
             sandbox_is_running "$FOUNDRY_BOX" || {
                 log_error "Sandbox is not running: foundry up ${FOUNDRY_PROJECT}"
@@ -1129,7 +1181,7 @@ cmd_watcher() {
             ;;
         *)
             log_error "Unknown watcher action: $action"
-            echo "Actions: start, stop, restart, status, logs," >&2
+            echo "Actions: start, stop, restart, status, logs, secret," >&2
             echo "         register, unregister, list (Forgejo webhooks)" >&2
             return 1
             ;;
