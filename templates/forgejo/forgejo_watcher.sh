@@ -5,10 +5,17 @@
 # Receives Forgejo webhooks, detects trigger mentions, builds agent-specific
 # task context, and triggers the configured autonomous agent to work.
 #
-# Configuration: /root/.config/forgejo-watcher/config.conf
-# State:         /root/.config/forgejo-watcher/processed.json
-# Queue:         /root/.config/forgejo-watcher/queue/
-# Logs:          /root/.config/forgejo-watcher/watcher.log
+# Everything lives under the agent's home, which is the project's volume root:
+#
+#   Configuration: ~/.config/forgejo-watcher/config.conf
+#   State:         ~/.config/forgejo-watcher/processed.json
+#   Queue:         ~/.config/forgejo-watcher/queue/
+#   Logs:          ~/.config/forgejo-watcher/watcher.log
+#
+# The host writes config.conf from foundry.json; the rest is the watcher's own
+# state. Because the home is the mounted volume root, all of it survives the
+# sandbox being stopped, recreated or rebuilt - which is what makes "already
+# processed" mean anything across restarts.
 #
 
 set -euo pipefail
@@ -17,7 +24,7 @@ set -euo pipefail
 # CONFIGURATION
 # ============================================================================
 
-CONFIG_DIR="/root/.config/forgejo-watcher"
+CONFIG_DIR="${CONFIG_DIR:-${HOME:?HOME is not set}/.config/forgejo-watcher}"
 CONFIG_FILE="$CONFIG_DIR/config.conf"
 PROCESSED_FILE="$CONFIG_DIR/processed.json"
 RETRY_FILE="$CONFIG_DIR/retries.json"
@@ -30,7 +37,9 @@ CONTEXT_FILE="$CONFIG_DIR/current_context.json"
 # mode. Exported so the adapter writes it somewhere the watcher can find,
 # rather than defaulting to a cwd-relative path.
 export FOUNDRY_REPLY_FILE="${FOUNDRY_REPLY_FILE:-$CONFIG_DIR/last_reply.md}"
-HELPER_DIR="/opt/foundry/forgejo"
+HELPER_DIR="${HELPER_DIR:-/opt/foundry/forgejo}"
+# Adapters shared by every forge (the goal adapter) sit one level up.
+FOUNDRY_LIB_DIR="${FOUNDRY_LIB_DIR:-/opt/foundry}"
 
 # Defaults (overridden by config file)
 WATCHER_ENABLED="${WATCHER_ENABLED:-false}"
@@ -40,18 +49,22 @@ FORGEJO_TOKEN_FILE="${FORGEJO_TOKEN_FILE:-$CONFIG_DIR/token}"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-120}"
 POST_ERROR_COMMENTS="${POST_ERROR_COMMENTS:-true}"
 DRY_RUN="${DRY_RUN:-false}"
-TRIGGER_KEYWORD="${TRIGGER_KEYWORD:-!ralph}"
+TRIGGER_KEYWORD="${TRIGGER_KEYWORD:-@agent}"
 RATE_LIMIT_RETRY_SECONDS="${RATE_LIMIT_RETRY_SECONDS:-3600}"
 RECEIVER_PORT="${RECEIVER_PORT:-8080}"
 RECEIVER_INTERFACE="${RECEIVER_INTERFACE:-0.0.0.0}"
-AGENT_WORKSPACE="/root"
+AGENT_WORKSPACE="${AGENT_WORKSPACE:-$HOME}"
 AGENT_TYPE="${AGENT_TYPE:-}"
 AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-Agent}"
-
-# Legacy compatibility
-RALPH_VARIANT_MARKER="${RALPH_VARIANT_MARKER:-/opt/foundry/ralph-agent-type}"
-RALPH_VARIANT_CLAUDE_CODE="${RALPH_VARIANT_CLAUDE_CODE:-ralph-claude-code}"
-RALPH_VARIANT_ORCHESTRATOR="${RALPH_VARIANT_ORCHESTRATOR:-ralph-orchestrator}"
+# The account the token belongs to. Events it authored are ignored, because
+# every reply the watcher writes contains the trigger keyword.
+WATCHER_BOT_USER="${WATCHER_BOT_USER:-}"
+# Work that predates this run is not acted on. A watcher that comes up to a
+# backlog cannot tell a request from five minutes ago from one from last month,
+# and answering all of them at once is never what was wanted. Set
+# WATCHER_PROCESS_BACKLOG=true to take the queue as it stands instead.
+WATCHER_PROCESS_BACKLOG="${WATCHER_PROCESS_BACKLOG:-false}"
+WATCHER_CUTOFF_TS="${WATCHER_CUTOFF_TS:-}"
 
 # ============================================================================
 # LOGGING
@@ -84,9 +97,6 @@ source_watcher_helpers() {
     # shellcheck source=/dev/null
     source "$common_helper"
 
-    RALPH_WORKSPACE="$AGENT_WORKSPACE"
-    KIMI_WORKSPACE="$AGENT_WORKSPACE"
-
     local adapter_file
     adapter_file=$(_agent_adapter_file)
     if [[ -n "$adapter_file" && -f "$adapter_file" ]]; then
@@ -103,6 +113,17 @@ _agent_adapter_file() {
         echo ""
         return
     fi
+    # The goal agents share one adapter: it writes the task prompt and the
+    # completion condition, and neither varies by agent or by forge. The loop
+    # belongs to the CLI, so there is nothing per-agent left to adapt.
+    case "$AGENT_TYPE" in
+        *-goal)
+            echo "$FOUNDRY_LIB_DIR/watcher_agent_goal.sh"
+            return
+            ;;
+    esac
+
+    # Otherwise: one adapter per autonomous agent type.
     echo "$HELPER_DIR/forgejo_watcher_agent_${AGENT_TYPE}.sh"
 }
 
@@ -112,8 +133,6 @@ _agent_adapter_file() {
 
 init_watcher() {
     mkdir -p "$CONFIG_DIR" "$QUEUE_DIR"
-    ensure_processed_file_valid
-    ensure_retry_file_valid
     touch "$LOG_FILE"
 
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -124,13 +143,20 @@ init_watcher() {
         log_info "Loaded configuration from $CONFIG_FILE"
     else
         log_error "Configuration file not found: $CONFIG_FILE"
-        log_error "Run 'foundry agent forgejo-watcher init <vm-name>' first"
+        log_error "The host writes it from foundry.json: run 'foundry up <project>'"
         return 1
     fi
 
     if ! source_watcher_helpers; then
         return 1
     fi
+
+    # After the helpers, which is where these two are defined. Calling them
+    # first left the state files uncreated: init_watcher runs inside an `if !`,
+    # which suspends set -e for the whole function, so "command not found" was
+    # reported on stderr - discarded under tmux - and the watcher carried on.
+    ensure_processed_file_valid
+    ensure_retry_file_valid
 
     if [[ "$WATCHER_ENABLED" != "true" ]]; then
         log_warn "Watcher is disabled in config (WATCHER_ENABLED=false)"
@@ -157,12 +183,13 @@ init_watcher() {
     fi
 
     if [[ -z "$AGENT_TYPE" ]]; then
-        AGENT_TYPE=$(detect_legacy_agent_type)
-        log_warn "AGENT_TYPE not configured; falling back to legacy detection: $AGENT_TYPE"
+        log_error "AGENT_TYPE is not set in $CONFIG_FILE"
+        log_error "It comes from .agent in foundry.json; re-run 'foundry up'."
+        return 1
     fi
 
     case "$AGENT_TYPE" in
-        ralph|ralph-orchestrator|kimi-ralph)
+        claude-goal|codex-goal|agy-goal)
             ;;
         *)
             log_error "Unsupported watcher agent type: $AGENT_TYPE"
@@ -172,46 +199,63 @@ init_watcher() {
 
     AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-$AGENT_TYPE}"
 
+    # Without this the watcher answers its own replies forever. The host
+    # normally writes it into config.conf; ask the forge if it did not, and
+    # refuse to run rather than loop if the answer never comes.
+    if [[ -z "$WATCHER_BOT_USER" ]]; then
+        WATCHER_BOT_USER="$(curl -fsS --max-time 10 \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_INSTANCE_URL%/}/api/v1/user" 2>/dev/null \
+            | jq -r '.login // empty')"
+    fi
+
+    if [[ -z "$WATCHER_BOT_USER" ]]; then
+        log_error "Could not determine which account the token belongs to"
+        log_error "Refusing to start: the watcher would answer its own replies."
+        log_error "Set WATCHER_BOT_USER, or check the token and instance URL."
+        return 1
+    fi
+    log_info "  Acting as: $WATCHER_BOT_USER (its own events are ignored)"
+
+    # Work that predates this watcher is not acted on - but "this watcher"
+    # means the first time it ever ran here, not this process.
+    #
+    # The supervisor restarts the watcher whenever it exits, so a cutoff taken
+    # per process would move forward on every crash and silently swallow
+    # everything that arrived in between. The forge does not redeliver, so
+    # those events are simply lost. The cutoff is therefore written once and
+    # kept, and the queue is left alone: process_event compares each event's
+    # own timestamp against it, which distinguishes a month-old backlog from
+    # something queued three seconds ago. A blanket wipe cannot.
+    if [[ "$WATCHER_PROCESS_BACKLOG" == "true" ]]; then
+        log_warn "WATCHER_PROCESS_BACKLOG=true: acting on work of any age"
+        WATCHER_CUTOFF_TS=""
+    else
+        local cutoff_file="$CONFIG_DIR/cutoff"
+        if [[ -s "$cutoff_file" ]]; then
+            WATCHER_CUTOFF_TS="$(tr -d '[:space:]' < "$cutoff_file")"
+        fi
+        if [[ ! "$WATCHER_CUTOFF_TS" =~ ^[0-9]+$ ]]; then
+            WATCHER_CUTOFF_TS="$(date +%s)"
+            printf '%s\n' "$WATCHER_CUTOFF_TS" > "$cutoff_file"
+            log_info "  First run here: ignoring anything created before now"
+        fi
+        log_info "  Cutoff: work created after $(date -d "@${WATCHER_CUTOFF_TS}" -Iseconds)"
+        local queued_count=0 queued
+        for queued in "$QUEUE_DIR"/*.json; do
+            [[ -e "$queued" ]] || continue
+            queued_count=$((queued_count + 1))
+        done
+        [[ "$queued_count" -gt 0 ]] && \
+            log_info "  ${queued_count} event(s) waiting in the queue"
+    fi
+
     log_info "Forgejo watcher initialized"
     log_info "  Instance: $FORGEJO_INSTANCE_URL"
     log_info "  Watching repos: $WATCHED_REPOS"
     log_info "  Agent type: $AGENT_TYPE"
 
     return 0
-}
-
-detect_legacy_agent_type() {
-    if [[ -f "$RALPH_VARIANT_MARKER" ]]; then
-        local variant
-        variant=$(tr -d '[:space:]' < "$RALPH_VARIANT_MARKER")
-        case "$variant" in
-            "$RALPH_VARIANT_ORCHESTRATOR")
-                echo "ralph-orchestrator"
-                ;;
-            *)
-                echo "ralph"
-                ;;
-        esac
-        return 0
-    fi
-
-    if [[ -d /opt/ralph ]]; then
-        echo "ralph"
-        return 0
-    fi
-
-    if command -v ralph >/dev/null 2>&1; then
-        local version
-        version=$(ralph --version 2>/dev/null | head -n 1 || true)
-        if echo "$version" | grep -qi "orchestrator"; then
-            echo "ralph-orchestrator"
-            return 0
-        fi
-        echo "ralph"
-        return 0
-    fi
-
-    echo "ralph"
 }
 
 # ============================================================================
@@ -240,6 +284,21 @@ start_receiver() {
     fi
 
     log_error "Failed to start Forgejo receiver"
+
+    # The receiver logs its own reason - a missing socat, a port already
+    # taken - and dies. Without this the watcher only ever reported that it
+    # failed, which says nothing about what to fix.
+    local receiver_log="$CONFIG_DIR/receiver.log"
+    if [[ -f "$receiver_log" ]]; then
+        local line
+        while IFS= read -r line; do
+            log_error "  ${line#*] }"
+        done < <(grep -i 'error' "$receiver_log" 2>/dev/null | tail -n 3)
+    else
+        log_error "  It wrote no log, so it died before it could start:"
+        log_error "  check that socat is installed in the image."
+    fi
+
     return 1
 }
 
@@ -255,7 +314,7 @@ stop_receiver() {
 # ============================================================================
 
 is_agent_running() {
-    tmux has-session -t ralph-loop 2>/dev/null
+    tmux has-session -t foundry-work 2>/dev/null
 }
 
 wait_for_agent() {
@@ -267,7 +326,7 @@ wait_for_agent() {
         now=$(date +%s)
         if [[ "$now" -ge "$deadline" ]]; then
             log_warn "$AGENT_DISPLAY_NAME did not finish within ${AGENT_TIMEOUT}m; killing tmux session"
-            tmux kill-session -t ralph-loop 2>/dev/null || true
+            tmux kill-session -t foundry-work 2>/dev/null || true
             break
         fi
         sleep 30
@@ -367,7 +426,10 @@ event_to_task_json() {
                 --argjson number "$(echo "$payload" | jq -r '.issue.number')" \
                 --arg title "$(echo "$payload" | jq -r '.issue.title')" \
                 --arg body "$(echo "$payload" | jq -r '.issue.body // ""')" \
-                --arg created_at "$(echo "$payload" | jq -r '.issue.created_at')" \
+                --arg created_at "$(echo "$payload" | jq -r '
+                    if (.action // "opened") == "opened"
+                    then .issue.created_at
+                    else (.issue.updated_at // .issue.created_at) end')" \
                 --arg html_url "$(echo "$payload" | jq -r '.issue.html_url')" \
                 '{type:"issue", repo:$repo, number:$number, title:$title, body:$body, created_at:$created_at, html_url:$html_url}'
             ;;
@@ -387,7 +449,10 @@ event_to_task_json() {
                 --argjson number "$(echo "$payload" | jq -r '.pull_request.number')" \
                 --arg title "$(echo "$payload" | jq -r '.pull_request.title')" \
                 --arg body "$(echo "$payload" | jq -r '.pull_request.body // ""')" \
-                --arg created_at "$(echo "$payload" | jq -r '.pull_request.created_at')" \
+                --arg created_at "$(echo "$payload" | jq -r '
+                    if (.action // "opened") == "opened"
+                    then .pull_request.created_at
+                    else (.pull_request.updated_at // .pull_request.created_at) end')" \
                 --arg html_url "$(echo "$payload" | jq -r '.pull_request.html_url')" \
                 '{type:"pr", repo:$repo, number:$number, title:$title, body:$body, created_at:$created_at, html_url:$html_url}'
             ;;
@@ -416,6 +481,48 @@ event_to_task_json() {
     esac
 }
 
+
+# Cap replies per thread.
+#
+# Ignoring our own account stops the loop we caused; this stops the next one.
+# Anything that echoes the trigger keyword - another bot, a quoted comment, a
+# mirrored issue - produces the same flood, and the forge accepts comments far
+# faster than a human can notice.
+#
+# Returns 0 when replying is allowed.
+reply_budget_ok() {
+    local thread="$1"
+    local window="${REPLY_WINDOW_SECONDS:-300}"
+    local cap="${REPLY_CAP_PER_WINDOW:-5}"
+    local state="$CONFIG_DIR/reply-budget.json"
+    local now
+    now="$(date +%s)"
+
+    [[ -s "$state" ]] || printf '{}\n' > "$state"
+
+    local recent
+    recent="$(jq -r --arg t "$thread" --argjson now "$now" --argjson w "$window" \
+        '[(.[$t] // [])[] | select(. > ($now - $w))] | length' "$state" 2>/dev/null)"
+    [[ "$recent" =~ ^[0-9]+$ ]] || recent=0
+
+    if [[ "$recent" -ge "$cap" ]]; then
+        log_error "Reply cap reached for ${thread}: ${recent} in ${window}s"
+        log_error "  Refusing to reply again - this is what a comment loop looks like."
+        return 1
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    if jq --arg t "$thread" --argjson now "$now" --argjson w "$window" \
+        '.[$t] = ([((.[$t] // [])[] | select(. > ($now - $w))), $now])' \
+        "$state" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$state"
+    else
+        rm -f "$tmp"
+    fi
+    return 0
+}
+
 process_event() {
     local event_file="$1"
     local event_type payload
@@ -424,6 +531,21 @@ process_event() {
     payload=$(jq '.payload' "$event_file")
 
     log_debug "Processing event: $event_type from $event_file"
+
+    # Never act on our own comments.
+    #
+    # The help reply lists the usage, which necessarily contains the trigger
+    # keyword - so posting it produces an event that triggers another reply,
+    # for as fast as the forge will accept comments. Any reply the watcher
+    # writes has this property; the account is the only reliable way out.
+    local author
+    author="$(printf '%s' "$payload" | jq -r '
+        .comment.user.login // .issue.user.login // .sender.login // empty')"
+    if [[ -n "$WATCHER_BOT_USER" && "$author" == "$WATCHER_BOT_USER" ]]; then
+        log_debug "Ignoring event authored by ${author} (that is us)"
+        rm -f "$event_file"
+        return 0
+    fi
 
     if ! trigger_from_event "$event_type" "$payload" >/dev/null; then
         log_debug "No trigger keyword in $event_type event, skipping"
@@ -452,6 +574,19 @@ process_event() {
     repo=$(echo "$task_json" | jq -r '.repo')
     created_at=$(echo "$task_json" | jq -r '.created_at')
     number=$(echo "$task_json" | jq -r '.number')
+
+    # Older than this run: record it as seen and move on, so a later restart
+    # does not reconsider it either.
+    if [[ -n "$WATCHER_CUTOFF_TS" && -n "$created_at" && "$created_at" != "null" ]]; then
+        local created_ts
+        created_ts="$(date -d "$created_at" +%s 2>/dev/null || echo 0)"
+        if [[ "$created_ts" -gt 0 && "$created_ts" -lt "$WATCHER_CUTOFF_TS" ]]; then
+            log_info "Ignoring $task_type #${number} from ${created_at}: predates this run"
+            mark_processed "$task_id" "{\"type\":\"$task_type\",\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"skipped_backlog\"}"
+            rm -f "$event_file"
+            return 0
+        fi
+    fi
 
     log_info "Found trigger in $task_type event for $repo"
 
@@ -543,7 +678,9 @@ process_event() {
     if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
         log_info "No task mode stated for $task_id; replying with usage"
         local reply_result="replied_no_mode"
-        if [[ "$task_type" != "pipeline_failure" ]]; then
+        if [[ "$task_type" != "pipeline_failure" ]] && ! reply_budget_ok "${repo}#${number}"; then
+            reply_result="skipped_reply_cap"
+        elif [[ "$task_type" != "pipeline_failure" ]]; then
             # Record what actually happened. Filing an unposted reply as
             # answered would strand the request: nobody was told anything, and
             # the event is never looked at again.
@@ -787,8 +924,23 @@ cmd_mark_all() {
 
     ensure_processed_file_valid
 
-    # TODO: Implement by scanning open issues/PRs via API
-    log_warn "mark-all via API scan is not yet implemented"
+    # Drop whatever is queued. The cutoff at startup means anything older than
+    # the next run is ignored anyway; this makes that explicit, and is what to
+    # reach for after a flood or a long outage.
+    local dropped=0 queued
+    for queued in "$QUEUE_DIR"/*.json; do
+        [[ -e "$queued" ]] || continue
+        rm -f "$queued"
+        dropped=$((dropped + 1))
+    done
+
+    local now
+    now="$(date +%s)"
+    printf '%s\n' "$now" > "$CONFIG_DIR/cutoff"
+
+    log_info "Discarded ${dropped} queued event(s); cutoff moved to $(date -Iseconds)"
+    echo "Discarded ${dropped} queued event(s) and moved the cutoff to now."
+    echo "Nothing created before this moment will be picked up again."
 }
 
 # ============================================================================

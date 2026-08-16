@@ -35,6 +35,16 @@ polluting the host, while the files they produce stay ordinary host files.
   copy-in/copy-out layer the VM backend needed.
 - Runs as an unprivileged user whose UID/GID match the host user's, so files
   written into the mount stay editable on the host.
+- That user's home is `/home/agent`, a symlink to the project's volume root.
+  The agent gets an ordinary Linux home; the host keeps the real path. Both
+  names reach the same files.
+
+The symlink is not cosmetic. OpenSSH resolves `~/.ssh` from the passwd entry
+rather than from `$HOME` — deliberately, so a manipulated environment cannot
+redirect which keys are used. Without a passwd home that reaches the volume
+root, ssh reads an empty `/home/agent/.ssh`, ignores the project's config, keys
+and `known_hosts`, and git fails with `Host key verification failed` or
+`Permission denied (publickey)` while the files sit in plain view.
 
 ## The Agent Image
 
@@ -46,7 +56,7 @@ mounted volume root, so nothing needs baking per project.
 - `foundry-agent:base` — git, tmux, node, gh, jq, ripgrep, plus the interactive
   CLIs (claude, gemini, codex). This is what most projects use.
 - `foundry-agent:<variant>` — the above plus exactly one autonomous runner
-  (`ralph`, `ralph-orchestrator`, `kimi-ralph`).
+  (`claude-goal`, `codex-goal`, `agy-goal`).
 
 `foundry image build` also imports the result into the sandbox runtime's own
 image store, which is separate from the local docker daemon's.
@@ -69,8 +79,10 @@ proxy.
   loopback inside the sandbox is unaffected.
 
 Ports the outside world must reach (a webhook receiver) are published
-explicitly. Port mappings do **not** survive a sandbox restart, which is why
-`foundry up` re-applies them every time.
+explicitly. Mappings persist for the sandbox's lifetime, so `foundry up`
+reconciles them: it publishes what is missing and unpublishes what the config
+no longer asks for. Re-publishing an existing mapping is an error, not a
+no-op.
 
 ## Volume Root Structure
 
@@ -80,7 +92,7 @@ explicitly. Port mappings do **not** survive a sandbox restart, which is why
 ├── repos/                  # git repositories, cloned inside the sandbox
 ├── .ssh/                   # git keys + hand-editable config (700 / 600)
 ├── .foundry/               # generated start scripts
-├── .ralph/ .kimi/ .claude/ # per-agent state, whichever applies
+├── .claude/ .codex/ .gemini/  # per-agent state, whichever applies
 └── logs/                   # agent logs, readable directly on the host
 ```
 
@@ -97,9 +109,6 @@ and survived the migration unchanged.
 | `claude` | interactive | `@anthropic-ai/claude-code` |
 | `gemini` | interactive | `@google/gemini-cli` |
 | `codex` | interactive | `@openai/codex` |
-| `ralph` | autonomous | `frankbria/ralph-claude-code` |
-| `ralph-orchestrator` | autonomous | `@ralph-orchestrator/ralph-cli` |
-| `kimi-ralph` | autonomous | `kimi-code` |
 
 Both kinds run in a tmux session inside the sandbox: autonomous agents run a
 generated start script, interactive ones run the bare CLI so you can

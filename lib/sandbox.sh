@@ -220,6 +220,40 @@ sandbox_is_running() {
 # LIFECYCLE
 # ============================================================================
 
+# Make sure the image is in the sandbox runtime's store before creating a box.
+#
+# The runtime keeps its own image store, separate from the local docker daemon,
+# and `sbx reset` empties it - so an image built earlier disappears and
+# `sbx create -t` tries to *pull* the tag, failing with "403 Forbidden: pull
+# failed", which reads like an authentication problem rather than a missing
+# local image. If docker still has it, re-import rather than making the user
+# rebuild.
+#
+# Usage: sandbox_ensure_image <tag>
+sandbox_ensure_image() {
+    local tag="$1"
+    [[ -n "$tag" ]] || return 0
+
+    # Already known to the runtime?
+    local repo want_tag
+    repo="${tag%:*}"
+    want_tag="${tag##*:}"
+    if "$SBX_BIN" template ls 2>/dev/null \
+        | awk -v r="$repo" -v t="$want_tag" '
+            $1 ~ r"$" && $2 == t { found = 1 } END { exit !found }'; then
+        return 0
+    fi
+
+    if ! check_command docker || ! docker image inspect "$tag" >/dev/null 2>&1; then
+        log_error "Image not available to the sandbox runtime: $tag"
+        log_error "Build it first:  foundry image build"
+        return 1
+    fi
+
+    log_info "Image missing from the sandbox runtime; re-importing $tag"
+    sandbox_load_image "$tag"
+}
+
 # Create a sandbox for a project.
 #
 # Usage: sandbox_create <name> <image> <cpus> <memory> <volume_root> \
@@ -256,6 +290,8 @@ sandbox_create() {
         log_debug "Sandbox already exists: $name"
         return 0
     fi
+
+    sandbox_ensure_image "$image" || return 1
 
     local -a args=(create shell --name "$name")
 
@@ -396,6 +432,87 @@ sandbox_load_image() {
 # EXECUTION
 # ============================================================================
 
+# The agent's home inside the sandbox.
+#
+# A normal Linux home, symlinked at the project's volume root. sbx mounts a
+# workspace at its host path and offers no way to remap it, so the volume lands
+# on ~/.local/share/foundry/volumes/<project> - a long, unfamiliar place for an
+# agent to live. The agent is the one working in these paths; the host path
+# stays valid for the human, since both names reach the same files.
+#
+# The link also fixes ssh, which is why it exists at all: OpenSSH resolves
+# ~/.ssh from the passwd entry, not from $HOME. Without a passwd home that
+# reaches the volume root, ssh reads /home/agent/.ssh - empty - and neither the
+# config, the keys nor known_hosts are ever seen. That surfaces as
+# "Host key verification failed" or "Permission denied (publickey)" while the
+# files sit in plain view.
+sandbox_home() {
+    printf '%s\n' "${FOUNDRY_SANDBOX_HOME:-/home/agent}"
+}
+
+# Script run inside the sandbox to point the home at the volume root.
+# $1 = home, $2 = volume root.
+# shellcheck disable=SC2016  # deliberately unexpanded: these are the inner shell's args
+_FOUNDRY_LINK_HOME='
+set -e
+home="$1"
+root="$2"
+
+if [ -L "$home" ] && [ "$(readlink "$home")" = "$root" ]; then
+    exit 0
+fi
+
+if [ -L "$home" ]; then
+    rm -f "$home"
+elif [ -d "$home" ]; then
+    # sbx puts its own files here - a .gitconfig among them - and useradd
+    # copies /etc/skel. Carry anything across that the volume root does not
+    # already have, so replacing the directory loses nothing, then require it
+    # to be empty: whatever is left is unexpected and worth stopping for.
+    for entry in "$home"/* "$home"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        base=$(basename "$entry")
+        if [ ! -e "$root/$base" ]; then
+            mv "$entry" "$root/$base"
+        else
+            rm -rf "$entry"
+        fi
+    done
+    rmdir "$home" 2>/dev/null || {
+        echo "refusing to replace non-empty $home" >&2
+        exit 1
+    }
+fi
+
+mkdir -p "$(dirname "$home")"
+ln -sfn "$root" "$home"
+'
+
+# Point the sandbox home at the volume root.
+#
+# Idempotent, and careful with the image is own /home/agent: a directory left by
+# useradd is empty and gets replaced, while one holding anything is kept.
+#
+# Usage: sandbox_link_home <name> <root>
+sandbox_link_home() {
+    local name="$1" root="$2"
+    local home
+    home="$(sandbox_home)"
+
+    [[ -n "$name" && -n "$root" ]] || return 0
+    [[ "$home" == "$root" ]] && return 0
+
+    if ! sandbox_exec_root "$name" / sh -c "$_FOUNDRY_LINK_HOME" -- "$home" "$root"; then
+        log_error "Could not point ${home} at the volume root"
+        log_error "  ssh reads ~/.ssh from the passwd entry, so git will not see"
+        log_error "  the project's keys until this works."
+        return 1
+    fi
+
+    log_debug "Sandbox home ${home} -> ${root}"
+    return 0
+}
+
 # The user commands run as inside the sandbox.
 #
 # This is the host user's numeric UID, not root. Everything the agent writes
@@ -410,8 +527,13 @@ sandbox_user() {
     printf '%s\n' "${FOUNDRY_SANDBOX_USER:-$(resolve_host_uid)}"
 }
 
-# Run a command inside a sandbox, with HOME and cwd set to the volume root.
-# Usage: sandbox_exec <name> <home> <cmd> [args...]
+# Run a command inside a sandbox, with HOME and cwd set to the sandbox home.
+#
+# <home> is accepted and ignored: the agent's home is /home/agent inside the
+# box (a symlink to the volume root), not the host path callers pass. The
+# parameter stays because every call site passes it and a signature change is
+# not worth the churn.
+# Usage: sandbox_exec <name> <ignored-home> <cmd> [args...]
 sandbox_exec() {
     local name="$1"
     local home="$2"
@@ -422,27 +544,33 @@ sandbox_exec() {
         return 1
     fi
 
-    "$SBX_BIN" exec -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
+    local box_home
+    box_home="$(sandbox_home)"
+    "$SBX_BIN" exec -u "$(sandbox_user)" -e "HOME=${box_home}" -w "$box_home" "$name" "$@"
 }
 
 # Same, with a TTY attached (interactive shells, tmux attach).
-# Usage: sandbox_exec_tty <name> <home> <cmd> [args...]
+# Usage: sandbox_exec_tty <name> <ignored-home> <cmd> [args...]
 sandbox_exec_tty() {
     local name="$1"
     local home="$2"
     shift 2
 
-    "$SBX_BIN" exec -it -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
+    local box_home
+    box_home="$(sandbox_home)"
+    "$SBX_BIN" exec -it -u "$(sandbox_user)" -e "HOME=${box_home}" -w "$box_home" "$name" "$@"
 }
 
 # Run a command detached inside the sandbox.
-# Usage: sandbox_exec_detached <name> <home> <cmd> [args...]
+# Usage: sandbox_exec_detached <name> <ignored-home> <cmd> [args...]
 sandbox_exec_detached() {
     local name="$1"
     local home="$2"
     shift 2
 
-    "$SBX_BIN" exec -d -u "$(sandbox_user)" -e "HOME=${home}" -w "$home" "$name" "$@"
+    local box_home
+    box_home="$(sandbox_home)"
+    "$SBX_BIN" exec -d -u "$(sandbox_user)" -e "HOME=${box_home}" -w "$box_home" "$name" "$@"
 }
 
 # Run a command as root inside the sandbox (package installs, chown).
@@ -461,8 +589,8 @@ sandbox_exec_root() {
 
 # Publish ports on a running sandbox.
 #
-# Port mappings do NOT survive a sandbox restart, so this must be called on
-# every start. Specs are passed through verbatim:
+# Prefer sandbox_sync_ports: publishing a port that is already published is a
+# 409, and mappings persist for the sandbox's lifetime. Specs are passed through verbatim:
 #   [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTOCOL]
 #
 # Omitting HOST_IP binds loopback only - callers that need the port reachable
@@ -485,6 +613,63 @@ sandbox_publish() {
 
     log_debug "Publishing ports on $name: $*"
     _sbx_checked "publishing ports on '$name'" "${args[@]}" || return 1
+
+    return 0
+}
+
+# Bring published ports in line with the given specs.
+#
+# Port mappings persist for the sandbox's lifetime, and publishing one that is
+# already published is a 409 - so `up`, which is meant to be idempotent, failed
+# on its second run. Changing the port in the config made it worse: the old
+# mapping stayed, the new one was added, and both showed in `sbx ls`.
+#
+# Publishes only what is missing and unpublishes what the config no longer
+# asks for, which is what reconciliation is supposed to mean.
+#
+# Usage: sandbox_sync_ports <name> [spec...]
+sandbox_sync_ports() {
+    local name="$1"
+    shift
+
+    local json current=""
+    json="$("$SBX_BIN" ports "$name" --json 2>/dev/null)" || json="[]"
+    current="$(printf '%s' "$json" | jq -r '
+        .[]? | "\(.host_ip // "0.0.0.0"):\(.host_port):\(.sandbox_port)"' 2>/dev/null)"
+
+    # Normalise the desired specs to the same shape so they can be compared.
+    local -a want=()
+    local spec
+    for spec in "$@"; do
+        [[ -n "$spec" ]] || continue
+        case "$spec" in
+            *:*:*) want+=("$spec") ;;
+            *:*)   want+=("0.0.0.0:$spec") ;;
+            *)     want+=("0.0.0.0:${spec}:${spec}") ;;
+        esac
+    done
+
+    local have
+    for have in $current; do
+        local keep=false
+        for spec in "${want[@]:-}"; do
+            [[ "$spec" == "$have" ]] && { keep=true; break; }
+        done
+        if [[ "$keep" == "false" ]]; then
+            log_info "Unpublishing port no longer in the config: $have"
+            _sbx_checked "unpublishing '$have'" ports "$name" --unpublish "$have" || return 1
+        fi
+    done
+
+    for spec in "${want[@]:-}"; do
+        [[ -n "$spec" ]] || continue
+        if grep -qxF "$spec" <<< "$current"; then
+            log_debug "Port already published: $spec"
+            continue
+        fi
+        log_info "Publishing port: $spec"
+        _sbx_checked "publishing '$spec'" ports "$name" --publish "$spec" || return 1
+    done
 
     return 0
 }

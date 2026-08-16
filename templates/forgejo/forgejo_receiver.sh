@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-CONFIG_DIR="${CONFIG_DIR:-/root/.config/forgejo-watcher}"
+CONFIG_DIR="${CONFIG_DIR:-${HOME:?HOME is not set}/.config/forgejo-watcher}"
 CONFIG_FILE="${CONFIG_FILE:-$CONFIG_DIR/config.conf}"
 QUEUE_DIR="${QUEUE_DIR:-$CONFIG_DIR/queue}"
 LOG_FILE="${LOG_FILE:-$CONFIG_DIR/receiver.log}"
@@ -113,7 +113,9 @@ handle_request() {
             x-hub-signature-256)
                 signature="$header_value"
                 ;;
-            x-gitea-signature|x-gogs-signature)
+            x-forgejo-signature|x-gitea-signature|x-gogs-signature)
+                # Forgejo sends the bare hex digest under its own header;
+                # only the GitHub-style header carries the "sha256=" prefix.
                 if [[ -z "$signature" && -n "$header_value" ]]; then
                     signature="sha256=$header_value"
                 fi
@@ -124,11 +126,19 @@ handle_request() {
         esac
     done
 
-    # Read body
-    local body=""
+    # Read the body into a file, not a variable.
+    #
+    # $(...) strips trailing newlines, and the signature covers the bytes the
+    # forge actually sent - Go's json.Encoder ends its output with "\n", so
+    # hashing a stripped copy never matches. The file also keeps the body
+    # byte-exact for jq.
+    local body_file=""
     if [[ "$content_length" =~ ^[0-9]+$ ]] && [[ "$content_length" -gt 0 ]]; then
-        body=$(head -c "$content_length")
+        body_file="$(mktemp)"
+        head -c "$content_length" > "$body_file"
     fi
+    # shellcheck disable=SC2064  # expand body_file now, not at trap time
+    trap "rm -f '${body_file}'" RETURN
 
     log_debug "Received $event_type event (len=$content_length)"
 
@@ -136,6 +146,18 @@ handle_request() {
         log_warn "Missing event type header"
         http_response 400 "Bad Request"
         return
+    fi
+
+    # A secret that is configured but unreadable must not degrade into
+    # "accept everything": the file existing is the operator's intent.
+    if [[ -z "$WEBHOOK_SECRET" && -f "$WEBHOOK_SECRET_FILE" ]]; then
+        log_error "Webhook secret file exists but could not be read; refusing"
+        http_response 500 "Receiver misconfigured"
+        return
+    fi
+
+    if [[ -z "$WEBHOOK_SECRET" ]]; then
+        log_warn "No webhook secret configured - requests are NOT authenticated"
     fi
 
     # Verify signature if a secret is configured
@@ -147,9 +169,25 @@ handle_request() {
         fi
 
         local expected
-        expected="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')"
+        expected="sha256=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" \
+            < "${body_file:-/dev/null}" | awk '{print $NF}')"
         if [[ "$signature" != "$expected" ]]; then
             log_warn "Invalid webhook signature"
+            # Enough to tell a wrong secret from a mangled body, without
+            # putting either the payload or the secret in the log.
+            log_debug "  got ${signature:0:20}… expected ${expected:0:20}… over ${content_length} bytes"
+
+            # Keep the exact bytes. Whether the secret is wrong or the body
+            # was mangled looks identical in the log, and the only way to tell
+            # them apart is to re-run the digest over what actually arrived:
+            #   openssl dgst -sha256 -hmac "$(foundry watcher secret <p>)" \
+            #       < last-rejected.json
+            # and compare with the signature the forge's delivery view shows.
+            if [[ -n "$body_file" ]]; then
+                ( umask 077; cat "$body_file" > "$CONFIG_DIR/last-rejected.json" )
+                log_debug "  body kept at $CONFIG_DIR/last-rejected.json"
+            fi
+
             http_response 401 "Unauthorized"
             return
         fi
@@ -157,7 +195,7 @@ handle_request() {
 
     # Normalize and queue event
     local event_payload payload_json
-    payload_json=$(printf '%s' "$body" | jq -s '.[0]? // {}')
+    payload_json=$(jq -s '.[0]? // {}' < "${body_file:-/dev/null}")
     event_payload=$(jq -n \
         --arg event_type "$event_type" \
         --arg received_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
@@ -196,6 +234,14 @@ run_socat_server() {
 
 start_server() {
     load_config
+
+    # config.conf names the port RECEIVER_PORT, because that is what it is
+    # called in foundry.json and in the published port mapping. Without this
+    # the receiver silently kept its own default and listened on 8080, so
+    # every webhook was refused on the port the forge had been told to use.
+    LISTEN_PORT="${RECEIVER_PORT:-$LISTEN_PORT}"
+    LISTEN_INTERFACE="${RECEIVER_INTERFACE:-$LISTEN_INTERFACE}"
+
     mkdir -p "$QUEUE_DIR"
 
     if ! command -v socat >/dev/null 2>&1; then
@@ -218,6 +264,12 @@ main() {
             start_server
             ;;
         handle-request)
+            # socat runs this as a brand-new process per connection, so it
+            # inherits nothing from the listener: without loading the config
+            # here, WEBHOOK_SECRET is empty and the signature check below is
+            # skipped for every request. That silently accepted forged events
+            # from anyone who could reach the port.
+            load_config
             handle_request
             ;;
         stop)

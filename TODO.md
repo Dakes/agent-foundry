@@ -28,17 +28,20 @@ maintained against the code.
 ## Next
 
 ### Watchers on the sandbox transport
-- [ ] Port `templates/gh-watcher/` to run inside a sandbox (no SSH, no VM IP)
-- [ ] Port `templates/forgejo/` receiver + hook manager
-- [ ] Derive the webhook URL from the published port instead of the VM IP
-- [ ] Start/stop the watcher from `foundry up` / `foundry down`
-- [ ] Ship `fj` (forgejo-cli) in the agent image — the golden image used to
-      provide it
-- [ ] Drop the "not implemented yet" warning from `cmd_up` and the banners from
-      the watcher docs
+- [x] Port `templates/forgejo/` receiver, watcher and hook manager
+- [x] Start/stop the watcher from `foundry up` / `foundry down`
+- [x] Ship `fj` (forgejo-cli) in the agent image
+- [x] Drop the "not implemented yet" warning and the doc banners
+- [ ] End-to-end test against a real forge event (only the config path is
+      covered by tests so far)
+- [x] `mark-all` implemented, and a startup cutoff means a restart never acts
+      on a backlog
 
 ### Autostart
-- [ ] Honor `.autostart` in `foundry.json` via a systemd user unit
+- [ ] Honor `.autostart` in `foundry.json` via a systemd user unit. **The
+      field is seeded into every new project and read by nothing**, so it
+      currently promises something Foundry does not do - either implement it
+      or drop it from `_project_seed_config`.
 - [ ] `templates/systemd/` unit that runs `foundry up` for flagged projects
 
 ### Testing
@@ -54,6 +57,48 @@ maintained against the code.
       sandbox is passed explicitly
 - [ ] Revisit `projects/example-*` — they still use the old `git-config.json` /
       `agents.json` layout, replaced by `foundry.json`
+
+
+## Language: where Python would earn its place
+
+Bash is right for most of this and wrong for two parts. This is not a rewrite
+plan — the shell code works and has real coverage — it is a list of the places
+that have actually cost debugging time, and a rule for new code.
+
+### Port these when they next need real work
+
+- **`lib/project.sh` and `lib/policy.sh` — config and data.** Every read of
+  `foundry.json` shells out to `jq`, a dozen subprocesses per command, with
+  filters written as strings that nothing type-checks. Two shipped bugs came
+  from exactly that: `policy_has_allow` matched a *filesystem* `**` rule
+  against a network resource (so `doctor` reported "Open" on a default-deny
+  host, and rule dedup could skip a real rule), and the derived-resource list
+  silently omitted the bare host that DNS needs. Both are trivial to get right
+  with parsed structures and a test that can assert on them.
+
+- **`scripts/test-prompt-lib.sh` — the test harness.** 94 hand-rolled
+  assertions. The suite has broken repeatedly on shell mechanics rather than on
+  the code under test: `read` dropping a final line with no trailing newline, a
+  sourced adapter's `set -e` killing the caller, a heredoc inside `|| { … }`
+  failing to parse. `pytest` catches that class before it reaches a run.
+
+### Keep in bash
+
+- **`lib/sandbox.sh`** — a thin wrapper over `sbx`: argument arrays, exit
+  codes, stderr passthrough. Python would add a subprocess layer and gain
+  nothing.
+- **`bin/foundry`** — argument dispatch.
+- **Everything under `templates/`** — it runs *inside* the sandbox, where the
+  only guarantee is a shell and the tools baked into the image.
+
+### Rule for new code
+
+Prefer Python when the work is mostly parsing, comparing or transforming
+structured data, or when it needs tests with more than string matching. Prefer
+bash when it is process orchestration, or when it runs inside a sandbox.
+
+A hybrid reads worse than either pure option; put the typed language where the
+typed data is and accept that.
 
 ## Future Enhancements
 

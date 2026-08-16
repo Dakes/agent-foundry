@@ -7,15 +7,24 @@
 # watcher scripts running inside a sandbox, so it must stay plain bash 4+
 # compatible and self-contained.
 #
+# Two categories:
+#
+#   interactive  claude, gemini, codex - a human drives them in a terminal.
+#   autonomous   *-goal - the CLI's own goal loop runs unattended, which is
+#                what a watcher can drive.
+#
+# The goal agents differ only in which binary is invoked; everything else
+# about them is identical, which is why so many cases below collapse to one.
+#
 
 # Whitespace-separated list of valid agent type identifiers.
-AGENT_TYPES="ralph ralph-orchestrator kimi-ralph claude gemini codex"
+AGENT_TYPES="claude gemini codex claude-goal codex-goal agy-goal"
 
 # Returns 0 if the agent type is supported.
 agent_is_valid() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator|kimi-ralph|claude|gemini|codex)
+        claude|gemini|codex|claude-goal|codex-goal|agy-goal)
             return 0
             ;;
         *)
@@ -28,10 +37,10 @@ agent_is_valid() {
 agent_display_name() {
     local agent="$1"
     case "$agent" in
-        ralph) echo "Ralph (claude-code)" ;;
-        ralph-orchestrator) echo "Ralph Orchestrator" ;;
-        kimi-ralph) echo "Kimi Code CLI (Ralph mode)" ;;
         claude) echo "Claude Code CLI" ;;
+        claude-goal) echo "Claude Code (goal loop)" ;;
+        codex-goal) echo "Codex (goal loop)" ;;
+        agy-goal) echo "Antigravity (goal loop)" ;;
         gemini) echo "Gemini CLI" ;;
         codex) echo "OpenAI Codex CLI" ;;
         *) echo "$agent" ;;
@@ -41,18 +50,17 @@ agent_display_name() {
 # Echoes the short identity the agent uses when speaking on an issue or PR.
 #
 # This is deliberately separate from agent_display_name: display names are
-# verbose ("Kimi Code CLI (Ralph mode)") and belong in logs, while comment
+# verbose ("Claude Code (goal loop)") and belong in logs, while comment
 # headers need a short, stable name. Every generated prompt and every watcher
 # comment derives its header from this one function, so the name cannot drift
 # between adapters.
 agent_identity_name() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator) echo "Ralph" ;;
-        kimi-ralph) echo "Kimi" ;;
-        claude) echo "Claude" ;;
+        claude|claude-goal) echo "Claude" ;;
+        codex|codex-goal) echo "Codex" ;;
+        agy-goal) echo "Antigravity" ;;
         gemini) echo "Gemini" ;;
-        codex) echo "Codex" ;;
         *) echo "Agent" ;;
     esac
 }
@@ -61,7 +69,7 @@ agent_identity_name() {
 agent_category() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator|kimi-ralph)
+        claude-goal|codex-goal|agy-goal)
             echo "autonomous"
             ;;
         claude|gemini|codex)
@@ -87,7 +95,7 @@ agent_is_interactive() {
 agent_session_backend() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator|kimi-ralph)
+        claude-goal|codex-goal|agy-goal)
             echo "tmux"
             ;;
         claude|gemini|codex)
@@ -103,11 +111,10 @@ agent_session_backend() {
 agent_binary() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator) echo "ralph" ;;
-        kimi-ralph) echo "kimi" ;;
-        claude) echo "claude" ;;
+        claude|claude-goal) echo "claude" ;;
+        codex|codex-goal) echo "codex" ;;
+        agy-goal) echo "agy" ;;
         gemini) echo "gemini" ;;
-        codex) echo "codex" ;;
         *) echo "" ;;
     esac
 }
@@ -116,62 +123,49 @@ agent_binary() {
 agent_package() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator) echo "ralph" ;;
-        kimi-ralph) echo "kimi-code" ;;
-        claude) echo "@anthropic-ai/claude-code" ;;
+        claude|claude-goal) echo "@anthropic-ai/claude-code" ;;
+        codex|codex-goal) echo "@openai/codex" ;;
+        agy-goal) echo "antigravity-cli" ;;
         gemini) echo "@google/gemini-cli" ;;
-        codex) echo "@openai/codex" ;;
         *) echo "" ;;
     esac
 }
 
-# Echoes the installer used by workspace provisioning: npm, uv, or ralph.
+# Echoes the installer the image build uses: npm, or the vendor's own script.
 agent_install_method() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator) echo "ralph" ;;
-        kimi-ralph) echo "kimi-code" ;;
-        claude|gemini|codex) echo "npm" ;;
+        claude|gemini|codex|claude-goal|codex-goal) echo "npm" ;;
+        agy-goal) echo "installer" ;;
         *) echo "" ;;
     esac
 }
 
-# Echoes the dotfolder name synced from the project into the VM workspace.
+# Echoes the dotfolder the agent keeps its own state in, under the volume root.
 agent_dotfolder() {
     local agent="$1"
     case "$agent" in
-        ralph|ralph-orchestrator) echo ".ralph" ;;
-        kimi-ralph) echo ".kimi" ;;
-        claude) echo ".claude" ;;
-        gemini) echo ".gemini" ;;
-        codex) echo ".codex" ;;
+        claude|claude-goal) echo ".claude" ;;
+        codex|codex-goal) echo ".codex" ;;
+        agy-goal|gemini) echo ".gemini" ;;
         *) echo "" ;;
     esac
 }
 
-# Echoes the default session name used for attach/stop/status.
+# Echoes the session name used for attach/stop/status.
+#
+# One name for every agent: only one agent runs per project, so a per-agent
+# name would only make attach harder to predict.
 agent_session_name() {
-    local agent="${1:-}"
-    # Historically Ralph used "ralph-loop" for the watcher work session and
-    # "foundry-agent" for the manually-started agent session. We keep the
-    # manual session name generic so only one autonomous agent runs at a time.
-    case "$agent" in
-        ralph|ralph-orchestrator|kimi-ralph)
-            echo "foundry-agent"
-            ;;
-        claude|gemini|codex)
-            echo "foundry-agent"
-            ;;
-        *)
-            echo "foundry-agent"
-            ;;
-    esac
+    echo "foundry-agent"
 }
 
-# Echoes the watcher work session name (the session the GitHub watcher starts
-# for an autonomous run).
+# Echoes the session name the watcher starts an autonomous run in.
+#
+# Kept distinct from agent_session_name so a manually attached agent and a
+# watcher-driven run cannot silently be the same session.
 agent_watcher_session_name() {
-    echo "ralph-loop"
+    echo "foundry-work"
 }
 
 # Echoes the host-side start-script template path.
@@ -179,11 +173,11 @@ agent_start_template() {
     local agent="$1"
     local base_dir="${AGENT_FOUNDRY_BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
     case "$agent" in
-        ralph|ralph-orchestrator)
-            echo "$base_dir/templates/ralph/start-ralph.sh.template"
-            ;;
-        kimi-ralph)
-            echo "$base_dir/templates/kimi/start-kimi-ralph.sh.template"
+        claude-goal|codex-goal|agy-goal)
+            # One template for all three: they differ only in the command line,
+            # which it selects on AGENT_TYPE. The loop itself belongs to the
+            # CLI, so there is nothing per-agent left to script.
+            echo "$base_dir/templates/goal/start-goal.sh.template"
             ;;
         *)
             echo ""
@@ -191,67 +185,56 @@ agent_start_template() {
     esac
 }
 
-# Echoes the host-side GitHub watcher adapter path.
-agent_watcher_adapter() {
-    agent_watcher_adapter_for "$1" "gh"
-}
-
-# Echoes the host-side watcher adapter path for a specific watcher type.
-# Usage: agent_watcher_adapter_for <agent> <watcher_type>
-# Supported watcher_type values: gh, forgejo
+# Echoes the host-side watcher adapter path for an agent.
+#
+# One adapter serves every goal agent and every forge: it writes the task
+# prompt and the completion condition, and neither varies by agent or by
+# forge - the loop itself belongs to the CLI.
+# Usage: agent_watcher_adapter_for <agent> [watcher_type]
 agent_watcher_adapter_for() {
     local agent="$1"
-    local watcher_type="${2:-gh}"
     local base_dir="${AGENT_FOUNDRY_BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
-    case "$watcher_type" in
-        forgejo)
-            case "$agent" in
-                ralph)
-                    echo "$base_dir/templates/ralph/forgejo_watcher_agent_ralph.sh"
-                    ;;
-                ralph-orchestrator)
-                    echo "$base_dir/templates/ralph/forgejo_watcher_agent_ralph-orchestrator.sh"
-                    ;;
-                kimi-ralph)
-                    echo "$base_dir/templates/kimi/forgejo_watcher_agent_kimi-ralph.sh"
-                    ;;
-                *)
-                    echo ""
-                    ;;
-            esac
+    case "$agent" in
+        *-goal)
+            echo "$base_dir/templates/goal/watcher_agent_goal.sh"
             ;;
-        gh|*)
-            case "$agent" in
-                ralph)
-                    echo "$base_dir/templates/ralph/gh_watcher_agent_ralph.sh"
-                    ;;
-                ralph-orchestrator)
-                    echo "$base_dir/templates/ralph/gh_watcher_agent_ralph-orchestrator.sh"
-                    ;;
-                kimi-ralph)
-                    echo "$base_dir/templates/kimi/gh_watcher_agent_kimi-ralph.sh"
-                    ;;
-                *)
-                    echo ""
-                    ;;
-            esac
+        *)
+            echo ""
             ;;
     esac
 }
 
-# Echoes the default log file path inside the VM for an autonomous agent.
+agent_watcher_adapter() {
+    agent_watcher_adapter_for "$1"
+}
+
+# Echoes the iteration cap for an autonomous run; 0 means uncapped.
+#
+# The goal agents decide when they are done from the goal condition, so
+# nothing caps them by count. Kept as a function because the start scripts
+# read it, and a per-agent cap may return.
+agent_max_iterations() {
+    echo "0"
+}
+
+# Echoes the default timeout in minutes for autonomous agent runs.
+agent_default_timeout_minutes() {
+    echo "120"
+}
+
+# Echoes the default log file path inside the sandbox for an autonomous agent.
 agent_log_file() {
     local agent="$1"
-    local workspace="${2:-/root}"
+    local workspace="${2:-${HOME:-/home/agent}}"
     echo "$workspace/logs/${agent}.log"
 }
 
-# Echoes the default task prompt file path inside the VM for an autonomous
-# agent. The GitHub watcher writes the rendered task here before starting.
+# Echoes the default task prompt file path inside the sandbox for an
+# autonomous agent. The watcher writes the rendered task here before starting.
 agent_task_prompt_file() {
     local agent="$1"
-    local workspace="${2:-/root}"
+    local workspace="${2:-${HOME:-/home/agent}}"
     local dotfolder
     dotfolder="$(agent_dotfolder "$agent")"
     if [[ -n "$dotfolder" ]]; then
@@ -259,138 +242,4 @@ agent_task_prompt_file() {
     else
         echo "$workspace/.foundry/task_prompt.md"
     fi
-}
-
-# Echoes the default max Ralph iterations for agents that use a loop mode.
-# 0 means "not applicable".
-agent_max_iterations() {
-    local agent="$1"
-    case "$agent" in
-        *)
-            echo "0"
-            ;;
-    esac
-}
-
-# Echoes the default timeout in minutes for autonomous agent runs.
-agent_default_timeout_minutes() {
-    local agent="$1"
-    case "$agent" in
-        ralph|ralph-orchestrator)
-            echo "120"
-            ;;
-        kimi-ralph)
-            echo "120"
-            ;;
-        *)
-            echo "120"
-            ;;
-    esac
-}
-
-# Echoes a comma-separated list of valid agent types (for error messages).
-agent_valid_list() {
-    local list=""
-    local agent
-    for agent in $AGENT_TYPES; do
-        if [[ -n "$list" ]]; then
-            list="$list, $agent"
-        else
-            list="$agent"
-        fi
-    done
-    echo "$list"
-}
-
-# Echoes a space-separated list of autonomous agent types.
-agent_autonomous_types() {
-    local list=""
-    local agent
-    for agent in $AGENT_TYPES; do
-        if agent_is_autonomous "$agent"; then
-            list="$list $agent"
-        fi
-    done
-    echo "${list# }"
-}
-
-# Echoes a space-separated list of interactive agent types.
-agent_interactive_types() {
-    local list=""
-    local agent
-    for agent in $AGENT_TYPES; do
-        if agent_is_interactive "$agent"; then
-            list="$list $agent"
-        fi
-    done
-    echo "${list# }"
-}
-
-# Maps an agents.json identifier to the canonical agent type.
-agent_type_from_agents_json() {
-    local identifier="$1"
-    case "$identifier" in
-        frankbria/ralph-claude-code|ralph-claude-code)
-            echo "ralph"
-            ;;
-        mikeyobrien/ralph-orchestrator|ralph-orchestrator)
-            echo "ralph-orchestrator"
-            ;;
-        kimi-cli|moonshot-ai/kimi-cli|MoonshotAI/kimi-cli)
-            echo "kimi-ralph"
-            ;;
-        @anthropic-ai/claude-code|anthropic-ai/claude-code|claude-code)
-            echo "claude"
-            ;;
-        @openai/codex|openai/codex)
-            echo "codex"
-            ;;
-        @google/gemini-cli|google/gemini-cli|gemini-cli)
-            echo "gemini"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
-}
-
-# Echoes a space-separated list of supported agents.json identifiers.
-agents_json_supported_identifiers() {
-    echo "frankbria/ralph-claude-code mikeyobrien/ralph-orchestrator kimi-cli @anthropic-ai/claude-code @openai/codex @google/gemini-cli"
-}
-
-# Returns 0 if the agents.json identifier is supported.
-agents_json_identifier_is_valid() {
-    local identifier="$1"
-    [[ -n "$(agent_type_from_agents_json "$identifier")" ]]
-}
-
-# Returns 0 if the agent type supports thread-aware CLI session resume.
-# Only kimi-ralph is enabled initially; Claude/Codex/Gemini need their
-# resume semantics verified before enabling here.
-agent_supports_resume() {
-    local agent="$1"
-    case "$agent" in
-        kimi-ralph)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-# Echoes the CLI flag/argument style used to resume a session.
-# Currently only "kimi-session" is returned for kimi-ralph; other agents
-# return "none". Adapters can switch on this value.
-agent_session_resume_style() {
-    local agent="$1"
-    case "$agent" in
-        kimi-ralph)
-            echo "kimi-session"
-            ;;
-        *)
-            echo "none"
-            ;;
-    esac
 }

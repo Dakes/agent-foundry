@@ -30,7 +30,7 @@ ok() {
     RULE_FAILED=0
 }
 
-ADAPTERS=(templates/ralph/*.sh templates/kimi/*_watcher_agent_*.sh)
+ADAPTERS=(templates/goal/watcher_agent_goal.sh)
 
 # ---------------------------------------------------------------------------
 # 1. Identity strings must come from the prompt library, not be hardcoded.
@@ -174,13 +174,108 @@ ok "untrusted tracker text is fenced"
 while IFS= read -r f; do
     [[ -f "$f" ]] || continue
     # Comments may name the old path when explaining why it went away.
-    hits=$(grep -nE '/root/(repos|\.ralph|\.kimi)' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+    hits=$(grep -nE '/root/(repos|\.claude|\.codex|\.gemini)' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
     if [[ -n "$hits" ]]; then
         fail "$f hardcodes a pre-sandbox path:"
         printf '%s\n' "$hits" | sed 's/^/      /'
     fi
 done < <(printf '%s\n' templates/prompt-lib.sh templates/AGENT.md.template)
 ok "no pre-sandbox paths in the prompt layer"
+
+# ---------------------------------------------------------------------------
+# 9. Every autonomous agent must be reachable: a start template and a watcher
+#    adapter that exist on disk, and an adapter whose in-container filename the
+#    watchers actually resolve.
+#
+#    The goal agents shipped registered but unreachable - the registry returned
+#    no adapter, and the watchers looked for <forge>_watcher_agent_<type>.sh,
+#    which did not exist for them. Nothing failed until a real forge event
+#    arrived, which is the one moment nobody is watching.
+# ---------------------------------------------------------------------------
+# shellcheck source=../lib/agent-registry.sh
+source lib/agent-registry.sh
+
+for agent in $AGENT_TYPES; do
+    agent_is_autonomous "$agent" || continue
+
+    tmpl=$(agent_start_template "$agent")
+    if [[ -z "$tmpl" || ! -f "$tmpl" ]]; then
+        fail "agent '$agent' has no start template on disk (${tmpl:-<none>})"
+    fi
+
+    # Forgejo is the only forge with a watcher; the loop that used to cover
+    # GitHub as well went with it.
+    forge=forgejo
+    {
+        adapter=$(agent_watcher_adapter_for "$agent" "$forge")
+        if [[ -z "$adapter" || ! -f "$adapter" ]]; then
+            fail "agent '$agent' has no $forge watcher adapter (${adapter:-<none>})"
+            continue
+        fi
+
+        # The watchers resolve the adapter by filename inside the image. A
+        # registry entry pointing at a file the watcher will never look for is
+        # the same outage as no entry at all.
+        base=$(basename "$adapter")
+        if ! grep -q "$base" "templates/${forge}-watcher/${forge}_watcher.sh" \
+            2>/dev/null && \
+           ! grep -q "$base" "templates/${forge}/${forge}_watcher.sh" 2>/dev/null
+        then
+            expected="${forge}_watcher_agent_${agent}.sh"
+            [[ "$base" == "$expected" ]] || \
+                fail "agent '$agent': $forge watcher will not resolve $base"
+        fi
+
+        # Existence is not enough: the watcher calls prepare_agent_workspace
+        # and then start_agent_loop. An adapter defining only the first
+        # prepares a workspace that nothing ever runs in, and the failure is a
+        # "command not found" at the moment a forge event arrives.
+        for fn in prepare_agent_workspace start_agent_loop; do
+            grep -q "^${fn}()" "$adapter" || \
+                fail "adapter $(basename "$adapter") does not define ${fn}()"
+        done
+
+        # The watcher also gates on an agent-type allowlist before it ever
+        # resolves an adapter. An agent missing from it is rejected at startup
+        # with "Unsupported watcher agent type", which no adapter can fix.
+        for wf in "templates/${forge}-watcher/${forge}_watcher.sh" \
+                  "templates/${forge}/${forge}_watcher.sh"; do
+            [[ -f "$wf" ]] || continue
+            if grep -q 'Unsupported watcher agent type' "$wf" && \
+               ! grep -qE "^[[:space:]]*[a-z|-]*\\b${agent}\\b[a-z|-]*\\)" "$wf"; then
+                fail "agent '$agent' is not in the $forge watcher's allowlist"
+            fi
+        done
+
+        # And it has to be in the image, or the watcher finds nothing.
+        if ! grep -q "$base" docker/foundry-agent.Dockerfile 2>/dev/null; then
+            case "$base" in
+                *_watcher_agent_*) ;;   # per-agent adapters ship another way
+                *) fail "agent '$agent': $base is not copied into the image" ;;
+            esac
+        fi
+    }
+done
+ok "every autonomous agent has a reachable template and adapter"
+
+# ---------------------------------------------------------------------------
+# 10. Nothing the bot posts back to a thread may contain the trigger keyword.
+#
+#     A reply lands on the thread that triggered it, so an occurrence of the
+#     keyword - even inside a code fence, even as an example - makes the forge
+#     deliver an event that triggers another reply. In production this reached
+#     hundreds of comments in seconds before it was noticed. The examples in
+#     the usage reply use a <mention> placeholder for exactly this reason.
+# ---------------------------------------------------------------------------
+kw_hits=$(TRIGGER_KEYWORD="@loopcanary" bash -c '
+    source templates/prompt-lib.sh 2>/dev/null
+    foundry_help_comment 2>/dev/null' | grep -c "@loopcanary" || true)
+
+if [[ "$kw_hits" -eq 0 ]]; then
+    ok "the usage reply does not contain the trigger keyword"
+else
+    fail "the usage reply contains the trigger keyword ${kw_hits} time(s) - it will trigger itself"
+fi
 
 echo
 if [[ "$FAIL" -eq 0 ]]; then

@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-CONFIG_DIR="${CONFIG_DIR:-/root/.config/forgejo-watcher}"
+CONFIG_DIR="${CONFIG_DIR:-${HOME:?HOME is not set}/.config/forgejo-watcher}"
 CONFIG_FILE="${CONFIG_FILE:-$CONFIG_DIR/config.conf}"
 LOG_FILE="${LOG_FILE:-$CONFIG_DIR/hook-manager.log}"
 HOOKS_FILE="${HOOKS_FILE:-$CONFIG_DIR/hooks.json}"

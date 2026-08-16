@@ -67,19 +67,25 @@ $EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
 
 **Fields** — all optional except what you actually use:
 
-- `agent` — `claude`, `gemini`, `codex`, `ralph`, `ralph-orchestrator`,
-  `kimi-ralph`. Defaults to `claude`. At most one agent per project.
-- `image` — override the image; otherwise derived from `agent`
-  (`foundry-agent:base` for interactive agents).
+- `agent` — interactive (`claude`, `gemini`, `codex`) or autonomous
+  (`claude-goal`, `codex-goal`, `agy-goal`). Defaults to `claude`. At most one
+  agent per project, and a **watcher needs one of the `*-goal` agents**.
+- `image` — override the image; otherwise `foundry-agent:base`, which carries
+  every CLI.
 - `repos[].url` — any git URL. `branch` and `dir` are optional; `dir` defaults
   to the repo name.
 - `resources.cpus` / `resources.memory` — memory takes a unit (`8g`, `4096m`);
   a bare number is read as MiB. Empty means "let the sandbox decide".
 - `network.allow` — rules derived from your remotes are written back here by
   `init`, so every exception is visible in a diff. You can add your own.
-- `watcher.kind` / `watcher.port` / `watcher.token_file` — forge watcher
-  config. **Not yet ported to the sandbox transport**; the port is published
-  but nothing listens on it.
+- `watcher.receiver_port` — the port **the forge POSTs webhooks to**, not a
+  port on the forge. Published as `0.0.0.0:<port>:<port>` so the forge can
+  reach into the sandbox. Must be **1024 or above**: binding a privileged port
+  needs daemon privileges the sandbox runtime does not have, and it surfaces as
+  a 403 from the port mapper.
+- `watcher.*` — the Forgejo watcher; it starts with `foundry up` whenever
+  `.watcher.kind` is set. Full reference in
+  [FORGEJO-WATCHER.md](FORGEJO-WATCHER.md).
 
 Apply any change with `foundry up` — it reconciles rather than recreating.
 
@@ -139,6 +145,20 @@ foundry doctor my-project
 foundry status my-project
 ```
 
+## Which way does the traffic go?
+
+Two directions, and only one of them needs a port published:
+
+| | Direction | Configured by |
+|---|---|---|
+| **Webhook** | forge → sandbox | `watcher.receiver_port` — published to the host |
+| **Forge API** (posting comments, reading PRs) | sandbox → forge | `watcher.instance_url` — outbound, nothing published |
+
+So `receiver_port` is a port on *your* machine that the forge dials into. Set
+the webhook in the forge to `http://<your-host>:<receiver_port>/`. It never has
+to be 80 — a webhook URL carries its own port — and 80 usually cannot be bound
+anyway.
+
 ## Network access to your forge
 
 Egress is open to the internet and closed to the LAN and the host. A forge on
@@ -156,7 +176,7 @@ foundry policy check forge.example.com:22
 
 Anything you drop in the volume root is visible to the agent at the same path
 inside the sandbox — `overview.md`, `architecture.md`, coding standards, and
-the agent's own dotfolder (`.claude/`, `.ralph/`, `.kimi/`).
+the agent's own dotfolder (`.claude/`, `.codex/`, `.gemini/`).
 
 For context that should be available to *every* project, use the shared
 directory, which is mounted read-only into every sandbox:

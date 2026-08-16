@@ -85,8 +85,8 @@ check_mode issue "implement a retry helper"                       help
 check_mode pr    "fix the failing test"                           help
 
 echo "== a different configured keyword works the same way =="
-TRIGGER_KEYWORD="!ralph" check_mode pr "!ralph review this"       review
-TRIGGER_KEYWORD="!ralph" check_mode pr "@touya review this"       help
+TRIGGER_KEYWORD="!bot" check_mode pr "!bot review this"           review
+TRIGGER_KEYWORD="!bot" check_mode pr "@touya review this"         help
 
 echo "== explicit directives still work without a mention =="
 check_mode pr    "/review"                              review
@@ -109,11 +109,11 @@ check_mode pipeline_failure ""                          fix
 unset TRIGGER_KEYWORD
 
 echo "== review mode must forbid the observed failure mode =="
-review_prompt=$(AGENT_IDENTITY=Kimi foundry_build_task_prompt "$(_ctx pr "@touya review this MR")" review)
+review_prompt=$(AGENT_IDENTITY=Codex foundry_build_task_prompt "$(_ctx pr "@touya review this MR")" review)
 check_contains "review" "$review_prompt" "Mode: **review**"
 check_contains "review" "$review_prompt" "Do not open a pull request."
 check_contains "review" "$review_prompt" "Do not modify, commit, or push any code."
-check_contains "review" "$review_prompt" "## 🤖 Kimi - Task Completed"
+check_contains "review" "$review_prompt" "## 🤖 Codex - Task Completed"
 check_not_contains "review" "$review_prompt" "Create a new branch"
 
 echo "== contract resolves the repo-AGENTS.md conflict =="
@@ -150,13 +150,13 @@ check_contains "identity/none" "$fallback" "Agent - Task Completed"
 # AGENT_IDENTITY existed rely on this.
 # shellcheck source=../lib/agent-registry.sh
 source "$ROOT_DIR/lib/agent-registry.sh"
-derived=$(AGENT_IDENTITY="" AGENT_TYPE="kimi-ralph" \
-    AGENT_DISPLAY_NAME="Kimi Code CLI (Ralph mode)" foundry_completion_header)
-check_contains "identity/derived" "$derived" "🤖 Kimi - Task Completed"
-check_not_contains "identity/derived" "$derived" "Ralph mode"
+derived=$(AGENT_IDENTITY="" AGENT_TYPE="claude-goal" \
+    AGENT_DISPLAY_NAME="Claude Code (goal loop)" foundry_completion_header)
+check_contains "identity/derived" "$derived" "🤖 Claude - Task Completed"
+check_not_contains "identity/derived" "$derived" "goal loop"
 
-explicit=$(AGENT_IDENTITY="Ralph" AGENT_TYPE="kimi-ralph" foundry_completion_header)
-check_contains "identity/explicit" "$explicit" "🤖 Ralph - Task Completed"
+explicit=$(AGENT_IDENTITY="Touya" AGENT_TYPE="claude-goal" foundry_completion_header)
+check_contains "identity/explicit" "$explicit" "🤖 Touya - Task Completed"
 
 echo "== checklist style is honoured, negatives stay unchecked =="
 checklist=$(AGENT_WORKSPACE=/vol/proj FOUNDRY_OBJECTIVE_STYLE=checklist \
@@ -205,10 +205,11 @@ check_not_contains "paths" "$paths" "inside a VM"
 
 echo "== the help reply is hardcoded and names every mode =="
 help=$(TRIGGER_KEYWORD="@touya" AGENT_IDENTITY="Touya" foundry_help_comment)
-check_contains "help" "$help" "@touya review"
-check_contains "help" "$help" "@touya fix"
-check_contains "help" "$help" "@touya implement"
-check_contains "help" "$help" "@touya answer"
+check_contains "help" "$help" "<mention> review"
+check_contains "help" "$help" "<mention> fix"
+check_contains "help" "$help" "<mention> implement"
+check_contains "help" "$help" "<mention> answer"
+check_not_contains "help" "$help" "@touya"
 check_contains "help" "$help" "I did not start any work"
 # Every mode the resolver accepts must appear in the help, or a user can be
 # told a mode does not exist when it does.
@@ -217,9 +218,14 @@ for _m in $FOUNDRY_TASK_MODES; do
     check_contains "help/$_m" "$help" "\`$_m\`"
 done
 # The keyword is taken from the watcher config, not hardcoded.
-help_ralph=$(TRIGGER_KEYWORD="!ralph" foundry_help_comment)
-check_contains "help/keyword" "$help_ralph" "!ralph review"
-check_not_contains "help/keyword" "$help_ralph" "@touya"
+# The reply is posted to the thread that triggered it, so containing the
+# keyword makes it trigger itself - which is exactly what happened in
+# production, hundreds of comments deep.
+help_kw=$(TRIGGER_KEYWORD="!bot" foundry_help_comment)
+check_not_contains "help/no-keyword" "$help_kw" "!bot"
+check_contains "help/placeholder" "$help_kw" "<mention> review"
+help_at=$(TRIGGER_KEYWORD="@touya" foundry_help_comment)
+check_not_contains "help/no-keyword" "$help_at" "@touya"
 
 echo "== the builder refuses to build a prompt with no mode stated =="
 # A forgetful adapter must not silently get a real objective.
@@ -275,7 +281,8 @@ else
     printf 'FAIL: foundry_write_help_reply returned %s, expected %s\n' "$reply_rc" "$FOUNDRY_EXIT_HELP"
     FAIL=$((FAIL + 1))
 fi
-check_contains "reply-file" "$(cat "$reply_target")" "@touya review"
+check_contains "reply-file" "$(cat "$reply_target")" "<mention> review"
+check_not_contains "reply-file" "$(cat "$reply_target")" "@touya"
 
 echo "== the mode is found at any mention, not only the first =="
 export TRIGGER_KEYWORD="@touya"
@@ -285,6 +292,45 @@ check_mode issue "cc @touya — @touya answer why this times out"         answer
 # A talked-about mention with no mode anywhere still asks for the syntax.
 check_mode pr "@touya was here. @touya later maybe"                     help
 unset TRIGGER_KEYWORD
+
+echo "== the goal condition states a verifiable end state per mode =="
+goal_ctx() { _ctx "$1" "$2"; }
+g_review=$(foundry_goal_condition review "$(goal_ctx pr '@touya review this')")
+check_contains "goal/review" "$g_review" "review comment"
+check_contains "goal/review" "$g_review" "https://example.com/42"
+check_not_contains "goal/review" "$g_review" "pull request is open"
+
+g_fix=$(foundry_goal_condition fix "$(goal_ctx pr '@touya fix this')")
+check_contains "goal/fix" "$g_fix" "feat/x"
+
+g_impl=$(foundry_goal_condition implement "$(goal_ctx issue '@touya implement this')")
+check_contains "goal/implement" "$g_impl" "pull request"
+
+g_ans=$(foundry_goal_condition answer "$(goal_ctx issue '@touya answer this')")
+check_contains "goal/answer" "$g_ans" "comment"
+
+echo "== every goal condition is bounded =="
+# /goal has no max-iterations flag: the bound has to live in the condition,
+# or a loop that cannot satisfy its condition runs until the budget is gone.
+for _m in review implement fix answer; do
+    _g=$(foundry_goal_condition "$_m" "$(goal_ctx pr "@touya $_m this")")
+    check_contains "goal/bound/$_m" "$_g" "stop after"
+done
+bounded=$(FOUNDRY_GOAL_MAX_TURNS=7 foundry_goal_condition review "$(goal_ctx pr '@touya review')")
+check_contains "goal/bound/custom" "$bounded" "stop after 7 turns"
+
+echo "== the condition points at the generated prompt =="
+check_contains "goal/prompt-ref" "$g_review" "task_prompt.md"
+
+echo "== help mode has no goal condition =="
+g_help=$(foundry_goal_condition help "$(goal_ctx pr 'thoughts?')" 2>/dev/null)
+help_rc=$?
+if [[ "$help_rc" -ne 0 && -z "$g_help" ]]; then
+    PASS=$((PASS + 1))
+else
+    printf 'FAIL: goal condition for help mode: rc=%s out=%s\n' "$help_rc" "$g_help"
+    FAIL=$((FAIL + 1))
+fi
 
 echo
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"

@@ -27,15 +27,24 @@
 
 # Private, loopback and link-local space that must never be reachable from a
 # sandbox. IPv4 and IPv6.
-FOUNDRY_PRIVATE_RANGES=(
-    "10.0.0.0/8"
-    "172.16.0.0/12"
-    "192.168.0.0/16"
-    "169.254.0.0/16"
-    "127.0.0.0/8"
-    "fc00::/7"
-    "fe80::/10"
-)
+# Ranges denied to every sandbox.
+#
+# Deliberately narrow. 192.168.0.0/16 is where home and small-office networks
+# actually live, and 169.254.0.0/16 carries the cloud metadata endpoint, which
+# is worth denying anywhere. The rest of RFC1918 is left reachable because
+# container networking lives there - 172.17.0.0/16 by default, often 10.0.0.0/8
+# under Kubernetes or a custom bridge - and denying the range a sandbox's own
+# resolver sits in disables DNS for every sandbox on the host, with no allow
+# rule able to undo it: sbx resolves a conflict in favour of the deny.
+#
+# Override in ~/.config/foundry/config.conf when a LAN uses a different range:
+#   FOUNDRY_PRIVATE_RANGES=("10.0.0.0/8" "192.168.0.0/16")
+if [[ -z "${FOUNDRY_PRIVATE_RANGES:-}" ]]; then
+    FOUNDRY_PRIVATE_RANGES=(
+        "192.168.0.0/16"
+        "169.254.0.0/16"
+    )
+fi
 
 # ============================================================================
 # BASELINE
@@ -74,13 +83,17 @@ policy_has_deny() {
     printf '%s' "$json" | jq -e --arg r "$resource" '
         (.rules // [])
         | map(select((.decision // "") == "deny"))
+        | map(select((.resource_type // "network") == "network"))
         | map(.resources // [])
         | flatten
         | any(. == $r)
     ' >/dev/null 2>&1
 }
 
-# Does an allow rule for this resource already exist?
+# Does a network allow rule for this resource already exist?
+#
+# Only network rules count. The presets ship filesystem rules whose resource is
+# "**", so an unfiltered match reports full egress on a default-deny host.
 #
 # sbx normalizes a bare host to host:443 when it stores the rule, so a rule
 # written as "github.com" comes back as "github.com:443"; both spellings count
@@ -96,10 +109,119 @@ policy_has_allow() {
     printf '%s' "$json" | jq -e --arg r "$resource" '
         (.rules // [])
         | map(select((.decision // "") == "allow"))
+        | map(select((.resource_type // "network") == "network"))
         | map(.resources // [])
         | flatten
         | any(. == $r or . == ($r + ":443"))
     ' >/dev/null 2>&1
+}
+
+# Addresses the sandbox needs in order to resolve names at all.
+#
+# Docker Sandboxes hands the container a resolver on the container network -
+# 172.17.0.2 and a ULA v6 address on a default install. Both sit inside ranges
+# this baseline denies, and sbx resolves a conflict in favour of the deny, so
+# no allow rule can win it back. Denying them turns every lookup into
+# "Temporary failure in name resolution", which reads like broken DNS rather
+# than a policy Foundry applied on purpose.
+#
+# Usage: policy_resolver_addresses [sandbox]
+policy_resolver_addresses() {
+    local sandbox="${1:-}"
+    [[ -n "$sandbox" ]] || return 0
+
+    "$SBX_BIN" exec "$sandbox" cat /etc/resolv.conf 2>/dev/null \
+        | awk '$1 == "nameserver" { print $2 }'
+}
+
+# Does this CIDR cover any of the sandbox's resolvers?
+#
+# Only the coarse case is handled: an address inside the range's prefix. That
+# covers every default the baseline ships, and a wrong answer here fails safe -
+# the range is denied, and the operator sees the same DNS failure with a
+# message naming the cause.
+policy_range_covers_resolver() {
+    local range="$1"
+    shift
+
+    local addr prefix
+    for addr in "$@"; do
+        [[ -n "$addr" ]] || continue
+        case "$range" in
+            10.0.0.0/8)        [[ "$addr" == 10.* ]] && return 0 ;;
+            172.16.0.0/12)     [[ "$addr" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]] && return 0 ;;
+            192.168.0.0/16)    [[ "$addr" == 192.168.* ]] && return 0 ;;
+            169.254.0.0/16)    [[ "$addr" == 169.254.* ]] && return 0 ;;
+            127.0.0.0/8)       [[ "$addr" == 127.* ]] && return 0 ;;
+            fc00::/7)          [[ "$addr" == f[cd]* ]] && return 0 ;;
+            fe80::/10)         [[ "$addr" == fe80:* ]] && return 0 ;;
+            *)                 prefix="${range%%/*}"
+                               [[ "$addr" == "$prefix" ]] && return 0 ;;
+        esac
+    done
+
+    return 1
+}
+
+# Remove any deny rule that covers the sandbox's resolver.
+#
+# The baseline runs before the sandbox exists, so it cannot see the resolver
+# and denies the range the resolver turns out to be in. This repairs that once
+# there is a sandbox to ask, and fixes a host that is already in that state -
+# the symptom is every lookup failing with "Temporary failure in name
+# resolution", including for hosts that have an explicit allow rule.
+#
+# Usage: policy_unblock_resolvers <sandbox>
+policy_unblock_resolvers() {
+    local sandbox="$1"
+    [[ -n "$sandbox" ]] || return 0
+
+    local -a resolvers=()
+    mapfile -t resolvers < <(policy_resolver_addresses "$sandbox" 2>/dev/null || true)
+    [[ ${#resolvers[@]} -gt 0 ]] || return 0
+
+    local json
+    json="$("$SBX_BIN" policy ls --json 2>/dev/null)" || return 0
+
+    local removed=0 rule_id resource ours range
+    while IFS=$'\t' read -r rule_id resource; do
+        [[ -n "$rule_id" && -n "$resource" ]] || continue
+        policy_range_covers_resolver "$resource" "${resolvers[@]}" || continue
+
+        # Ours to remove, or the operator's? Only the baseline's own ranges
+        # are fair game: a hand-written deny that happens to cover the
+        # resolver is a deliberate choice, and deleting it here would be
+        # permanent - policy_baseline never re-adds a rule it did not write.
+        ours=false
+        for range in "${FOUNDRY_PRIVATE_RANGES[@]}"; do
+            [[ "$resource" == "$range" ]] && { ours=true; break; }
+        done
+        if [[ "$ours" != "true" ]]; then
+            log_warn "Deny rule for ${resource} covers the sandbox resolver, so DNS"
+            log_warn "  cannot work while it stands - but Foundry did not add it."
+            log_warn "  Remove it yourself if that is what you want:"
+            log_warn "    sbx policy rm network --id ${rule_id}"
+            continue
+        fi
+
+        log_warn "Removing deny rule for ${resource}: it covers the sandbox resolver"
+        log_warn "  DNS cannot work while it stands, and deny beats allow."
+        log_warn "  This is permanent: the baseline will not re-add it."
+        if _sbx_checked "removing deny rule '$resource'" \
+            policy rm network --id "$rule_id"; then
+            removed=$((removed + 1))
+        fi
+    done < <(printf '%s' "$json" | jq -r '
+        .rules[]?
+        | select((.decision // "") == "deny")
+        | select((.editable // true) == true)
+        | . as $r
+        | ($r.resources // [])[]
+        | [$r.id, .]
+        | @tsv')
+
+    [[ "$removed" -gt 0 ]] && log_info "Unblocked DNS: removed ${removed} rule(s)"
+    return 0
 }
 
 # Apply Foundry's host-wide network baseline.
@@ -110,29 +232,65 @@ policy_has_allow() {
 # already initialized the existing preset is kept and only the private-range
 # deny rules are reconciled; --reset wipes the policy store first, which stops
 # every running sandbox, so it is never implied.
+# Usage: policy_baseline [--reset] [sandbox]
+#
+# The sandbox is optional and used only to read its resolver; without one the
+# baseline denies every private range, which is correct until a sandbox exists.
 policy_baseline() {
     local reset=false
-    [[ "${1:-}" == "--reset" ]] && reset=true
+    if [[ "${1:-}" == "--reset" ]]; then
+        reset=true
+        shift
+    fi
 
     log_info "Applying Foundry network baseline (open internet, closed LAN)"
 
     if [[ "$reset" == "true" ]]; then
-        log_warn "Resetting the sbx policy store - running sandboxes will be stopped"
-        if ! _sbx_checked "resetting the policy store" policy reset --force; then
-            return 1
-        fi
+        # Not automated on purpose. `sbx policy reset` re-initializes the
+        # policy as part of the reset, choosing the preset through an
+        # interactive menu - so a scripted reset either blocks on that prompt
+        # or silently accepts a default, and the `policy init` that used to
+        # follow here always failed with "already initialized".
+        log_error "Resetting the policy store is a manual step:"
+        log_error ""
+        log_error "  sbx policy reset      # then choose 1. Open"
+        log_error ""
+        log_error "It stops every running sandbox and asks which preset to"
+        log_error "install. Choose Open for the posture Foundry documents, then"
+        log_error "run 'foundry doctor --fix' to re-apply the deny rules."
+        return 1
     fi
 
     if policy_is_initialized; then
         log_info "Global network policy already initialized - keeping the current preset"
-        log_debug "Use 'foundry policy baseline --reset' to re-initialize as allow-all"
+        # Worth naming, because a default-deny preset changes what a project
+        # needs: sbx gates DNS on policy, so a host that is not allowed does
+        # not resolve, and git reports it as "Could not resolve hostname"
+        # rather than as a denial.
+        if ! policy_has_allow "**"; then
+            log_info "  The preset is default-deny: a host must be allowed before"
+            log_info "  it will even resolve. Project remotes are allowed for you."
+        fi
     elif ! _sbx_checked "initializing the global network policy" \
         policy init allow-all; then
         return 1
     fi
 
+    # Skip any range the sandbox's own resolver sits in. Without this the
+    # baseline silently disables DNS for every sandbox on the host.
+    local -a resolvers=()
+    mapfile -t resolvers < <(policy_resolver_addresses "${1:-}" 2>/dev/null || true)
+
     local range
     for range in "${FOUNDRY_PRIVATE_RANGES[@]}"; do
+        if [[ ${#resolvers[@]} -gt 0 ]] && \
+           policy_range_covers_resolver "$range" "${resolvers[@]}"; then
+            log_warn "Not denying ${range}: the sandbox resolver lives there"
+            log_warn "  Denying it would break DNS for every sandbox, and sbx"
+            log_warn "  resolves deny over allow, so no rule could undo it."
+            continue
+        fi
+
         if policy_has_deny "$range"; then
             log_debug "Private range already denied: $range"
             continue
@@ -248,6 +406,12 @@ policy_check() {
 #   ssh://git@host:2222/org/repo -> host:2222
 #   https://host/org/repo.git    -> host       (evaluated against :443)
 #
+# A port-qualified rule is emitted together with the bare host, because the
+# sandbox resolver answers only for hosts that have a rule and a "host:2222"
+# rule does not satisfy it. Without the bare host, git fails with "Could not
+# resolve hostname" - which reads like broken DNS rather than a denied host,
+# and sends you looking in the wrong place entirely.
+#
 # Prints nothing for URLs with no network component (local paths).
 # Usage: resource="$(policy_resource_for_remote "$url")"
 policy_resource_for_remote() {
@@ -263,8 +427,12 @@ policy_resource_for_remote() {
             hostport="${hostport##*@}"
             if [[ "$hostport" == *:* ]]; then
                 printf '%s\n' "$hostport"
+                # The resolver needs the bare host too, or the name never
+                # resolves and the port rule is never reached.
+                printf '%s\n' "${hostport%%:*}"
             else
                 printf '%s:22\n' "$hostport"
+                printf '%s\n' "$hostport"
             fi
             ;;
         *://*)
@@ -275,12 +443,15 @@ policy_resource_for_remote() {
             rest="${rest%%/*}"
             rest="${rest##*@}"
             printf '%s\n' "$rest"
+            # Same resolver requirement as the ssh forms.
+            [[ "$rest" == *:* ]] && printf '%s\n' "${rest%%:*}"
             ;;
         *@*:*)
             # scp-style: user@host:org/repo.git
             local hostpart="${url#*@}"
             hostpart="${hostpart%%:*}"
             printf '%s:22\n' "$hostpart"
+            printf '%s\n' "$hostpart"
             ;;
         *)
             # Local path or unrecognized - nothing to allow.
@@ -361,7 +532,7 @@ policy_check_matrix() {
     done
 
     # Must be denied: LAN, host, and cloud metadata.
-    for target in "192.168.1.1" "10.0.0.1" "172.16.0.1" "169.254.169.254"; do
+    for target in "192.168.1.1" "169.254.169.254"; do
         if policy_check "$target" "$sandbox"; then
             log_error "  ALLOWED $target (expected to be denied)"
             failures=$((failures + 1))

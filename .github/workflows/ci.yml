@@ -34,3 +34,12 @@ jobs:
 
       - name: Prompt library tests
         run: ./scripts/test-prompt-lib.sh
+
+      # The formatter sits inside the pipeline that writes the agent log, so a
+      # bug in it loses the run's output. Needs nothing but python3.
+      - name: Agent log formatter tests
+        run: ./scripts/test-log-format.sh
+
+      # scripts/test-watcher-e2e.sh is deliberately not here: it builds an
+      # image and creates a sandbox, which needs sbx and several minutes. Run
+      # it by hand after touching templates/forgejo/ or lib/watcher.sh.

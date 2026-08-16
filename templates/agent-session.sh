@@ -78,29 +78,3 @@ update_agent_session() {
        "$AGENT_SESSION_LEDGER" > "$tmp_file" && mv "$tmp_file" "$AGENT_SESSION_LEDGER"
 }
 
-# Try to extract a session ID from a Kimi-like resume hint in a log file.
-# Falls back to the most recently modified file in known Kimi session dirs.
-capture_agent_session_id() {
-    local log_file="$1"
-
-    local captured
-    captured="$(grep -oE 'kimi -r[[:space:]]+[A-Za-z0-9_-]+' "$log_file" 2>/dev/null | tail -n 1 | awk '{print $NF}')"
-    if [[ -n "$captured" ]]; then
-        echo "$captured"
-        return 0
-    fi
-
-    local session_dir
-    for session_dir in "$HOME/.kimi-code/sessions" "$HOME/.config/kimi-code/sessions" "$HOME/.local/share/kimi-code/sessions"; do
-        if [[ -d "$session_dir" ]]; then
-            local latest
-            latest="$(find "$session_dir" -maxdepth 1 -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n 1 | cut -d' ' -f2-)"
-            if [[ -n "$latest" ]]; then
-                basename "$latest"
-                return 0
-            fi
-        fi
-    done
-
-    echo ""
-}

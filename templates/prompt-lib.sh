@@ -26,7 +26,7 @@ FOUNDRY_PROMPT_LIB_VERSION="1"
 FOUNDRY_TASK_MODES="review implement fix answer default"
 
 # Objective bullets are rendered as a plain list by default. Adapters whose
-# agent consumes a checklist (ralph-claude-code reads fix_plan.md as one) set
+# agent consumes a checklist rather than prose, set
 # FOUNDRY_OBJECTIVE_STYLE=checklist to get "- [ ]" markers instead.
 FOUNDRY_OBJECTIVE_STYLE="${FOUNDRY_OBJECTIVE_STYLE:-bullet}"
 
@@ -168,7 +168,7 @@ _foundry_kind_label() {
 #   3. AGENT_DISPLAY_NAME, then a generic fallback.
 #
 # AGENT_DISPLAY_NAME is deliberately last: it is the verbose log form
-# ("Kimi Code CLI (Ralph mode)") and reads badly as a comment header.
+# ("Claude Code (goal loop)") and reads badly as a comment header.
 foundry_identity() {
     if [[ -n "${AGENT_IDENTITY:-}" ]]; then
         printf '%s' "$AGENT_IDENTITY"
@@ -203,7 +203,7 @@ foundry_error_header() {
 #
 #     @touya review   please check the last commit
 #     @touya fix      the bug you introduced
-#     !ralph implement a retry helper
+#     @agent implement a retry helper
 #
 # An earlier version inferred the mode from the phrasing of the request:
 # synonym tables, politeness stripping, clause splitting. It failed on
@@ -308,17 +308,22 @@ FOUNDRY_EXIT_HELP=78
 # Usage: foundry_help_comment
 # shellcheck disable=SC2016  # backticks throughout are Markdown code spans
 foundry_help_comment() {
-    local keyword
-    keyword="${TRIGGER_KEYWORD:-${FOUNDRY_TRIGGER_KEYWORD:-@bot}}"
-
+    # The trigger keyword is deliberately absent from this reply.
+    #
+    # This comment is posted to the same thread that triggered it, so any
+    # occurrence of the keyword - even inside a code fence - makes the forge
+    # deliver an event that triggers another reply, and another, as fast as
+    # comments are accepted. The examples therefore use a placeholder, and the
+    # reader substitutes the mention they already used to reach us.
     printf '## 🤖 %s\n\n' "$(foundry_identity)"
     printf 'I need to be told what kind of work to do. Put the mode straight\n'
-    printf 'after `%s`, then your request:\n\n' "$keyword"
+    printf 'after the mention you used to reach me, then your request.\n\n'
+    printf 'Replace `<mention>` below with that same mention:\n\n'
     printf '```\n'
-    printf '%s review    have a look at the last commit\n' "$keyword"
-    printf '%s fix       the bug you introduced in parse_args\n' "$keyword"
-    printf '%s implement add a --verbose flag\n' "$keyword"
-    printf '%s answer    why does the uploader time out?\n' "$keyword"
+    printf '<mention> review    have a look at the last commit\n'
+    printf '<mention> fix       the bug you introduced in parse_args\n'
+    printf '<mention> implement add a --verbose flag\n'
+    printf '<mention> answer    why does the uploader time out?\n'
     printf '```\n\n'
     printf '| Mode | What I do | What I will not do |\n'
     printf '|---|---|---|\n'
@@ -552,6 +557,73 @@ foundry_background_block() {
         printf '\n### Discussion\n\n'
         _foundry_quote "$discussion"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# Goal conditions
+# ---------------------------------------------------------------------------
+
+# How many turns a goal loop may run before it must stop.
+#
+# /goal takes no max-iterations flag in any of the three CLIs: the bound has to
+# be part of the condition text, or a loop that can never satisfy its condition
+# runs until the token budget is gone.
+FOUNDRY_GOAL_MAX_TURNS="${FOUNDRY_GOAL_MAX_TURNS:-20}"
+
+# The completion condition for a goal-mode run.
+#
+# The evaluator - a second model for claude, the agent itself for codex, a
+# sentinel for agy - judges this against what the run has surfaced. So it has
+# to name an end state the transcript can demonstrate, not an intention.
+# Each mode already declares a terminal action in foundry_objective_block;
+# this restates it as something observable, and adds the turn bound.
+#
+# The condition deliberately stays short and points at the generated prompt
+# for the rest: claude caps a condition at 4000 characters, and a condition
+# that restates the whole task competes with it.
+#
+# Usage: foundry_goal_condition <mode> <context_file>
+foundry_goal_condition() {
+    local mode="$1" context_file="$2"
+    local url branch repo prompt_ref
+
+    if [[ "$mode" == "help" ]] || ! foundry_mode_is_valid "$mode"; then
+        printf 'foundry_goal_condition: no goal for mode "%s"\n' "$mode" >&2
+        return 2
+    fi
+
+    url=$(_foundry_jq "$context_file" '.html_url' "the originating issue or pull request")
+    branch=$(_foundry_jq "$context_file" '.branch')
+    repo=$(_foundry_jq "$context_file" '.repo' "the repository")
+    prompt_ref="${FOUNDRY_TASK_PROMPT_REF:-task_prompt.md}"
+
+    printf 'Follow the instructions in %s. ' "$prompt_ref"
+
+    case "$mode" in
+        review)
+            printf 'The goal is met when a review comment has been posted on %s ' "$url"
+            printf 'and no file in the repository has been modified'
+            ;;
+        implement)
+            printf 'The goal is met when a pull request implementing the request '
+            printf 'is open against %s and its checks have been run' "$repo"
+            ;;
+        fix)
+            printf 'The goal is met when the fix is committed and pushed to branch %s ' "${branch:-the existing branch}"
+            printf 'and the checks that were failing now pass'
+            ;;
+        answer)
+            printf 'The goal is met when a comment answering the request has been '
+            printf 'posted on %s and nothing has been modified' "$url"
+            ;;
+        default | *)
+            printf 'The goal is met when the request has been satisfied by the '
+            printf 'least destructive action that answers it, and the outcome '
+            printf 'has been reported in a comment on %s' "$url"
+            ;;
+    esac
+
+    printf ', or stop after %s turns and report what is blocking you.\n' "$FOUNDRY_GOAL_MAX_TURNS"
 }
 
 # ---------------------------------------------------------------------------

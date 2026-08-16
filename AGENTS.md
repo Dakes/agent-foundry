@@ -46,7 +46,7 @@ Examples:
 
 - `forgejo-watcher init` auto-registers webhooks because `watched_repos` and `webhook_url` are in the config.
 - `forgejo-watcher start` auto-runs `mark-all` because the default lifecycle expectation is "don't reprocess old events on restart".
-- `foundry up` re-publishes the configured ports on every run, because port mappings do not survive a sandbox restart.
+- `foundry up` reconciles published ports on every run: mappings persist for the sandbox's lifetime, so re-publishing one is a 409 rather than a no-op.
 
 If a user has to run more than one command to make a configured feature work, the design is probably wrong.
 
@@ -127,6 +127,20 @@ Rules, enforced by `./scripts/check-prompts.sh`:
    as background.
 
 Full reasoning: `docs/PROMPT-ARCHITECTURE.md`.
+
+# Choosing a Language
+
+The CLI is bash. Two areas would be better in Python, and `TODO.md` records
+why: `lib/project.sh` / `lib/policy.sh` (JSON handling through `jq` string
+filters, which has shipped real bugs) and `scripts/test-prompt-lib.sh` (a
+hand-rolled harness that keeps breaking on shell mechanics).
+
+For new code: Python when the work is parsing, comparing or transforming
+structured data, or when it needs tests that assert on more than strings. Bash
+when it orchestrates processes, and always for anything under `templates/`,
+which runs inside a sandbox where only the image's tools exist.
+
+Do not rewrite working shell for its own sake.
 
 # Validation
 
