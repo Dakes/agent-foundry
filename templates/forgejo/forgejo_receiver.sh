@@ -176,6 +176,18 @@ handle_request() {
             # Enough to tell a wrong secret from a mangled body, without
             # putting either the payload or the secret in the log.
             log_debug "  got ${signature:0:20}… expected ${expected:0:20}… over ${content_length} bytes"
+
+            # Keep the exact bytes. Whether the secret is wrong or the body
+            # was mangled looks identical in the log, and the only way to tell
+            # them apart is to re-run the digest over what actually arrived:
+            #   openssl dgst -sha256 -hmac "$(foundry watcher secret <p>)" \
+            #       < last-rejected.json
+            # and compare with the signature the forge's delivery view shows.
+            if [[ -n "$body_file" ]]; then
+                ( umask 077; cat "$body_file" > "$CONFIG_DIR/last-rejected.json" )
+                log_debug "  body kept at $CONFIG_DIR/last-rejected.json"
+            fi
+
             http_response 401 "Unauthorized"
             return
         fi
