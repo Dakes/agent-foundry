@@ -112,6 +112,12 @@ RUN set -eux; \
 COPY templates/agent-session.sh /opt/foundry/agent-session.sh
 RUN chmod 0755 /opt/foundry/agent-session.sh
 
+# Renders Claude Code's stream-json into a readable log. The raw stream is
+# never written to disk: it is mostly API envelope, and tool results are
+# routinely megabytes.
+COPY templates/format-agent-stream.py /opt/foundry/format-agent-stream.py
+RUN chmod 0755 /opt/foundry/format-agent-stream.py
+
 # Strips sbx's placeholder API keys before exec'ing an agent CLI. See the
 # script for why they are there and why they break a logged-in account.
 COPY templates/run-agent.sh /opt/foundry/run-agent.sh

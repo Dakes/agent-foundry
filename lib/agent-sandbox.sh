@@ -117,6 +117,7 @@ foundry_agent_start() {
         return 0
     fi
 
+    local log_file
     local session
     session="$(agent_session_name "$agent")"
 
@@ -139,8 +140,14 @@ foundry_agent_start() {
 
         log_info "Starting $(agent_display_name "$agent") in session '$session'"
 
+        # The launcher writes to stdout only, so whoever starts it owns the
+        # log - here, that is this tmux session. It used to tee as well, and
+        # every line landed in two files.
+        log_file="$(agent_log_file "$agent" "$root")"
+
         if ! sandbox_exec "$box" "$root" \
-            tmux new-session -d -s "$session" "$script"; then
+            tmux new-session -d -s "$session" \
+            "${script} 2>&1 | tee -a ${log_file}"; then
             log_error "Failed to start agent session '$session' in $box"
             log_error "Inspect it with: foundry shell $project"
             return 1
@@ -165,7 +172,6 @@ foundry_agent_start() {
     # Verify it actually came up rather than reporting success blindly.
     if ! foundry_agent_running "$box" "$root" "$agent"; then
         log_error "Agent session '$session' exited immediately"
-        local log_file
         log_file="$(agent_log_file "$agent" "$root")"
         if [[ -f "$log_file" ]]; then
             log_error "Last lines of ${log_file}:"

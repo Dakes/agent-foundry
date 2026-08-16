@@ -33,8 +33,7 @@ mkdir -p "$(dirname "$AGENT_LOG_FILE")"
 # still works.
 for _var in ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY OPENAI_API_KEY; do
     if [[ "${!_var:-}" == "proxy-managed" ]]; then
-        echo "[INFO] ignoring sbx placeholder ${_var}=proxy-managed" \
-            | tee -a "$AGENT_LOG_FILE"
+        echo "[INFO] ignoring sbx placeholder ${_var}=proxy-managed"
         unset "$_var"
     fi
 done
@@ -65,8 +64,12 @@ if [[ -n "${AGENT_REPO_PATH:-}" ]]; then
     cd "$AGENT_REPO_PATH" || exit 1
 fi
 
-echo "[INFO] $AGENT_TYPE starting in $(pwd)" | tee -a "$AGENT_LOG_FILE"
-echo "[INFO] goal: $AGENT_GOAL_CONDITION" | tee -a "$AGENT_LOG_FILE"
+# Written to stdout only. Whoever started this script owns the log file - the
+# watcher tees the whole run, and a manual start tees it in tmux. Writing here
+# as well put every line in two files, which is what made `foundry logs` show
+# everything twice.
+echo "[INFO] $AGENT_TYPE starting in $(pwd)"
+echo "[INFO] goal: $AGENT_GOAL_CONDITION"
 
 case "$AGENT_TYPE" in
     claude-goal)
@@ -80,10 +83,13 @@ case "$AGENT_TYPE" in
         # loop that cannot run git can never satisfy them, so it would burn
         # every one of its turns failing. The sandbox is the boundary here, the
         # permission prompt is not.
+        # Through the formatter: stream-json is unreadable as a log, and
+        # keeping the raw form is not worth the disk. PIPESTATUS below still
+        # reads the CLI's status, not the formatter's.
         claude -p "/goal ${AGENT_GOAL_CONDITION}" \
             --dangerously-skip-permissions \
             --output-format stream-json --verbose \
-            2>&1 | tee -a "$AGENT_LOG_FILE"
+            2>&1 | python3 /opt/foundry/format-agent-stream.py
         ;;
 
     codex-goal)
@@ -93,8 +99,7 @@ case "$AGENT_TYPE" in
         codex exec \
             --skip-git-repo-check \
             --dangerously-bypass-approvals-and-sandbox \
-            "/goal ${AGENT_GOAL_CONDITION}" \
-            2>&1 | tee -a "$AGENT_LOG_FILE"
+            "/goal ${AGENT_GOAL_CONDITION}" 2>&1
         ;;
 
     agy-goal)
@@ -104,8 +109,7 @@ case "$AGENT_TYPE" in
         agy \
             --dangerously-skip-permissions \
             --print-timeout "${AGENT_GOAL_TIMEOUT:-4h}" \
-            -p "/goal ${AGENT_GOAL_CONDITION}" \
-            2>&1 | tee -a "$AGENT_LOG_FILE"
+            -p "/goal ${AGENT_GOAL_CONDITION}" 2>&1
         ;;
 
     *)
@@ -114,5 +118,5 @@ case "$AGENT_TYPE" in
         ;;
 esac
 
-# The CLI's status, not tee's.
+# The CLI's status, not the formatter's.
 exit "${PIPESTATUS[0]}"
