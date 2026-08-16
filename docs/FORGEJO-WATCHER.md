@@ -48,6 +48,18 @@ config forever; the reason is in `supervisor.log`.
 
 **One task at a time.** New events queue until the current run finishes.
 
+### It starts from now, not from the backlog
+
+Whatever is already queued when the watcher starts is discarded, and work
+created before it started is recorded as seen rather than acted on. A watcher
+coming back after an outage cannot tell a request from five minutes ago from
+one from last month, and answering a month of them at once is never what was
+wanted - the forge redelivers failed hooks, so the backlog can be large.
+
+`foundry watcher logs` shows the cutoff on every start. Set
+`WATCHER_PROCESS_BACKLOG=true` in the environment to take the queue as it
+stands instead.
+
 ### It ignores its own comments
 
 Every reply the watcher writes tends to contain the trigger keyword - the
@@ -102,6 +114,7 @@ Everything lives in `foundry.json` under `.watcher`:
 | `public_url` | for registration | The receiver **as Forgejo sees it** |
 | `agent_timeout` | no | Minutes before a run is abandoned (default 120) |
 | `dry_run` | no | Process events and log, but start no agent |
+| `process_backlog` | no | Act on work that predates the watcher's start (default: no) |
 
 ### receiver_port is inbound
 

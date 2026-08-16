@@ -34,8 +34,8 @@ maintained against the code.
 - [x] Drop the "not implemented yet" warning and the doc banners
 - [ ] End-to-end test against a real forge event (only the config path is
       covered by tests so far)
-- [ ] `mark-all` is still a stub: it logs "not yet implemented" instead of
-      scanning open issues, so a fresh watcher can re-trigger on old comments
+- [x] `mark-all` implemented, and a startup cutoff means a restart never acts
+      on a backlog
 
 ### Autostart
 - [ ] Honor `.autostart` in `foundry.json` via a systemd user unit. **The

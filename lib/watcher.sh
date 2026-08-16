@@ -185,6 +185,12 @@ watcher_write_config() {
         local dry
         dry="$(project_get "$name" '.watcher.dry_run' "")"
         [[ "$dry" == "true" ]] && echo "DRY_RUN=true"
+        # Opt in to acting on a backlog. Off by default: a watcher that comes
+        # up to a queue cannot tell old work from new, and doing all of it at
+        # once is never what was wanted.
+        local backlog
+        backlog="$(project_get "$name" '.watcher.process_backlog' "")"
+        [[ "$backlog" == "true" ]] && echo "WATCHER_PROCESS_BACKLOG=true"
     } > "$tmp"
     mv "$tmp" "${dir}/config.conf"
     chmod 600 "${dir}/config.conf"

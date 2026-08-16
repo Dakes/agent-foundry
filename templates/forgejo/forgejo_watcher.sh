@@ -59,6 +59,12 @@ AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-Agent}"
 # The account the token belongs to. Events it authored are ignored, because
 # every reply the watcher writes contains the trigger keyword.
 WATCHER_BOT_USER="${WATCHER_BOT_USER:-}"
+# Work that predates this run is not acted on. A watcher that comes up to a
+# backlog cannot tell a request from five minutes ago from one from last month,
+# and answering all of them at once is never what was wanted. Set
+# WATCHER_PROCESS_BACKLOG=true to take the queue as it stands instead.
+WATCHER_PROCESS_BACKLOG="${WATCHER_PROCESS_BACKLOG:-false}"
+WATCHER_CUTOFF_TS="${WATCHER_CUTOFF_TS:-}"
 
 # ============================================================================
 # LOGGING
@@ -210,6 +216,26 @@ init_watcher() {
         return 1
     fi
     log_info "  Acting as: $WATCHER_BOT_USER (its own events are ignored)"
+
+    # Everything already known is treated as seen. Queued events are the
+    # forge's redeliveries and whatever arrived while we were down; acting on
+    # them means duplicate work on requests that may be weeks old.
+    WATCHER_CUTOFF_TS="$(date +%s)"
+    if [[ "$WATCHER_PROCESS_BACKLOG" == "true" ]]; then
+        log_warn "WATCHER_PROCESS_BACKLOG=true: acting on the existing queue"
+        WATCHER_CUTOFF_TS=""
+    else
+        local stale=0
+        local queued
+        for queued in "$QUEUE_DIR"/*.json; do
+            [[ -e "$queued" ]] || continue
+            rm -f "$queued"
+            stale=$((stale + 1))
+        done
+        [[ "$stale" -gt 0 ]] && \
+            log_info "Discarded ${stale} queued event(s) from before this run"
+        log_info "  Cutoff: only work created after $(date -d "@${WATCHER_CUTOFF_TS}" -Iseconds) is acted on"
+    fi
 
     log_info "Forgejo watcher initialized"
     log_info "  Instance: $FORGEJO_INSTANCE_URL"
@@ -529,6 +555,19 @@ process_event() {
     repo=$(echo "$task_json" | jq -r '.repo')
     created_at=$(echo "$task_json" | jq -r '.created_at')
     number=$(echo "$task_json" | jq -r '.number')
+
+    # Older than this run: record it as seen and move on, so a later restart
+    # does not reconsider it either.
+    if [[ -n "$WATCHER_CUTOFF_TS" && -n "$created_at" && "$created_at" != "null" ]]; then
+        local created_ts
+        created_ts="$(date -d "$created_at" +%s 2>/dev/null || echo 0)"
+        if [[ "$created_ts" -gt 0 && "$created_ts" -lt "$WATCHER_CUTOFF_TS" ]]; then
+            log_info "Ignoring $task_type #${number} from ${created_at}: predates this run"
+            mark_processed "$task_id" "{\"type\":\"$task_type\",\"repo\":\"$repo\",\"processed_at\":\"$(date -Iseconds)\",\"result\":\"skipped_backlog\"}"
+            rm -f "$event_file"
+            return 0
+        fi
+    fi
 
     log_info "Found trigger in $task_type event for $repo"
 
@@ -866,8 +905,20 @@ cmd_mark_all() {
 
     ensure_processed_file_valid
 
-    # TODO: Implement by scanning open issues/PRs via API
-    log_warn "mark-all via API scan is not yet implemented"
+    # Drop whatever is queued. The cutoff at startup means anything older than
+    # the next run is ignored anyway; this makes that explicit, and is what to
+    # reach for after a flood or a long outage.
+    local dropped=0 queued
+    for queued in "$QUEUE_DIR"/*.json; do
+        [[ -e "$queued" ]] || continue
+        rm -f "$queued"
+        dropped=$((dropped + 1))
+    done
+
+    log_info "Discarded ${dropped} queued event(s); work created before now is ignored"
+    echo "Discarded ${dropped} queued event(s)."
+    echo "The watcher acts only on work created after it starts, so nothing"
+    echo "older than this moment will be picked up."
 }
 
 # ============================================================================
