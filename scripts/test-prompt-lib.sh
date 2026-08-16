@@ -205,10 +205,11 @@ check_not_contains "paths" "$paths" "inside a VM"
 
 echo "== the help reply is hardcoded and names every mode =="
 help=$(TRIGGER_KEYWORD="@touya" AGENT_IDENTITY="Touya" foundry_help_comment)
-check_contains "help" "$help" "@touya review"
-check_contains "help" "$help" "@touya fix"
-check_contains "help" "$help" "@touya implement"
-check_contains "help" "$help" "@touya answer"
+check_contains "help" "$help" "<mention> review"
+check_contains "help" "$help" "<mention> fix"
+check_contains "help" "$help" "<mention> implement"
+check_contains "help" "$help" "<mention> answer"
+check_not_contains "help" "$help" "@touya"
 check_contains "help" "$help" "I did not start any work"
 # Every mode the resolver accepts must appear in the help, or a user can be
 # told a mode does not exist when it does.
@@ -217,9 +218,14 @@ for _m in $FOUNDRY_TASK_MODES; do
     check_contains "help/$_m" "$help" "\`$_m\`"
 done
 # The keyword is taken from the watcher config, not hardcoded.
+# The reply is posted to the thread that triggered it, so containing the
+# keyword makes it trigger itself - which is exactly what happened in
+# production, hundreds of comments deep.
 help_kw=$(TRIGGER_KEYWORD="!bot" foundry_help_comment)
-check_contains "help/keyword" "$help_kw" "!bot review"
-check_not_contains "help/keyword" "$help_kw" "@touya"
+check_not_contains "help/no-keyword" "$help_kw" "!bot"
+check_contains "help/placeholder" "$help_kw" "<mention> review"
+help_at=$(TRIGGER_KEYWORD="@touya" foundry_help_comment)
+check_not_contains "help/no-keyword" "$help_at" "@touya"
 
 echo "== the builder refuses to build a prompt with no mode stated =="
 # A forgetful adapter must not silently get a real objective.
@@ -275,7 +281,8 @@ else
     printf 'FAIL: foundry_write_help_reply returned %s, expected %s\n' "$reply_rc" "$FOUNDRY_EXIT_HELP"
     FAIL=$((FAIL + 1))
 fi
-check_contains "reply-file" "$(cat "$reply_target")" "@touya review"
+check_contains "reply-file" "$(cat "$reply_target")" "<mention> review"
+check_not_contains "reply-file" "$(cat "$reply_target")" "@touya"
 
 echo "== the mode is found at any mention, not only the first =="
 export TRIGGER_KEYWORD="@touya"

@@ -308,17 +308,22 @@ FOUNDRY_EXIT_HELP=78
 # Usage: foundry_help_comment
 # shellcheck disable=SC2016  # backticks throughout are Markdown code spans
 foundry_help_comment() {
-    local keyword
-    keyword="${TRIGGER_KEYWORD:-${FOUNDRY_TRIGGER_KEYWORD:-@bot}}"
-
+    # The trigger keyword is deliberately absent from this reply.
+    #
+    # This comment is posted to the same thread that triggered it, so any
+    # occurrence of the keyword - even inside a code fence - makes the forge
+    # deliver an event that triggers another reply, and another, as fast as
+    # comments are accepted. The examples therefore use a placeholder, and the
+    # reader substitutes the mention they already used to reach us.
     printf '## 🤖 %s\n\n' "$(foundry_identity)"
     printf 'I need to be told what kind of work to do. Put the mode straight\n'
-    printf 'after `%s`, then your request:\n\n' "$keyword"
+    printf 'after the mention you used to reach me, then your request.\n\n'
+    printf 'Replace `<mention>` below with that same mention:\n\n'
     printf '```\n'
-    printf '%s review    have a look at the last commit\n' "$keyword"
-    printf '%s fix       the bug you introduced in parse_args\n' "$keyword"
-    printf '%s implement add a --verbose flag\n' "$keyword"
-    printf '%s answer    why does the uploader time out?\n' "$keyword"
+    printf '<mention> review    have a look at the last commit\n'
+    printf '<mention> fix       the bug you introduced in parse_args\n'
+    printf '<mention> implement add a --verbose flag\n'
+    printf '<mention> answer    why does the uploader time out?\n'
     printf '```\n\n'
     printf '| Mode | What I do | What I will not do |\n'
     printf '|---|---|---|\n'

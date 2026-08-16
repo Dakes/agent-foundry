@@ -258,6 +258,25 @@ for agent in $AGENT_TYPES; do
 done
 ok "every autonomous agent has a reachable template and adapter"
 
+# ---------------------------------------------------------------------------
+# 10. Nothing the bot posts back to a thread may contain the trigger keyword.
+#
+#     A reply lands on the thread that triggered it, so an occurrence of the
+#     keyword - even inside a code fence, even as an example - makes the forge
+#     deliver an event that triggers another reply. In production this reached
+#     hundreds of comments in seconds before it was noticed. The examples in
+#     the usage reply use a <mention> placeholder for exactly this reason.
+# ---------------------------------------------------------------------------
+kw_hits=$(TRIGGER_KEYWORD="@loopcanary" bash -c '
+    source templates/prompt-lib.sh 2>/dev/null
+    foundry_help_comment 2>/dev/null' | grep -c "@loopcanary" || true)
+
+if [[ "$kw_hits" -eq 0 ]]; then
+    ok "the usage reply does not contain the trigger keyword"
+else
+    fail "the usage reply contains the trigger keyword ${kw_hits} time(s) - it will trigger itself"
+fi
+
 echo
 if [[ "$FAIL" -eq 0 ]]; then
     echo "All prompt checks passed."
