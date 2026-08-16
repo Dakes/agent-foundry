@@ -161,6 +161,17 @@ watcher_write_config() {
         echo "RECEIVER_PORT=\"${port}\""
         echo "RECEIVER_INTERFACE=\"0.0.0.0\""
         echo "AGENT_TYPE=\"${agent}\""
+        # Which account we are. The watcher must ignore events it authored -
+        # its own replies contain the trigger keyword - and it refuses to run
+        # without this, so resolve it here where a failure is visible.
+        local bot
+        bot="$(project_get "$name" '.watcher.user' "")"
+        if [[ -z "$bot" ]]; then
+            bot="$(curl -fsS --max-time 10 \
+                -H "Authorization: token $(cat "$token_path")" \
+                "${instance%/}/api/v1/user" 2>/dev/null | jq -r '.login // empty')"
+        fi
+        [[ -n "$bot" ]] && echo "WATCHER_BOT_USER=\"${bot}\""
         echo "AGENT_DISPLAY_NAME=\"${display}\""
         echo "FORGEJO_TOKEN_FILE=\"${box_dir}/token\""
         echo "WEBHOOK_SECRET_FILE=\"${box_dir}/webhook-secret\""

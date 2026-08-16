@@ -48,6 +48,19 @@ config forever; the reason is in `supervisor.log`.
 
 **One task at a time.** New events queue until the current run finishes.
 
+### It ignores its own comments
+
+Every reply the watcher writes tends to contain the trigger keyword - the
+usage reply lists it by definition - so acting on its own events means
+answering itself as fast as the forge accepts comments. It resolves the
+account its token belongs to and drops events authored by it, and **refuses to
+start** if it cannot determine that account, because running without it means
+looping.
+
+A second guard caps replies per thread (5 in 5 minutes, `REPLY_CAP_PER_WINDOW`
+and `REPLY_WINDOW_SECONDS`). That covers the case the account check cannot:
+another bot, or a mirror, echoing the keyword back.
+
 ## Requirements
 
 - `.agent` must be a **goal agent** — `claude-goal`, `codex-goal` or

@@ -56,6 +56,9 @@ RECEIVER_INTERFACE="${RECEIVER_INTERFACE:-0.0.0.0}"
 AGENT_WORKSPACE="${AGENT_WORKSPACE:-$HOME}"
 AGENT_TYPE="${AGENT_TYPE:-}"
 AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-Agent}"
+# The account the token belongs to. Events it authored are ignored, because
+# every reply the watcher writes contains the trigger keyword.
+WATCHER_BOT_USER="${WATCHER_BOT_USER:-}"
 
 # ============================================================================
 # LOGGING
@@ -189,6 +192,24 @@ init_watcher() {
     esac
 
     AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-$AGENT_TYPE}"
+
+    # Without this the watcher answers its own replies forever. The host
+    # normally writes it into config.conf; ask the forge if it did not, and
+    # refuse to run rather than loop if the answer never comes.
+    if [[ -z "$WATCHER_BOT_USER" ]]; then
+        WATCHER_BOT_USER="$(curl -fsS --max-time 10 \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            "${FORGEJO_INSTANCE_URL%/}/api/v1/user" 2>/dev/null \
+            | jq -r '.login // empty')"
+    fi
+
+    if [[ -z "$WATCHER_BOT_USER" ]]; then
+        log_error "Could not determine which account the token belongs to"
+        log_error "Refusing to start: the watcher would answer its own replies."
+        log_error "Set WATCHER_BOT_USER, or check the token and instance URL."
+        return 1
+    fi
+    log_info "  Acting as: $WATCHER_BOT_USER (its own events are ignored)"
 
     log_info "Forgejo watcher initialized"
     log_info "  Instance: $FORGEJO_INSTANCE_URL"
@@ -415,6 +436,48 @@ event_to_task_json() {
     esac
 }
 
+
+# Cap replies per thread.
+#
+# Ignoring our own account stops the loop we caused; this stops the next one.
+# Anything that echoes the trigger keyword - another bot, a quoted comment, a
+# mirrored issue - produces the same flood, and the forge accepts comments far
+# faster than a human can notice.
+#
+# Returns 0 when replying is allowed.
+reply_budget_ok() {
+    local thread="$1"
+    local window="${REPLY_WINDOW_SECONDS:-300}"
+    local cap="${REPLY_CAP_PER_WINDOW:-5}"
+    local state="$CONFIG_DIR/reply-budget.json"
+    local now
+    now="$(date +%s)"
+
+    [[ -s "$state" ]] || printf '{}\n' > "$state"
+
+    local recent
+    recent="$(jq -r --arg t "$thread" --argjson now "$now" --argjson w "$window" \
+        '[(.[$t] // [])[] | select(. > ($now - $w))] | length' "$state" 2>/dev/null)"
+    [[ "$recent" =~ ^[0-9]+$ ]] || recent=0
+
+    if [[ "$recent" -ge "$cap" ]]; then
+        log_error "Reply cap reached for ${thread}: ${recent} in ${window}s"
+        log_error "  Refusing to reply again - this is what a comment loop looks like."
+        return 1
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    if jq --arg t "$thread" --argjson now "$now" --argjson w "$window" \
+        '.[$t] = ([((.[$t] // [])[] | select(. > ($now - $w))), $now])' \
+        "$state" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$state"
+    else
+        rm -f "$tmp"
+    fi
+    return 0
+}
+
 process_event() {
     local event_file="$1"
     local event_type payload
@@ -423,6 +486,21 @@ process_event() {
     payload=$(jq '.payload' "$event_file")
 
     log_debug "Processing event: $event_type from $event_file"
+
+    # Never act on our own comments.
+    #
+    # The help reply lists the usage, which necessarily contains the trigger
+    # keyword - so posting it produces an event that triggers another reply,
+    # for as fast as the forge will accept comments. Any reply the watcher
+    # writes has this property; the account is the only reliable way out.
+    local author
+    author="$(printf '%s' "$payload" | jq -r '
+        .comment.user.login // .issue.user.login // .sender.login // empty')"
+    if [[ -n "$WATCHER_BOT_USER" && "$author" == "$WATCHER_BOT_USER" ]]; then
+        log_debug "Ignoring event authored by ${author} (that is us)"
+        rm -f "$event_file"
+        return 0
+    fi
 
     if ! trigger_from_event "$event_type" "$payload" >/dev/null; then
         log_debug "No trigger keyword in $event_type event, skipping"
@@ -542,7 +620,9 @@ process_event() {
     if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
         log_info "No task mode stated for $task_id; replying with usage"
         local reply_result="replied_no_mode"
-        if [[ "$task_type" != "pipeline_failure" ]]; then
+        if [[ "$task_type" != "pipeline_failure" ]] && ! reply_budget_ok "${repo}#${number}"; then
+            reply_result="skipped_reply_cap"
+        elif [[ "$task_type" != "pipeline_failure" ]]; then
             # Record what actually happened. Filing an unposted reply as
             # answered would strand the request: nobody was told anything, and
             # the event is never looked at again.
