@@ -218,7 +218,7 @@ foundry shell [project]    # shell inside the sandbox
 foundry rm [project]       # remove the sandbox; volume root is kept
 foundry doctor [project]   # check host, policy, ports, keys (--fix repairs)
 
-foundry watcher <action>   # start | stop | status | logs | register
+foundry watcher <action>   # start | stop | status | logs | secret | register
 foundry policy <action>    # baseline | allow | deny | check | ls
 foundry image <action>     # build | push
 foundry config <action>    # get | set | edit | show

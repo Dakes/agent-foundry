@@ -294,7 +294,7 @@ Forgejo**, then:
 | Target URL | your `public_url` with port and path, e.g. `http://172.22.0.1:9174/webhook` |
 | HTTP Method | `POST` |
 | POST Content Type | `application/json` |
-| Secret | the contents of `.config/forgejo-watcher/webhook-secret` in the volume root |
+| Secret | the output of `foundry watcher secret my-project` — **not** your API token |
 | Trigger On | Custom Events: **Issues**, **Issue Comment**, **Pull Request**, **Pull Request Comment** |
 | Branch filter | `*` |
 | Active | ✓ |
@@ -303,8 +303,15 @@ The secret is generated on the first `foundry up` and then kept, because
 changing it would silently break every hook already registered:
 
 ```bash
-cat ~/.local/share/foundry/volumes/my-project/.config/forgejo-watcher/webhook-secret
+foundry watcher secret my-project
 ```
+
+> **The webhook secret is not the API token.** They sit side by side in
+> `.config/forgejo-watcher/` as `webhook-secret` and `token`. The token
+> authenticates *Foundry to the forge*; the secret lets the receiver prove a
+> delivery really came from the forge. Putting the token in the Secret field
+> produces a well-formed signature that never matches, and the only symptom is
+> `Invalid webhook signature` in the receiver log.
 
 Forgejo's **Test Delivery** button should return 200. A connection error means
 `public_url` is wrong or the port isn't reachable from the forge; a 4xx means

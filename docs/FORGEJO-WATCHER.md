@@ -179,18 +179,26 @@ Repository → **Settings → Webhooks → Add Webhook → Forgejo**:
 | Target URL | your `public_url`, with port and `/webhook` |
 | HTTP Method | `POST` |
 | POST Content Type | `application/json` |
-| Secret | contents of `.config/forgejo-watcher/webhook-secret` |
+| Secret | output of `foundry watcher secret <project>` — **not** the API token |
 | Trigger On | Issues, Issue Comment, Pull Request, Pull Request Comment |
 | Active | ✓ |
 
 The secret is generated on the first `up` and then kept — regenerating it
 would silently invalidate every hook already registered.
 
+**It is not the API token.** `.config/forgejo-watcher/` holds both: `token`
+(Foundry authenticating to the forge) and `webhook-secret` (the forge proving
+a delivery is genuine). The token in the Secret field yields a well-formed
+signature that can never match, logged as `Invalid webhook signature` like any
+other failure. `foundry watcher secret` prints the right value, and
+`foundry watcher register` sets it on the forge for you.
+
 ## Commands
 
 ```bash
 foundry watcher status <project>      # config summary and whether it runs
 foundry watcher logs <project>        # follow the watcher log
+foundry watcher secret <project>      # the value the forge's Secret field needs
 foundry watcher start <project>       # up starts it; this is for after a stop
 foundry watcher stop <project>
 foundry watcher restart <project>
