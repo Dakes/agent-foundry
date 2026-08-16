@@ -234,6 +234,11 @@ home="$(sandbox_home)"
 
 log_line() { printf '[%s] %s\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$log"; }
 
+# Write our own pid: whether setsid forks depends on whether the caller was
+# a process-group leader, so the pid the caller recorded is not reliable.
+printf '%s\n' "\$\$" > "${dir}/supervisor.pid"
+trap 'rm -f "${dir}/supervisor.pid"' EXIT
+
 log_line "supervisor started (pid \$\$)"
 
 # A watcher that cannot start must not be restarted forever: back off, and
@@ -317,37 +322,53 @@ watcher_start() {
 
     # setsid detaches it from this shell and from the terminal, so it survives
     # the command finishing, the terminal closing and the user logging out.
+    rm -f "$pid_file"
     setsid nohup "$script" >/dev/null 2>&1 &
+    # The supervisor writes the authoritative pid itself; this is the fallback
+    # for the moment before it gets there.
     printf '%s\n' "$!" > "$pid_file"
 
     # The watcher exits on a bad config, and the supervisor would restart it
     # in a loop - so a moment's wait is the difference between "started" and a
     # silent failure the user finds hours later.
     # The receiver is the proof: the watcher only starts it after the config
-    # validates, and it is the part the forge actually talks to.
-    sleep 4
-    if ! watcher_is_running "$box" "$root" \
-        || ! sandbox_exec "$box" "$root" \
-             tmux has-session -t forgejo-receiver >/dev/null 2>&1; then
-        watcher_stop "$box" "$root"
-        log_error "Watcher exited immediately after starting"
-
-        # Say what happened rather than naming a log. The watcher logs to a
-        # file, but everything that kills it before that file exists - a
-        # missing helper, an unreadable config - leaves nothing to read, and
-        # pointing at an absent path is worse than no advice at all.
-        local out
-        out="$(sandbox_exec "$box" "$root" "$WATCHER_SCRIPT" start 2>&1 | tail -n 5)"
-        if [[ -n "$out" ]]; then
-            local line
-            while IFS= read -r line; do
-                log_error "  ${line}"
-            done <<< "$out"
+    # validates, and it is the part the forge actually talks to. Poll rather
+    # than sleeping a fixed time - starting the sandbox, loading the config
+    # and binding the port take longer on a loaded host than on this one.
+    local waited=0 ready=false
+    while [[ "$waited" -lt 25 ]]; do
+        if watcher_is_running "$box" "$root" \
+            && sandbox_exec "$box" "$root" \
+                 tmux has-session -t forgejo-receiver >/dev/null 2>&1; then
+            ready=true
+            break
         fi
+        sleep 1
+        waited=$((waited + 1))
+    done
 
-        local log="${root}/.config/forgejo-watcher/watcher.log"
-        if [[ -f "$log" ]]; then
-            log_error "  Full log: ${log}"
+    if [[ "$ready" != "true" ]]; then
+        watcher_stop "$box" "$root"
+        log_error "Watcher did not come up within ${waited}s"
+
+        # Show the logs rather than re-running the watcher to see what it
+        # says: when it works, running it in the foreground blocks for as
+        # long as the loop lives, and it prints nothing anyway - everything
+        # goes to these files. The supervisor's log is first because it
+        # records failures that happen before the watcher can log at all.
+        local dir log line
+        dir="$(watcher_config_dir "$root")"
+        for log in "${dir}/supervisor.log" "${dir}/watcher.log"; do
+            [[ -f "$log" ]] || continue
+            log_error "  --- $(basename "$log"):"
+            while IFS= read -r line; do
+                log_error "      ${line}"
+            done < <(tail -n 5 "$log")
+        done
+
+        if [[ ! -f "${dir}/supervisor.log" ]]; then
+            log_error "  The supervisor wrote no log at all: it could not start."
+            log_error "  Check that ${dir}/supervisor.sh exists and is executable."
         fi
         return 1
     fi
