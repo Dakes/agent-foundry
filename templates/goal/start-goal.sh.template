@@ -22,6 +22,24 @@ cd "$AGENT_WORKSPACE" || {
 
 mkdir -p "$(dirname "$AGENT_LOG_FILE")"
 
+# sbx exports ANTHROPIC_API_KEY=proxy-managed into every sandbox: a placeholder
+# for a credential its proxy injects, which it only does for sandboxes it
+# created for the claude agent. Foundry's are created as 'shell' (the image is
+# its own), so nothing ever replaces the placeholder - and an API key, even a
+# fake one, takes precedence over the account the CLI is logged into. The
+# result is a 401 that reads as "Invalid API key" to someone who never set one.
+#
+# Only the placeholder is dropped. A real key that someone set deliberately
+# still works.
+for _var in ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY OPENAI_API_KEY; do
+    if [[ "${!_var:-}" == "proxy-managed" ]]; then
+        echo "[INFO] ignoring sbx placeholder ${_var}=proxy-managed" \
+            | tee -a "$AGENT_LOG_FILE"
+        unset "$_var"
+    fi
+done
+unset _var
+
 if [[ ! -f "$AGENT_TASK_PROMPT_FILE" ]]; then
     echo "ERROR: task prompt not found: $AGENT_TASK_PROMPT_FILE" >&2
     echo "The watcher writes it before starting the agent." >&2

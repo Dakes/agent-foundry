@@ -112,6 +112,11 @@ RUN set -eux; \
 COPY templates/agent-session.sh /opt/foundry/agent-session.sh
 RUN chmod 0755 /opt/foundry/agent-session.sh
 
+# Strips sbx's placeholder API keys before exec'ing an agent CLI. See the
+# script for why they are there and why they break a logged-in account.
+COPY templates/run-agent.sh /opt/foundry/run-agent.sh
+RUN chmod 0755 /opt/foundry/run-agent.sh
+
 # Shared prompt builder, sourced by every watcher adapter. Single source of
 # truth for the execution contract, task modes, and the agent identity string
 # (see docs/PROMPT-ARCHITECTURE.md). Baked into the image for the same reason

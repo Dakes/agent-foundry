@@ -151,8 +151,12 @@ foundry_agent_start() {
 
         log_info "Starting interactive $(agent_display_name "$agent") in session '$session'"
 
+        # Through the wrapper: sbx's placeholder API key would otherwise
+        # beat the account the user logged in with, and the CLI dies with
+        # "Invalid API key" for a key nobody set.
         if ! sandbox_exec "$box" "$root" \
-            tmux new-session -d -s "$session" "$binary"; then
+            tmux new-session -d -s "$session" \
+            "/opt/foundry/run-agent.sh $binary"; then
             log_error "Failed to start agent session '$session' in $box"
             return 1
         fi

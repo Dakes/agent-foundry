@@ -555,6 +555,29 @@ _project_seed_fj_auth() {
     return 0
 }
 
+# Drop sbx's placeholder API keys for interactive shells too.
+#
+# The volume root is the agent's home, so this .bashrc is what a user gets
+# from `foundry shell`. Without it, running `claude` by hand hits the same
+# ANTHROPIC_API_KEY=proxy-managed that breaks the automated runs - and the
+# error blames a key the user never set.
+_project_seed_bashrc() {
+    local root="$1"
+    local rc="${root}/.bashrc"
+    local marker="# foundry: ignore sbx placeholder credentials"
+
+    [[ -f "$rc" ]] && grep -qF "$marker" "$rc" && return 0
+
+    {
+        printf '\n%s\n' "$marker"
+        printf 'for _v in ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY OPENAI_API_KEY; do\n'
+        # shellcheck disable=SC2016  # written verbatim into the rc file
+        printf '    [ "${!_v:-}" = "proxy-managed" ] && unset "$_v"\n'
+        printf 'done\n'
+        printf 'unset _v\n'
+    } >> "$rc"
+}
+
 # Create (or complete) a project's volume root.
 # Idempotent: safe to re-run on an existing project.
 # Usage: project_scaffold "pocetude"
@@ -590,6 +613,7 @@ project_scaffold() {
     mkdir -p "$root/.ssh"
     chmod 700 "$root/.ssh"
     _project_seed_ssh_config "$root/.ssh"
+    _project_seed_bashrc "$root"
 
     # Secrets directory should not be world-readable.
     chmod 700 "$root/secrets"

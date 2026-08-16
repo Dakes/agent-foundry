@@ -369,5 +369,6 @@ Edit `foundry.json`, not that file.
 | Watcher exits right after starting | Read `<volume root>/.config/forgejo-watcher/watcher.log` — the config failed to validate. |
 | Webhook delivers, nothing happens | Wrong secret, or the URL is missing `/webhook`. |
 | Agent refuses to start with a watcher | `.agent` is interactive; a watcher needs a `*-goal` agent. |
+| Agent dies with `Invalid API key · Fix external API key` | sbx exports `ANTHROPIC_API_KEY=proxy-managed` into every sandbox, and a key beats a logged-in account. Foundry strips that placeholder; if you see this, the image predates the fix — rebuild it. |
 
 `foundry doctor <project>` checks the host, policy, ports and keys in one go.

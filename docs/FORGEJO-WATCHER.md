@@ -284,6 +284,7 @@ mean anything across restarts.
 | `Unsupported watcher agent type` | `.agent` is interactive; use a `*-goal` agent. |
 | Nothing on a comment that looks right | The mode word is missing — check for the help reply on the issue. |
 | Runs repeat after a restart | `processed.json` was deleted with the volume root. |
+| Agent dies with `Invalid API key · Fix external API key` | sbx exports `ANTHROPIC_API_KEY=proxy-managed` into every sandbox, and a key beats a logged-in account. Foundry strips that placeholder; if you see this, the image predates the fix — rebuild it. |
 
 ```bash
 foundry watcher status <project>
