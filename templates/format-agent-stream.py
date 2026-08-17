@@ -106,17 +106,70 @@ def describe_tool(name: str, args: dict) -> tuple[str, str]:
     return "", ""
 
 
-def emit(time_str: str, glyph: str, label: str, detail: str = "") -> None:
-    """One event, one line: time, glyph, a short column for the kind, detail.
+# The last line's content, and how many times it has repeated since.
+#
+# Compared without the timestamp: a line that says the same thing two seconds
+# later is the same line, and the clock is the only reason it would not
+# collapse. Kept as module state because the stream is processed one event at
+# a time and there is nothing else to hang it on.
+_last_key: tuple[str, str, str, tuple[str, ...]] | None = None
+_repeats = 0
+
+
+def flush_repeats(time_str: str = "") -> None:
+    """Report a run of suppressed duplicates, if there was one."""
+    global _repeats
+    if _repeats:
+        print(
+            f"{time_str or ' ' * 8}  ⋮  … last line repeated {_repeats}×",
+            flush=True,
+        )
+        _repeats = 0
+
+
+def emit(
+    time_str: str,
+    glyph: str,
+    label: str,
+    detail: str = "",
+    extra: tuple[str, ...] | list[str] = (),
+) -> bool:
+    """One event: a line of time, glyph, a short column for the kind, detail,
+    then any continuation lines indented under it.
 
     Prose carries no label and must not be pushed across the column, or the
     thing worth reading starts further right than everything else.
+
+    Consecutive identical events are collapsed. A stream that repeats itself is
+    usually saying nothing - a status event the CLI emits every couple of
+    seconds will otherwise bury the run it is meant to document.
+
+    The continuation lines are part of what makes an event distinct, which is
+    why they are passed in rather than printed by the caller: a Bash call
+    renders as "bash command" with the command itself underneath, so two
+    different commands look identical until you read the second line.
+
+    Returns False when the event was suppressed as a repeat.
     """
+    global _last_key, _repeats
+
+    extra = tuple(extra)
+    key = (glyph, label, detail, extra)
+    if key == _last_key:
+        _repeats += 1
+        return False
+
+    flush_repeats(time_str)
+    _last_key = key
+
     if label:
         head = f"{label:<7} " if len(label) <= 7 else f"{label} "
     else:
         head = ""
     print(f"{time_str}  {glyph}  {head}{detail}".rstrip(), flush=True)
+    for line in extra:
+        print(f"{INDENT}{line}", flush=True)
+    return True
 
 
 def render(event: dict) -> None:
@@ -126,7 +179,13 @@ def render(event: dict) -> None:
     if kind == "system":
         # The init banner lists every agent, skill and socket. Three fields
         # from it are worth keeping.
-        if event.get("subtype") == "init" or "session_id" in event:
+        #
+        # Only the banner. Every system event carries a session_id - hook
+        # results, MCP status, compaction notices - and matching on that
+        # printed a "start session ..." line for each of them, seconds apart,
+        # with nothing in it but the id: the run's actual output was a
+        # minority of its own log.
+        if event.get("subtype") == "init":
             model = event.get("model") or ""
             session = (event.get("session_id") or "")[:8]
             version = event.get("claude_code_version") or ""
@@ -151,15 +210,12 @@ def render(event: dict) -> None:
                     # In full, and indented after the first line so a
                     # paragraph stays readable next to the timestamps.
                     first, *rest = text.splitlines()
-                    emit(when, "💬", "", first)
-                    for extra in rest:
-                        print(f"{INDENT}{extra}", flush=True)
+                    emit(when, "💬", "", first, rest)
             elif block_type == "tool_use":
                 name = block.get("name", "tool")
                 subject, detail = describe_tool(name, block.get("input") or {})
-                emit(when, "▶", name.lower(), subject)
-                if detail:
-                    print(f"{INDENT}{elide(detail)}", flush=True)
+                emit(when, "▶", name.lower(), subject,
+                     [elide(detail)] if detail else [])
         return
 
     if kind == "user":
@@ -180,11 +236,10 @@ def render(event: dict) -> None:
 
             if block.get("is_error"):
                 # A failure is the reason someone reads the log at all.
-                emit(when, "←", "failed", lines[0] if lines else "")
-                for extra in lines[1:ERROR_RESULT_LINES]:
-                    print(f"{INDENT}{extra}", flush=True)
+                rest = list(lines[1:ERROR_RESULT_LINES])
                 if len(lines) > ERROR_RESULT_LINES:
-                    print(f"{INDENT}… {len(lines) - ERROR_RESULT_LINES} more lines", flush=True)
+                    rest.append(f"… {len(lines) - ERROR_RESULT_LINES} more lines")
+                emit(when, "←", "failed", lines[0] if lines else "", rest)
             elif len(lines) <= 1:
                 emit(when, "←", "ok", elide(body))
             else:
@@ -201,10 +256,9 @@ def render(event: dict) -> None:
         cost = event.get("total_cost_usd")
         if cost:
             parts.append(f"${cost:.2f}")
-        emit(when, "✗" if failed else "✓", "done", " · ".join(parts))
         text = (event.get("result") or "").strip()
-        if failed and text:
-            print(f"{INDENT}{text}", flush=True)
+        emit(when, "✗" if failed else "✓", "done", " · ".join(parts),
+             [text] if (failed and text) else [])
         return
 
 
@@ -216,20 +270,28 @@ def main() -> int:
         stripped = line.lstrip()
         if not stripped.startswith("{"):
             # Not our stream: another agent's output, or a shell message.
+            # Anything held back belongs above it, not after.
+            flush_repeats()
             print(line, flush=True)
             continue
         try:
             event = json.loads(stripped)
         except json.JSONDecodeError:
+            flush_repeats()
             print(line, flush=True)
             continue
         if not isinstance(event, dict):
+            flush_repeats()
             print(line, flush=True)
             continue
         try:
             render(event)
         except Exception as exc:  # noqa: BLE001 - never lose a run to a format bug
+            flush_repeats()
             print(f"[format error: {exc}] {elide(stripped, 200)}", flush=True)
+
+    # A run that ends while repeating would otherwise never say how often.
+    flush_repeats()
     return 0
 
 

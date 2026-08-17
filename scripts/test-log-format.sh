@@ -117,6 +117,56 @@ else
     fail "a malformed field silenced the line"
 fi
 
+echo "== only the init banner announces the session"
+# Every system event carries a session_id - hooks, MCP status, compaction.
+# Matching on that printed a "start" line every couple of seconds, and the
+# run's own output became a minority of its log.
+out="$(render '{"type":"system","subtype":"hook_result","session_id":"7030872d-aaaa"}')"
+if [[ -z "$out" ]]; then
+    pass "a non-init system event prints nothing"
+else
+    fail "a non-init system event printed: ${out}"
+fi
+
+echo "== consecutive identical events collapse"
+noisy="$(printf '%s\n' \
+    '{"type":"system","subtype":"init","model":"m","session_id":"7030872d"}' \
+    '{"type":"system","subtype":"init","model":"m","session_id":"7030872d"}' \
+    '{"type":"system","subtype":"init","model":"m","session_id":"7030872d"}' \
+    | python3 "$FMT" 2>&1)"
+if [[ "$(grep -c 'start' <<< "$noisy")" -eq 1 ]]; then
+    pass "three identical events print one line"
+else
+    fail "expected one start line, got: ${noisy}"
+fi
+contains "the repeat is counted" "$noisy" "repeated 2×"
+
+echo "== a repeat run is reported even if the stream ends inside it"
+contains "flushed at EOF" "$noisy" "repeated"
+
+echo "== two different commands are never collapsed into one"
+# Bash calls render as "bash command" with the command underneath, so the
+# continuation line is what tells them apart. Keying on the first line alone
+# would drop the second command entirely.
+two="$(printf '%s\n' \
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo first"}}]}}' \
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo second"}}]}}' \
+    | python3 "$FMT" 2>&1)"
+contains "first command survives" "$two" "echo first"
+contains "second command survives" "$two" "echo second"
+
+echo "== a collapsed event takes its continuation lines with it"
+# A paragraph printed under a line that was suppressed hangs off nothing.
+dup="$(printf '%s\n' \
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"same\nbody"}]}}' \
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"same\nbody"}]}}' \
+    | python3 "$FMT" 2>&1)"
+if [[ "$(grep -c 'body' <<< "$dup")" -eq 1 ]]; then
+    pass "the continuation is not orphaned"
+else
+    fail "continuation printed twice or orphaned: ${dup}"
+fi
+
 echo "== a closed pipe is not an error (head, less, Ctrl-C)"
 if printf '{"type":"result","duration_ms":1000}\n' | python3 "$FMT" 2>/dev/null | head -1 >/dev/null 2>&1; then
     pass "exits quietly on SIGPIPE"
