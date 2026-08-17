@@ -108,6 +108,54 @@ source_watcher_helpers() {
     fi
 }
 
+# Everything the event path calls that the helpers or the adapter must supply.
+#
+# Checked once, at startup, because the alternative is finding out mid-event:
+# the watcher runs under `set -e`, so an undefined function exits it with 127
+# in the middle of handling a request. That happened with
+# evaluate_agent_outcome, which no file defined - every completed run killed
+# the watcher, and the restart discarded whatever had queued up behind it. The
+# run itself had already succeeded, so nothing anywhere reported a problem.
+#
+# Bash cannot check this for us: an undefined function looks like an external
+# command until the moment it runs. scripts/check-prompts.sh enforces the same
+# rule statically; this is the backstop for an image built before it did.
+WATCHER_REQUIRED_FUNCTIONS=(
+    prepare_agent_workspace
+    start_agent_loop
+    evaluate_agent_outcome
+    ensure_processed_file_valid
+    ensure_retry_file_valid
+    mark_processed
+    is_processed
+    clear_retry
+    schedule_retry
+    post_reply_file
+    post_error_comment
+    add_reaction
+    start_tmux_runner
+)
+
+require_watcher_contract() {
+    local missing=() fn
+    for fn in "${WATCHER_REQUIRED_FUNCTIONS[@]}"; do
+        declare -F "$fn" >/dev/null 2>&1 || missing+=("$fn")
+    done
+
+    [[ ${#missing[@]} -eq 0 ]] && return 0
+
+    log_error "The watcher is missing ${#missing[@]} function(s) it depends on:"
+    for fn in "${missing[@]}"; do
+        log_error "    ${fn}()"
+    done
+    log_error "  Refusing to start: each of these is called while handling an"
+    log_error "  event, and the watcher would exit 127 in the middle of one."
+    log_error "  The image and the adapter disagree - rebuild and re-create:"
+    log_error "    foundry image build"
+    log_error "    foundry rm <project> && foundry init <project>"
+    return 1
+}
+
 _agent_adapter_file() {
     if [[ -z "$AGENT_TYPE" ]]; then
         echo ""
@@ -148,6 +196,10 @@ init_watcher() {
     fi
 
     if ! source_watcher_helpers; then
+        return 1
+    fi
+
+    if ! require_watcher_contract; then
         return 1
     fi
 

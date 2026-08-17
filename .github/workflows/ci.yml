@@ -40,6 +40,11 @@ jobs:
       - name: Agent log formatter tests
         run: ./scripts/test-log-format.sh
 
+      # The watcher's read on a finished run decides whether a task is marked
+      # done, retried or reported failed. Pure bash, no sandbox needed.
+      - name: Watcher run-outcome tests
+        run: ./scripts/test-watcher-outcome.sh
+
       # scripts/test-watcher-e2e.sh is deliberately not here: it builds an
       # image and creates a sandbox, which needs sbx and several minutes. Run
       # it by hand after touching templates/forgejo/ or lib/watcher.sh.

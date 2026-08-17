@@ -277,6 +277,58 @@ else
     fail "the usage reply contains the trigger keyword ${kw_hits} time(s) - it will trigger itself"
 fi
 
+# ---------------------------------------------------------------------------
+# 11. Every helper the watcher calls must be defined somewhere it can reach.
+#
+#     The watcher runs under `set -e`, so calling a function nobody defines
+#     exits it with 127 mid-event. `evaluate_agent_outcome` was called on the
+#     success path and defined nowhere at all: every completed run killed the
+#     watcher, the supervisor restarted it, and the restart discarded whatever
+#     had been queued in the meantime. Nothing failed visibly - the run had
+#     already finished - so the only symptom was that a request made while the
+#     agent was working vanished without a trace.
+#
+#     Bash cannot catch this: an undefined function is indistinguishable from
+#     an external command until it runs. So it is checked here instead.
+# ---------------------------------------------------------------------------
+_defined_helpers() {
+    grep -hoE '^[a-z_][a-z0-9_]*\(\)' \
+        templates/forgejo/forgejo_watcher.sh \
+        templates/forgejo/forgejo_watcher_common.sh \
+        templates/prompt-lib.sh \
+        lib/agent-registry.sh \
+        "${ADAPTERS[@]}" 2>/dev/null \
+        | sed 's/()//' | sort -u
+}
+
+# Identifiers in command position that look like this project's helpers:
+# snake_case with at least one underscore. Comments, declarations and case
+# patterns are stripped first - they hold names that are never called.
+_called_helpers() {
+    sed -e 's/#.*//' \
+        -e '/^[[:space:]]*\(local\|declare\|export\|readonly\)[[:space:]]/d' \
+        -e '/^[[:space:]]*[a-z_|*"$ ]*)[[:space:]]*$/d' \
+        "$1" \
+        | grep -oE '(^[[:space:]]*|\$\(|\bif[[:space:]]+|![[:space:]]+|&&[[:space:]]+|\|\|[[:space:]]+|\bthen[[:space:]]+)[a-z][a-z0-9]*(_[a-z0-9]+)+([[:space:]]|$)' \
+        | grep -oE '[a-z][a-z0-9]*(_[a-z0-9]+)+' | sort -u
+}
+
+# Helper-shaped names that are real commands, not functions of ours.
+_EXTERNAL='^(command_not_found_handle|systemd_.*)$'
+
+_defined_helpers > /tmp/foundry-defined.$$
+for f in templates/forgejo/forgejo_watcher.sh "${ADAPTERS[@]}"; do
+    [[ -f "$f" ]] || continue
+    while IFS= read -r fn; do
+        [[ -n "$fn" ]] || continue
+        [[ "$fn" =~ $_EXTERNAL ]] && continue
+        command -v "$fn" >/dev/null 2>&1 && continue
+        fail "$(basename "$f") calls ${fn}(), which nothing defines - set -e will exit 127 here"
+    done < <(comm -23 <(_called_helpers "$f") /tmp/foundry-defined.$$)
+done
+rm -f /tmp/foundry-defined.$$
+ok "every helper the watcher calls is defined"
+
 echo
 if [[ "$FAIL" -eq 0 ]]; then
     echo "All prompt checks passed."

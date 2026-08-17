@@ -89,6 +89,77 @@ get_run_exit_code() {
     jq -r '.exit_code // empty' "$RUN_STATUS_FILE" 2>/dev/null
 }
 
+# How a finished run went, as "<type>:<detail>".
+#
+# Types, which are the cases the watcher branches on:
+#   success       the agent exited 0
+#   rate_limited  it stopped because the backend refused it; worth retrying
+#                 later, and the only outcome that schedules one
+#   failure       it exited non-zero for its own reasons
+#   unknown       it left no status behind, so we cannot say
+#
+# The status file is written by the runner wrapper as its last act, so its
+# absence is meaningful in itself: the run was killed (the timeout in
+# wait_for_agent kills the tmux session) or the session died before the wrapper
+# could finish. That is reported as unknown rather than guessed at, because
+# "killed at the timeout" and "crashed in the first second" want different
+# answers from a human.
+#
+# Rate limiting is read from the agent's log, not from the exit code: the CLIs
+# exit non-zero for it without a distinguishable status.
+#
+# Usage: outcome="$(evaluate_agent_outcome <run_start_epoch>)"
+evaluate_agent_outcome() {
+    local run_start_epoch="${1:-0}"
+
+    local rc=""
+    if ! rc="$(get_run_exit_code)" || [[ -z "$rc" ]]; then
+        # Nothing was written. A rate limit can still be the reason - the CLI
+        # may have been killed while waiting on a limit it had already
+        # reported - so the log is worth consulting before giving up.
+        if watcher_log_contains_rate_limit; then
+            printf 'rate_limited:no exit status; the log reports a usage limit\n'
+            return 0
+        fi
+
+        local ran=0
+        if [[ "$run_start_epoch" -gt 0 ]]; then
+            ran=$(( $(date +%s) - run_start_epoch ))
+        fi
+        printf 'unknown:no exit status after %ss; the session was killed or died early\n' "$ran"
+        return 0
+    fi
+
+    if [[ "$rc" == "0" ]]; then
+        printf 'success:exited cleanly\n'
+        return 0
+    fi
+
+    if watcher_log_contains_rate_limit; then
+        printf 'rate_limited:exit %s, and the log reports a usage limit\n' "$rc"
+        return 0
+    fi
+
+    # The last non-empty line of the run, so the comment the watcher posts says
+    # something more useful than a number. Trimmed hard: this ends up in a
+    # comment on the forge.
+    # `|| true` is load-bearing: this file is sourced under `set -e`, and a
+    # grep that matches nothing - an empty log, which is exactly what a run
+    # that died instantly leaves - exits 1 and would abort the function here,
+    # costing the caller the outcome it is about to branch on.
+    local last=""
+    local log_path="$AGENT_WORKSPACE/logs/agent-watcher.log"
+    if [[ -f "$log_path" ]]; then
+        last="$(grep -v '^[[:space:]]*$' "$log_path" 2>/dev/null | tail -n 1 | cut -c1-200 || true)"
+    fi
+
+    if [[ -n "$last" ]]; then
+        printf 'failure:exit %s (%s)\n' "$rc" "$last"
+    else
+        printf 'failure:exit %s\n' "$rc"
+    fi
+}
+
 # ============================================================================
 # LOGGING
 # ============================================================================
