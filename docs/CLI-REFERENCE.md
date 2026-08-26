@@ -64,6 +64,32 @@ foundry doctor [project] [--fix]
   permissions and key presence, and whether watcher ports are actually
   published. `--fix` applies the policy baseline and normalizes permissions.
 
+## Fleet
+
+```bash
+foundry fleet init <project>           # write the defaults into the volume root
+foundry fleet init <project> --force   # re-seed, overwriting edited briefs
+foundry fleet show <project>           # resolved configuration and which files to edit
+foundry fleet check <project>          # would a fleet run actually start?
+foundry fleet gate <project>           # run the project's gate, as the hooks run it
+```
+
+Sets up and inspects the orchestrated fleet ([FLEET.md](FLEET.md)).
+
+- `init` seeds `.fleet` in `foundry.json` and writes editable role briefs, the
+  orchestrator skill, the guard hooks and `fleet-land` into the volume root. It
+  guesses a gate command from the repositories it finds and tells you to check
+  it. Existing briefs are kept unless `--force`.
+- `check` is the one to run after editing. It verifies the gate command is set,
+  that the project's agent is a Claude one, and that every configured role has
+  a brief whose frontmatter declares that exact name — Claude Code resolves
+  subagents by the name in the file, not by the filename.
+- `gate` runs inside the sandbox, through the same script the `Stop` hook uses,
+  so you see what an agent would see.
+
+You do not have to run `init`: a fleet run materialises whatever is missing on
+its way up. The command exists so you can read and edit the result first.
+
 ## Watcher
 
 ```bash
@@ -230,8 +256,22 @@ reviewable in a diff.
 ├── .config/forgejo-watcher/                 # watcher config and state
 ├── logs/           # agent and watcher logs
 ├── secrets/        # token files
+├── packets/        # per-task durable notes, written as the agent works
+├── bin/            # fleet-land, when the fleet is set up
 ├── foundry.json
 └── AGENT.md
+```
+
+With the fleet set up, `.claude/` also carries the parts a project edits:
+
+```
+.claude/
+├── agents/fleet-builder.md            # role briefs — yours to edit
+├── agents/fleet-critic.md
+├── skills/fleet-orchestrate/SKILL.md  # the landing protocol
+├── skills/fleet-report/SKILL.md
+├── hooks/fleet/*.sh                   # machinery, refreshed from the image
+└── settings.json                      # hook wiring, merged not overwritten
 ```
 
 This directory is mounted into the sandbox at the same absolute path, and is

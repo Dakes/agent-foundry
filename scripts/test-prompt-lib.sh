@@ -332,6 +332,123 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# ---------------------------------------------------------------------------
+# Strategy resolution
+# ---------------------------------------------------------------------------
+#
+# The strategy decides how much machinery a request brings with it, and the
+# expensive mistake is running a fleet for a one-line fix - or worse, running a
+# solo agent for a change the requester believes a fleet reviewed. Both axes
+# are resolved from the same sentence, so both are checked on the same inputs.
+
+check_strategy() {
+    local trigger="$1" expected="$2" ctx actual
+    ctx=$(_ctx issue "$trigger")
+    actual=$(foundry_task_strategy "$ctx")
+    if [[ "$actual" == "$expected" ]]; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        printf 'FAIL: strategy %-50s expected=%-6s got=%s\n' \
+            "\"$trigger\"" "$expected" "$actual"
+    fi
+}
+
+echo "== the strategy is read from the request, either side of the mode =="
+export TRIGGER_KEYWORD="@touya"
+FOUNDRY_DEFAULT_STRATEGY="solo"
+check_strategy "@touya fix this error"                        solo
+check_strategy "@touya implement the openspec 123"            solo
+check_strategy "@touya fleet implement the openspec 465"      fleet
+check_strategy "@touya implement fleet the openspec 465"      fleet
+check_strategy "@touya, fleet fix the parser"                 fleet
+check_strategy "@touya solo implement it"                     solo
+check_strategy "@touya /fleet"                                fleet
+check_strategy "@touya implement it, strategy: fleet"         fleet
+
+echo "== a strategy word does not stop the mode being found =="
+check_mode issue "@touya fleet implement the openspec 465"    implement
+check_mode issue "@touya fleet fix the parser"                fix
+check_mode issue "@touya solo review the diff"                review
+# Stating a strategy is not stating a mode: this must still ask.
+check_mode issue "@touya fleet"                               help
+
+echo "== a mode word inside prose is not a strategy =="
+# "fleet" three words in is part of the request, not the strategy for it.
+check_strategy "@touya implement the fleet management module" solo
+check_strategy "@touya answer what the fleet does"            solo
+
+echo "== the project default applies when the request names none =="
+FOUNDRY_DEFAULT_STRATEGY="fleet"
+check_strategy "@touya implement the openspec 123"            fleet
+check_strategy "@touya solo implement the openspec 123"       solo
+FOUNDRY_DEFAULT_STRATEGY="solo"
+
+echo "== quoted text carries neither axis =="
+check_strategy "> @touya fleet implement this"                solo
+
+# ---------------------------------------------------------------------------
+# The fleet block
+# ---------------------------------------------------------------------------
+
+echo "== a fleet run gets the fleet protocol, a solo run does not =="
+fleet_ctx=$(_ctx issue "@touya fleet implement the openspec")
+solo_prompt=$(FOUNDRY_TASK_STRATEGY=solo foundry_build_task_prompt "$fleet_ctx" implement)
+fleet_prompt=$(FOUNDRY_TASK_STRATEGY=fleet FOUNDRY_FLEET_GATE="npm run gate" \
+    foundry_build_task_prompt "$fleet_ctx" implement)
+
+check_contains     "fleet/block"      "$fleet_prompt" "## Fleet Protocol"
+check_not_contains "solo/no-block"    "$solo_prompt"  "## Fleet Protocol"
+check_contains     "fleet/gate"       "$fleet_prompt" "npm run gate"
+check_contains     "fleet/orchestrator" "$fleet_prompt" "you are the **orchestrator**"
+
+echo "== the fleet block states prohibitions, like every mode does =="
+check_contains "fleet/never-land"  "$fleet_prompt" "Do not land work you have not verified"
+check_contains "fleet/never-weaken" "$fleet_prompt" "Do not weaken, skip, disable, or delete a check"
+
+echo "== a fleet goal condition names the gate; a solo one does not =="
+g_fleet=$(FOUNDRY_TASK_STRATEGY=fleet FOUNDRY_FLEET_GATE="npm run gate" \
+    foundry_goal_condition implement "$fleet_ctx")
+g_solo=$(FOUNDRY_TASK_STRATEGY=solo foundry_goal_condition implement "$fleet_ctx")
+check_contains     "goal/fleet-gate" "$g_fleet" "reports PASS"
+check_not_contains "goal/solo-gate"  "$g_solo"  "reports PASS"
+
+echo "== a fleet run gets a larger turn budget than a solo one =="
+check_contains "goal/fleet-turns" "$g_fleet" "stop after 120 turns"
+check_contains "goal/solo-turns"  "$g_solo"  "stop after 20 turns"
+
+# ---------------------------------------------------------------------------
+# Report requirements and packets
+# ---------------------------------------------------------------------------
+
+echo "== every prompt requires honest residuals =="
+for m in review implement fix answer default; do
+    p_out=$(foundry_build_task_prompt "$(_ctx issue "@touya $m x")" "$m")
+    check_contains "residuals/$m" "$p_out" "Honest residuals"
+done
+pipe_ctx="$TMPDIR_TEST/pipe.json"
+jq -n '{kind:"pipeline_failure", name:"ci", branch:"main", repo:"acme/widgets",
+        repo_name:"widgets", sha:"abc123", conclusion:"failure",
+        html_url:"https://example.com/run/1", clone_url:"https://example.com/r.git",
+        run_id:"1", jobs_md:"- build failed"}' > "$pipe_ctx"
+check_contains "residuals/pipeline" "$(foundry_build_pipeline_prompt "$pipe_ctx")" "Honest residuals"
+
+echo "== durable notes appear only when a packet path is supplied =="
+with_packet=$(FOUNDRY_PACKET_FILE=/vol/packets/x.md \
+    foundry_build_task_prompt "$(_ctx issue '@touya fix x')" fix)
+without_packet=$(foundry_build_task_prompt "$(_ctx issue '@touya fix x')" fix)
+check_contains     "packet/present" "$with_packet"    "/vol/packets/x.md"
+check_contains     "packet/heading" "$with_packet"    "## Durable Notes"
+check_not_contains "packet/absent"  "$without_packet" "## Durable Notes"
+
+echo "== the usage reply explains the fleet keyword =="
+check_contains "help/fleet" "$(foundry_help_comment)" "fleet"
+
+echo "== a refusal says why and states that nothing was started =="
+refusal=$(foundry_refusal_comment "This project has no gate command.")
+check_contains "refusal/reason"  "$refusal" "no gate command"
+check_contains "refusal/nothing" "$refusal" "did not start any work"
+
 echo
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

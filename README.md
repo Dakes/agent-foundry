@@ -73,6 +73,7 @@ volume root is mounted at the same absolute path inside as on the host.
 | `gemini` | interactive | `@google/gemini-cli` |
 | `codex` | interactive | `@openai/codex` |
 | `claude-goal` | autonomous | Claude Code's `/goal` |
+| `claude-fleet` | autonomous | Claude Code's `/goal`, subagents, skills and hooks |
 | `codex-goal` | autonomous | Codex's `/goal` |
 | `agy-goal` | autonomous | Antigravity CLI's `/goal` |
 
@@ -131,6 +132,27 @@ is allowed to do. You state it: the word straight after the trigger keyword.
 ```
 
 `/review` and `mode: review` work anywhere in the comment too.
+
+### Solo or fleet
+
+The mode says *what kind of work*. A second, separate word says *how much
+machinery* to bring to it:
+
+```
+@yourbot fix this error                      one agent, as always
+@yourbot fleet implement the openspec 465    orchestrator, builders, critic, gate
+@yourbot solo implement the openspec 465     one agent, forced
+```
+
+`fleet` runs the [orchestrated fleet](docs/FLEET.md): a Claude process that
+decomposes the work, delegates it to builder subagents in separate lanes, has a
+critic re-derive the claims, and lands nothing until the project's **gate**
+command passes. It is real overhead — for a small fix it is slower and worse —
+so it is opt-in per request, and refused rather than downgraded when the
+project has no gate configured.
+
+The default for a request that says neither is `.fleet.strategy` in
+`foundry.json`.
 
 The mode is never inferred from phrasing. A request that states no mode gets a
 hardcoded reply listing this syntax and **no agent is started** — asking costs
@@ -218,6 +240,7 @@ foundry shell [project]    # shell inside the sandbox
 foundry rm [project]       # remove the sandbox; volume root is kept
 foundry doctor [project]   # check host, policy, ports, keys (--fix repairs)
 
+foundry fleet <action>     # init | show | check | gate
 foundry watcher <action>   # start | stop | status | logs | secret | register
 foundry policy <action>    # baseline | allow | deny | check | ls
 foundry image <action>     # build | push
@@ -246,6 +269,7 @@ Full reference: [CLI-REFERENCE.md](docs/CLI-REFERENCE.md)
 - [PROJECT-SETUP.md](docs/PROJECT-SETUP.md) — creating and configuring projects
 - [CLI-REFERENCE.md](docs/CLI-REFERENCE.md) — full command reference
 - [PROMPT-ARCHITECTURE.md](docs/PROMPT-ARCHITECTURE.md) — how agent prompts are built, and the rules that keep them consistent
+- [FLEET.md](docs/FLEET.md) — the orchestrated fleet: the gate, roles, lanes, and when not to use it
 - [TODO.md](TODO.md) — implementation roadmap
 
 ## Development

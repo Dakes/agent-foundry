@@ -1127,6 +1127,80 @@ cmd_image() {
 # watcher
 # ============================================================================
 
+# ============================================================================
+# FLEET
+# ============================================================================
+
+cmd_fleet() {
+    local action="${1:-show}"
+    shift || true
+
+    local name="" force="false" arg
+    for arg in "$@"; do
+        case "$arg" in
+            --force) force="true" ;;
+            -*) log_error "Unknown option: $arg"; return 1 ;;
+            *) [[ -z "$name" ]] && name="$arg" ;;
+        esac
+    done
+
+    _resolve_existing "$name" || return 1
+
+    case "$action" in
+        init)
+            log_info "Setting up the fleet for '${FOUNDRY_PROJECT}'"
+            fleet_init "$FOUNDRY_ROOT" "$force" || return 1
+            echo
+            fleet_show "$FOUNDRY_ROOT" "$FOUNDRY_PROJECT"
+
+            # The one thing that cannot be derived. Said here rather than left
+            # for a failing run to discover, per the project's sanity-check
+            # doctrine: a fleet with no gate is refused at request time, and
+            # the refusal is a comment on someone's issue.
+            if [[ -z "$(fleet_cfg "$FOUNDRY_ROOT" '.gate.command' '')" ]]; then
+                log_warn "No gate command is set, and a fleet will not run without one."
+                log_warn "Set .fleet.gate.command in ${FOUNDRY_ROOT}/foundry.json to the"
+                log_warn "check that proves this project is healthy, then run:"
+                log_warn "  foundry fleet check ${FOUNDRY_PROJECT}"
+            else
+                log_info "Enable it with: .fleet.enabled = true in ${FOUNDRY_ROOT}/foundry.json"
+            fi
+            ;;
+        show)
+            fleet_show "$FOUNDRY_ROOT" "$FOUNDRY_PROJECT"
+            ;;
+        check)
+            fleet_check "$FOUNDRY_ROOT" "$FOUNDRY_PROJECT"
+            ;;
+        gate)
+            # Run the project's gate exactly as the fleet's hooks run it, so
+            # that "what the gate says" can be seen before a round depends on
+            # it. Inside the sandbox, because the gate is the repository's own
+            # tooling and the host has none of it.
+            sandbox_require || return 1
+            sandbox_is_running "$FOUNDRY_BOX" || {
+                log_error "Sandbox is not running: foundry up ${FOUNDRY_PROJECT}"
+                return 1
+            }
+            local gate
+            gate="$(fleet_cfg "$FOUNDRY_ROOT" '.gate.command' '')"
+            if [[ -z "$gate" ]]; then
+                log_error "No gate command configured for '${FOUNDRY_PROJECT}'"
+                log_error "Set .fleet.gate.command in ${FOUNDRY_ROOT}/foundry.json"
+                return 1
+            fi
+            log_info "Running the gate: $gate"
+            sandbox_exec "$FOUNDRY_BOX" "$FOUNDRY_ROOT" \
+                "${FOUNDRY_ROOT}/.claude/hooks/fleet/gate-run.sh"
+            ;;
+        *)
+            log_error "Unknown fleet action: $action"
+            echo "Actions: init [--force] | show | check | gate" >&2
+            return 1
+            ;;
+    esac
+}
+
 cmd_watcher() {
     local action="${1:-status}"
     shift || true

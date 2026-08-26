@@ -25,6 +25,24 @@ FOUNDRY_PROMPT_LIB_VERSION="1"
 # by an older version still validates.
 FOUNDRY_TASK_MODES="review implement fix answer default"
 
+# Valid execution strategies.
+#
+# The strategy is orthogonal to the mode. The mode says what kind of work is
+# wanted ("fix", "implement"); the strategy says how much machinery to bring to
+# it. "solo" is one agent working the task directly - what Foundry has always
+# done. "fleet" is the orchestrator/builder/critic fleet behind a measured
+# gate, which is right for a large change and pure overhead for a one-line fix.
+#
+# Kept separate from the mode on purpose. Making "fleet" a mode would have
+# doubled the mode table (fleet-fix, fleet-implement, ...) and forced every
+# caller that switches on a mode to learn about fleets. The two axes compose:
+# any mode can run under either strategy.
+FOUNDRY_TASK_STRATEGIES="solo fleet"
+
+# The strategy used when the request names none. Projects that want the fleet
+# by default set it in foundry.json; the request can still override either way.
+FOUNDRY_DEFAULT_STRATEGY="${FOUNDRY_DEFAULT_STRATEGY:-solo}"
+
 # Objective bullets are rendered as a plain list by default. Adapters whose
 # agent consumes a checklist rather than prose, set
 # FOUNDRY_OBJECTIVE_STYLE=checklist to get "- [ ]" markers instead.
@@ -139,6 +157,29 @@ _foundry_strip_quoted() {
         /^[[:space:]]{4,}[^[:space:]]/ { next }
         { gsub(/`[^`]*`/, " "); print }
     '
+}
+
+# Drop a leading strategy word from an already-lowercased remainder.
+#
+# "@bot fleet implement X" has to resolve the mode as "implement", so mode
+# resolution steps over the strategy word rather than reading it as a mode and
+# giving up. Echoes the remainder unchanged when no strategy word is present.
+_foundry_strip_strategy() {
+    local rest="$1" st
+    for st in $FOUNDRY_TASK_STRATEGIES; do
+        if [[ "$rest" == "$st"[[:space:]]* ]]; then
+            rest="${rest#"$st"}"
+            rest="${rest#"${rest%%[![:space:]]*}"}"
+            break
+        fi
+    done
+    printf '%s' "$rest"
+}
+
+# Echo the first whitespace-separated token of a string.
+_foundry_first_word() {
+    local rest="$1"
+    printf '%s' "${rest%%[[:space:]]*}"
 }
 
 # Human-readable label for a context kind. Naive capitalisation turns "pr"
@@ -261,6 +302,11 @@ foundry_task_mode() {
             rest="${rest#[,:.-]}"
             rest="${rest#"${rest%%[![:space:]]*}"}"
 
+            # "@bot fleet implement X" states both axes. The strategy word is
+            # not a mode, so step over it - otherwise the mode scan below finds
+            # nothing and the request is answered with syntax the user gave.
+            rest=$(_foundry_strip_strategy "$rest")
+
             for m in $FOUNDRY_TASK_MODES; do
                 [[ "$m" == "default" ]] && continue
                 if [[ "$rest" == "$m" || "$rest" == "$m"[[:space:]]* ]]; then
@@ -294,9 +340,101 @@ foundry_task_mode() {
     printf 'help'
 }
 
+# Resolve the execution strategy for a request.
+#
+# Mirrors foundry_task_mode deliberately: same precedence, same quoted-text
+# stripping, same every-occurrence scan of the trigger keyword. A request that
+# names no strategy gets FOUNDRY_DEFAULT_STRATEGY rather than a help reply -
+# unlike the mode, there is a safe default here, because the strategy changes
+# how much machinery runs and not which prohibitions the agent receives.
+#
+# Both word orders are accepted, because both are how people write it:
+#   "@bot fleet implement X"   strategy first
+#   "@bot implement fleet X"   mode first
+#
+# Usage: foundry_task_strategy <context_file>
+foundry_task_strategy() {
+    local context_file="$1"
+    local trigger st lc
+
+    trigger=$(_foundry_jq "$context_file" '.trigger_body')
+    lc=$(_foundry_strip_quoted "$trigger" | tr '[:upper:]' '[:lower:]')
+
+    # 1. The word following the trigger keyword, or the one after the mode.
+    local keyword lc_keyword
+    keyword="${TRIGGER_KEYWORD:-${FOUNDRY_TRIGGER_KEYWORD:-}}"
+    if [[ -n "$keyword" ]]; then
+        lc_keyword=$(printf '%s' "$keyword" | tr '[:upper:]' '[:lower:]')
+
+        local remainder="$lc" rest first second m
+        while [[ "$remainder" == *"$lc_keyword"* ]]; do
+            remainder="${remainder#*"$lc_keyword"}"
+            rest="${remainder#"${remainder%%[![:space:]]*}"}"
+            rest="${rest#[,:.-]}"
+            rest="${rest#"${rest%%[![:space:]]*}"}"
+
+            first=$(_foundry_first_word "$rest")
+            for st in $FOUNDRY_TASK_STRATEGIES; do
+                if [[ "$first" == "$st" ]]; then
+                    printf '%s' "$st"
+                    return 0
+                fi
+            done
+
+            # Mode first: step over it and look at the next word. Only a real
+            # mode is stepped over, so "@bot fixed the fleet yesterday" cannot
+            # be read as a strategy.
+            for m in $FOUNDRY_TASK_MODES; do
+                [[ "$m" == "default" ]] && continue
+                [[ "$first" == "$m" ]] || continue
+                second="${rest#"$first"}"
+                second="${second#"${second%%[![:space:]]*}"}"
+                second=$(_foundry_first_word "$second")
+                for st in $FOUNDRY_TASK_STRATEGIES; do
+                    if [[ "$second" == "$st" ]]; then
+                        printf '%s' "$st"
+                        return 0
+                    fi
+                done
+                break
+            done
+        done
+    fi
+
+    # 2. An explicit directive anywhere in the request.
+    for st in $FOUNDRY_TASK_STRATEGIES; do
+        if [[ "$lc" =~ (^|[[:space:]])/"$st"([[:space:]]|$) ]] ||
+           [[ "$lc" =~ strategy:[[:space:]]*"$st" ]]; then
+            printf '%s' "$st"
+            return 0
+        fi
+    done
+
+    # 3. The project default.
+    printf '%s' "$FOUNDRY_DEFAULT_STRATEGY"
+}
+
+foundry_strategy_is_valid() {
+    local candidate="$1" st
+    for st in $FOUNDRY_TASK_STRATEGIES; do
+        [[ "$st" == "$candidate" ]] && return 0
+    done
+    return 1
+}
+
 # Exit code an adapter returns when the request stated no mode. The watcher
 # posts FOUNDRY_REPLY_FILE and does not start the agent.
 FOUNDRY_EXIT_HELP=78
+
+# Exit code an adapter returns when the request asked for a strategy this
+# project cannot run - a fleet on a project whose agent is not Claude, or a
+# fleet with no gate command configured. Handled exactly like the help path:
+# the watcher posts FOUNDRY_REPLY_FILE and starts nothing.
+#
+# Distinct from FOUNDRY_EXIT_HELP so the watcher log says which refusal it was,
+# and so a future caller can treat them differently without re-deriving it from
+# the reply text.
+FOUNDRY_EXIT_REFUSED=79
 
 # The reply for a request that named no mode.
 #
@@ -325,6 +463,12 @@ foundry_help_comment() {
     printf '<mention> implement add a --verbose flag\n'
     printf '<mention> answer    why does the uploader time out?\n'
     printf '```\n\n'
+    printf 'Put `fleet` before or after the mode to run the change through the\n'
+    printf 'orchestrated fleet instead of a single agent. It is worth it for a\n'
+    printf 'large change and pure overhead for a small one:\n\n'
+    printf '```\n'
+    printf '<mention> fleet implement the openspec in docs/specs/465.md\n'
+    printf '```\n\n'
     printf '| Mode | What I do | What I will not do |\n'
     printf '|---|---|---|\n'
     printf '| `review` | Read the changes and post my findings | Change any code |\n'
@@ -344,6 +488,35 @@ foundry_write_help_reply() {
 
     foundry_help_comment > "$target" || return 1
     return "$FOUNDRY_EXIT_HELP"
+}
+
+# The reply for a request that asked for something this project cannot run.
+#
+# Hardcoded like foundry_help_comment and for the same reason: the answer does
+# not vary, and a generated one can invent a capability that does not exist.
+# The caller passes the specific reason, which is the only part that changes.
+#
+# Usage: foundry_refusal_comment <reason>
+# shellcheck disable=SC2016  # backticks are Markdown code spans
+foundry_refusal_comment() {
+    local reason="$1"
+
+    printf '## 🤖 %s\n\n' "$(foundry_identity)"
+    printf 'I cannot run this request as asked.\n\n'
+    printf '%s\n\n' "$reason"
+    printf 'I did not start any work on this request.\n'
+}
+
+# Write the refusal reply where the watcher will look for it, and return
+# FOUNDRY_EXIT_REFUSED so the caller can `return "$(...)"` straight through.
+#
+# Usage: foundry_write_refusal_reply <reason> [target]
+foundry_write_refusal_reply() {
+    local reason="$1"
+    local target="${2:-${FOUNDRY_REPLY_FILE:-${TMPDIR:-/tmp}/foundry-reply.md}}"
+
+    foundry_refusal_comment "$reason" > "$target" || return 1
+    return "$FOUNDRY_EXIT_REFUSED"
 }
 
 foundry_mode_is_valid() {
@@ -518,6 +691,116 @@ foundry_objective_block() {
 }
 
 # ---------------------------------------------------------------------------
+# Fleet protocol
+# ---------------------------------------------------------------------------
+
+# The operating rules for a fleet run, appended after the Objective.
+#
+# The Objective still owns *what* to build - the fleet block only says how the
+# work is organised and what the orchestrator may believe. That split is why
+# the role briefs can live in the project as durable files: a brief says how to
+# be a builder, never what to build.
+#
+# Everything project-specific arrives as pre-rendered data in the environment
+# (FOUNDRY_FLEET_ROLES, FOUNDRY_FLEET_GATE, FOUNDRY_FLEET_LANES), because the
+# fleet is configured per project and this library is shared by all of them.
+#
+# Usage: foundry_fleet_block <mode> <context_file>
+# shellcheck disable=SC2016  # backticks throughout are Markdown code spans
+foundry_fleet_block() {
+    local mode="$1" context_file="$2"
+    local gate roles lanes packet
+
+    gate="${FOUNDRY_FLEET_GATE:-}"
+    roles="${FOUNDRY_FLEET_ROLES:-}"
+    lanes="${FOUNDRY_FLEET_LANES:-}"
+    packet="${FOUNDRY_PACKET_FILE:-}"
+
+    printf '## Fleet Protocol\n\n'
+    printf 'This run is a fleet run, and you are the **orchestrator**. You do not\n'
+    printf 'do the work yourself: you decompose it, delegate it, verify it, and\n'
+    printf 'land it. The Objective above still states what is being built.\n\n'
+
+    printf 'Read the `fleet-orchestrate` skill before you delegate anything. It is\n'
+    printf 'the landing protocol, and it is authoritative over your own judgement\n'
+    printf 'about when work is ready.\n\n'
+
+    if [[ -n "$roles" ]]; then
+        printf 'Roles configured for this project:\n\n%s\n\n' "$roles"
+    fi
+
+    if [[ -n "$lanes" ]]; then
+        printf 'Lanes. Each builder owns one and edits nothing outside it:\n\n%s\n\n' "$lanes"
+    fi
+
+    printf 'The rules of this run:\n\n'
+    _foundry_bullet "You are the only process that commits. Builders and critics never commit, never push, and never open a pull request."
+    if [[ -n "$gate" ]]; then
+        _foundry_bullet "The gate decides done, not you and not a report. Run it yourself: \`$gate\`."
+        _foundry_bullet "When the gate fails it names the worst items. Those are the next work orders — hand them to the owning builder verbatim, with the coordinates."
+    fi
+    _foundry_bullet "A subagent's report is evidence, not truth. Re-derive every number you are about to land: re-run the gate yourself, read the diff yourself, and check \`git status\` for edits outside the lane that reported them."
+    _foundry_bullet "Send the critic the work, not the builder's summary of it. The critic decides its own scope of review."
+    _foundry_bullet "Keep the fleet busy: when a lane finishes, either give it the next work order or retire it. Do not idle the whole fleet waiting on one lane."
+    if [[ -n "$packet" ]]; then
+        _foundry_bullet "Write the packet at $packet before you report, not after. Assume this session can die at any point; the packet is what a fresh agent resumes from."
+    fi
+
+    printf '\n**Do not:**\n\n'
+    _foundry_never "Do not land work you have not verified yourself, however confident the report sounds."
+    _foundry_never "Do not weaken, skip, disable, or delete a check to make the gate pass. A gate you edited proves nothing."
+    _foundry_never "Do not hand-edit the gate ledger — it is written by the gate and by nothing else."
+    _foundry_never "Do not let two builders edit the same file. If a change needs a file outside its lane, make it yourself after the round lands."
+    _foundry_never "Do not report success while the gate is failing. If you cannot pass it, say so and state what is blocking you."
+}
+
+# ---------------------------------------------------------------------------
+# Reporting requirements
+# ---------------------------------------------------------------------------
+
+# The required shape of the final comment, for every mode and every strategy.
+#
+# "Honest residuals" is the load-bearing field. An agent that reports only what
+# worked has produced a report nobody can act on, and the failure is invisible
+# until someone reads the code. Naming the field makes its absence a
+# non-conforming report rather than a judgement call.
+foundry_report_requirements() {
+    printf 'Your final comment must contain, in this order:\n\n'
+    _foundry_bullet "What you did, in one short paragraph."
+    _foundry_bullet "How you verified it — the commands you ran and what they returned. Not \"tests pass\": the command and its result."
+    _foundry_bullet "**Honest residuals.** What is still wrong, still missing, still unverified, or still guessed at. If you worked around something rather than fixing it, say so here. An empty residuals section is a claim that nothing is left, and it will be read as one."
+    _foundry_bullet "What you did not do, and why — anything in the request you deliberately left alone."
+}
+
+# ---------------------------------------------------------------------------
+# Packets
+# ---------------------------------------------------------------------------
+
+# Durable per-task notes, written as the work happens.
+#
+# The agent is assumed to die. Emitted only when the caller supplies a path, so
+# that an adapter which has nowhere durable to write does not promise one.
+#
+# Usage: foundry_packet_block <context_file>
+foundry_packet_block() {
+    local context_file="$1"
+    local packet="${FOUNDRY_PACKET_FILE:-}"
+
+    [[ -n "$packet" ]] || return 0
+
+    printf '## Durable Notes\n\n'
+    printf 'Keep a running record of this task at:\n\n    %s\n\n' "$packet"
+    printf 'Write to it as you work, not at the end. This session can be killed\n'
+    printf 'at any moment — by a restart, a timeout, or a crash — and this file\n'
+    printf 'is the only thing that survives it. A replacement agent is expected\n'
+    printf 'to resume from this file alone, so write it for that reader.\n\n'
+    _foundry_bullet "What you have established as true, and how you established it."
+    _foundry_bullet "What you tried that did not work, so it is not tried twice."
+    _foundry_bullet "What you were about to do next."
+    printf '\n'
+}
+
+# ---------------------------------------------------------------------------
 # Background
 # ---------------------------------------------------------------------------
 
@@ -569,6 +852,12 @@ foundry_background_block() {
 # be part of the condition text, or a loop that can never satisfy its condition
 # runs until the token budget is gone.
 FOUNDRY_GOAL_MAX_TURNS="${FOUNDRY_GOAL_MAX_TURNS:-20}"
+
+# The same bound for a fleet run, which spends turns on delegation and
+# verification before any code is written. Twenty would end an orchestrator
+# somewhere around its second round; the point of the bound is to stop a run
+# that is going nowhere, not to stop one that is working.
+FOUNDRY_FLEET_MAX_TURNS="${FOUNDRY_FLEET_MAX_TURNS:-120}"
 
 # The completion condition for a goal-mode run.
 #
@@ -623,7 +912,19 @@ foundry_goal_condition() {
             ;;
     esac
 
-    printf ', or stop after %s turns and report what is blocking you.\n' "$FOUNDRY_GOAL_MAX_TURNS"
+    # A fleet run is not done when the work looks done: it is done when the
+    # gate says so. Naming the gate in the condition is what keeps the
+    # completion check from being the orchestrator's own opinion of its work.
+    local turns="$FOUNDRY_GOAL_MAX_TURNS"
+    if [[ "${FOUNDRY_TASK_STRATEGY:-solo}" == "fleet" ]]; then
+        turns="$FOUNDRY_FLEET_MAX_TURNS"
+        if [[ -n "${FOUNDRY_FLEET_GATE:-}" ]]; then
+            printf ', and the fleet gate (%s) reports PASS on the landed result' \
+                "$FOUNDRY_FLEET_GATE"
+        fi
+    fi
+
+    printf ', or stop after %s turns and report what is blocking you.\n' "$turns"
 }
 
 # ---------------------------------------------------------------------------
@@ -700,8 +1001,20 @@ foundry_build_task_prompt() {
     foundry_objective_block "$mode" "$context_file"
     printf '\n'
 
+    # The fleet block goes after the Objective and before Completion: it
+    # describes how the work is organised, which is only meaningful once the
+    # work itself has been stated.
+    if [[ "${FOUNDRY_TASK_STRATEGY:-solo}" == "fleet" ]]; then
+        foundry_fleet_block "$mode" "$context_file"
+        printf '\n'
+    fi
+
+    foundry_packet_block "$context_file"
+
     printf '## Completion\n\n'
     printf 'Start your final comment with:\n\n    %s\n\n' "$(foundry_completion_header)"
+    foundry_report_requirements
+    printf '\n'
     if [[ -n "${FOUNDRY_COMPLETION_PROMISE:-}" ]]; then
         printf 'When the work is complete and validated, print:\n\n    %s\n\n' "$FOUNDRY_COMPLETION_PROMISE"
     fi
@@ -756,8 +1069,13 @@ foundry_build_pipeline_prompt() {
     _foundry_never "Do not modify code unrelated to the failure."
     _foundry_never "Do not open a pull request if the failure is transient or environmental — comment with your finding instead."
 
-    printf '\n## Completion\n\n'
+    printf '\n'
+    foundry_packet_block "$context_file"
+
+    printf '## Completion\n\n'
     printf 'Start your final comment with:\n\n    %s\n\n' "$(foundry_completion_header)"
+    foundry_report_requirements
+    printf '\n'
     if [[ -n "${FOUNDRY_COMPLETION_PROMISE:-}" ]]; then
         printf 'When the work is complete and validated, print:\n\n    %s\n\n' "$FOUNDRY_COMPLETION_PROMISE"
     fi

@@ -10,21 +10,27 @@
 # Two categories:
 #
 #   interactive  claude, gemini, codex - a human drives them in a terminal.
-#   autonomous   *-goal - the CLI's own goal loop runs unattended, which is
-#                what a watcher can drive.
+#   autonomous   *-goal and claude-fleet - the run is unattended, which is what
+#                a watcher can drive.
 #
 # The goal agents differ only in which binary is invoked; everything else
 # about them is identical, which is why so many cases below collapse to one.
 #
+# claude-fleet is the exception: same binary as claude-goal, different launcher.
+# It runs one Claude process as an orchestrator that delegates to builder and
+# critic subagents behind a measured gate. It is not a different CLI, it is a
+# different way of using the same one, which is why it shares the goal agent's
+# watcher adapter and diverges only at the launcher.
+#
 
 # Whitespace-separated list of valid agent type identifiers.
-AGENT_TYPES="claude gemini codex claude-goal codex-goal agy-goal"
+AGENT_TYPES="claude gemini codex claude-goal codex-goal agy-goal claude-fleet"
 
 # Returns 0 if the agent type is supported.
 agent_is_valid() {
     local agent="$1"
     case "$agent" in
-        claude|gemini|codex|claude-goal|codex-goal|agy-goal)
+        claude|gemini|codex|claude-goal|codex-goal|agy-goal|claude-fleet)
             return 0
             ;;
         *)
@@ -39,6 +45,7 @@ agent_display_name() {
     case "$agent" in
         claude) echo "Claude Code CLI" ;;
         claude-goal) echo "Claude Code (goal loop)" ;;
+        claude-fleet) echo "Claude Code (fleet)" ;;
         codex-goal) echo "Codex (goal loop)" ;;
         agy-goal) echo "Antigravity (goal loop)" ;;
         gemini) echo "Gemini CLI" ;;
@@ -57,7 +64,7 @@ agent_display_name() {
 agent_identity_name() {
     local agent="$1"
     case "$agent" in
-        claude|claude-goal) echo "Claude" ;;
+        claude|claude-goal|claude-fleet) echo "Claude" ;;
         codex|codex-goal) echo "Codex" ;;
         agy-goal) echo "Antigravity" ;;
         gemini) echo "Gemini" ;;
@@ -69,7 +76,7 @@ agent_identity_name() {
 agent_category() {
     local agent="$1"
     case "$agent" in
-        claude-goal|codex-goal|agy-goal)
+        claude-goal|codex-goal|agy-goal|claude-fleet)
             echo "autonomous"
             ;;
         claude|gemini|codex)
@@ -95,7 +102,7 @@ agent_is_interactive() {
 agent_session_backend() {
     local agent="$1"
     case "$agent" in
-        claude-goal|codex-goal|agy-goal)
+        claude-goal|codex-goal|agy-goal|claude-fleet)
             echo "tmux"
             ;;
         claude|gemini|codex)
@@ -111,7 +118,7 @@ agent_session_backend() {
 agent_binary() {
     local agent="$1"
     case "$agent" in
-        claude|claude-goal) echo "claude" ;;
+        claude|claude-goal|claude-fleet) echo "claude" ;;
         codex|codex-goal) echo "codex" ;;
         agy-goal) echo "agy" ;;
         gemini) echo "gemini" ;;
@@ -123,7 +130,7 @@ agent_binary() {
 agent_package() {
     local agent="$1"
     case "$agent" in
-        claude|claude-goal) echo "@anthropic-ai/claude-code" ;;
+        claude|claude-goal|claude-fleet) echo "@anthropic-ai/claude-code" ;;
         codex|codex-goal) echo "@openai/codex" ;;
         agy-goal) echo "antigravity-cli" ;;
         gemini) echo "@google/gemini-cli" ;;
@@ -135,7 +142,7 @@ agent_package() {
 agent_install_method() {
     local agent="$1"
     case "$agent" in
-        claude|gemini|codex|claude-goal|codex-goal) echo "npm" ;;
+        claude|gemini|codex|claude-goal|codex-goal|claude-fleet) echo "npm" ;;
         agy-goal) echo "installer" ;;
         *) echo "" ;;
     esac
@@ -145,7 +152,7 @@ agent_install_method() {
 agent_dotfolder() {
     local agent="$1"
     case "$agent" in
-        claude|claude-goal) echo ".claude" ;;
+        claude|claude-goal|claude-fleet) echo ".claude" ;;
         codex|codex-goal) echo ".codex" ;;
         agy-goal|gemini) echo ".gemini" ;;
         *) echo "" ;;
@@ -179,9 +186,57 @@ agent_start_template() {
             # CLI, so there is nothing per-agent left to script.
             echo "$base_dir/templates/goal/start-goal.sh.template"
             ;;
+        claude-fleet)
+            # Its own launcher: the fleet needs its hooks and role definitions
+            # materialised and verified before the CLI starts, and a gate that
+            # is missing has to stop the run rather than be discovered by an
+            # orchestrator halfway through a round.
+            echo "$base_dir/templates/fleet/start-fleet.sh.template"
+            ;;
         *)
             echo ""
             ;;
+    esac
+}
+
+# Returns 0 if the agent type can run the orchestrated fleet.
+#
+# The fleet is built on Claude Code's subagents, skills and hooks. No other CLI
+# in the image has that combination, so a fleet request against one of them is
+# refused rather than silently downgraded - downgrading would run a large
+# change through a single agent while the requester believes a fleet reviewed
+# it, which is the worst of both.
+agent_supports_fleet() {
+    case "$1" in
+        claude|claude-goal|claude-fleet) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Echoes the agent type that actually runs a request, given the configured
+# agent and the resolved strategy.
+#
+# A project configured for claude-goal runs the fleet when a request asks for
+# it, and claude-fleet runs a solo goal loop when a request asks for that. The
+# configured type sets the default; the request moves it.
+#
+# Usage: agent_type_for_strategy <configured_agent> <strategy>
+agent_type_for_strategy() {
+    local agent="$1" strategy="${2:-solo}"
+
+    agent_supports_fleet "$agent" || { printf '%s' "$agent"; return 0; }
+
+    case "$strategy" in
+        fleet) printf 'claude-fleet' ;;
+        *)     printf 'claude-goal' ;;
+    esac
+}
+
+# Echoes the strategy an agent type runs by default when a request names none.
+agent_default_strategy() {
+    case "$1" in
+        claude-fleet) echo "fleet" ;;
+        *) echo "solo" ;;
     esac
 }
 
@@ -196,7 +251,10 @@ agent_watcher_adapter_for() {
     local base_dir="${AGENT_FOUNDRY_BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
     case "$agent" in
-        *-goal)
+        *-goal|claude-fleet)
+            # claude-fleet shares it: the adapter's whole job is resolving the
+            # mode and writing the prompt, and neither changes with the
+            # strategy. Only the launcher it hands over to differs.
             echo "$base_dir/templates/goal/watcher_agent_goal.sh"
             ;;
         *)
@@ -219,8 +277,15 @@ agent_max_iterations() {
 }
 
 # Echoes the default timeout in minutes for autonomous agent runs.
+#
+# A fleet round is a delegation, a build, a gate run and a critique before
+# anything lands, repeated until the gate passes. Two hours is a solo agent's
+# budget and would kill most fleet runs mid-round.
 agent_default_timeout_minutes() {
-    echo "120"
+    case "$1" in
+        claude-fleet) echo "480" ;;
+        *) echo "120" ;;
+    esac
 }
 
 # Echoes the default log file path inside the sandbox for an autonomous agent.

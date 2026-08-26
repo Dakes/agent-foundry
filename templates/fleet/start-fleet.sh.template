@@ -1,0 +1,110 @@
+#!/bin/bash
+# Agent Foundry - fleet agent start script
+#
+# The launcher for claude-fleet. Same CLI as claude-goal, arranged differently:
+# one Claude process runs as the orchestrator, and the builders and critics are
+# its subagents. The organisation lives in files this script puts in place
+# before the CLI starts - role briefs under .claude/agents, the landing
+# protocol under .claude/skills, and the gate wired in as a Stop hook.
+#
+# Rendered by lib/agent-sandbox.sh, which exports AGENT_WORKSPACE, AGENT_TYPE,
+# AGENT_LOG_FILE, AGENT_TASK_PROMPT_FILE and AGENT_GOAL_CONDITION.
+
+set -o pipefail
+
+cd "$AGENT_WORKSPACE" || {
+    echo "ERROR: cannot change to workspace $AGENT_WORKSPACE" >&2
+    exit 1
+}
+
+mkdir -p "$(dirname "$AGENT_LOG_FILE")"
+
+# sbx exports a placeholder API key into every sandbox, and a key - even a fake
+# one - takes precedence over the account the CLI is logged into. Same handling
+# as the goal launcher, and for the same reason: without it the run dies with
+# "Invalid API key" for a key nobody set.
+for _var in ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY OPENAI_API_KEY; do
+    if [[ "${!_var:-}" == "proxy-managed" ]]; then
+        echo "[INFO] ignoring sbx placeholder ${_var}=proxy-managed"
+        unset "$_var"
+    fi
+done
+unset _var
+
+if [[ ! -f "$AGENT_TASK_PROMPT_FILE" ]]; then
+    echo "ERROR: task prompt not found: $AGENT_TASK_PROMPT_FILE" >&2
+    echo "The watcher writes it before starting the agent." >&2
+    exit 1
+fi
+
+if [[ -z "${AGENT_GOAL_CONDITION:-}" ]]; then
+    echo "ERROR: no goal condition was rendered for $AGENT_TYPE" >&2
+    exit 1
+fi
+
+FLEET_LIB="${FLEET_LIB:-/opt/foundry/fleet/fleet-lib.sh}"
+if [[ ! -f "$FLEET_LIB" ]]; then
+    echo "ERROR: fleet library missing at $FLEET_LIB" >&2
+    echo "The image is older than this agent type; rebuild with 'foundry image build'." >&2
+    exit 1
+fi
+# shellcheck source=./fleet-lib.sh
+source "$FLEET_LIB"
+
+# The gate is checked here as well as in the adapter. The adapter's check is
+# what produces a civil refusal on the issue; this one is what stops a
+# hand-started run from proceeding unmeasured. A fleet without a gate is the
+# one configuration this must never launch.
+if ! reason=$(fleet_preflight "$AGENT_WORKSPACE"); then
+    echo "ERROR: this project cannot run a fleet." >&2
+    printf '%s\n' "$reason" >&2
+    exit 1
+fi
+
+# Work happens in the repository. Goal-mode agents that cannot find one fall
+# back to a scratch workspace and report success for work done somewhere else.
+if [[ -n "${AGENT_REPO_PATH:-}" ]]; then
+    if [[ ! -d "$AGENT_REPO_PATH/.git" ]]; then
+        echo "ERROR: not a git repository: $AGENT_REPO_PATH" >&2
+        exit 1
+    fi
+fi
+
+echo "[INFO] materialising fleet configuration"
+fleet_materialize "$AGENT_WORKSPACE" || {
+    echo "ERROR: could not materialise the fleet configuration" >&2
+    exit 1
+}
+fleet_write_runtime "$AGENT_WORKSPACE" "${AGENT_REPO_PATH:-$AGENT_WORKSPACE}" || {
+    echo "ERROR: could not write the fleet runtime file" >&2
+    exit 1
+}
+
+# fleet-land is the only sanctioned route to a commit, so it has to be on PATH
+# for an agent that has just been told to use it.
+export PATH="${AGENT_WORKSPACE}/bin:${PATH}"
+
+# Cap the fleet at what the project configured. The CLI's own default is far
+# higher than any subscription enjoys, and the failure mode of getting this
+# wrong is a rate limit halfway through a round rather than an error.
+_max_concurrent="$(fleet_max_concurrent "$AGENT_WORKSPACE")"
+export CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS="$_max_concurrent"
+
+if [[ -n "${AGENT_REPO_PATH:-}" ]]; then
+    cd "$AGENT_REPO_PATH" || exit 1
+fi
+
+echo "[INFO] $AGENT_TYPE starting in $(pwd)"
+echo "[INFO] gate: $(fleet_gate_command "$AGENT_WORKSPACE")"
+echo "[INFO] max concurrent subagents: $_max_concurrent"
+echo "[INFO] goal: $AGENT_GOAL_CONDITION"
+
+# Same invocation as claude-goal. The difference between the two agent types is
+# entirely in what this script put on disk before this line: the role briefs,
+# the skills, and the hooks that decide when the run is allowed to end.
+claude -p "/goal ${AGENT_GOAL_CONDITION}" \
+    --dangerously-skip-permissions \
+    --output-format stream-json --verbose \
+    2>&1 | python3 /opt/foundry/format-agent-stream.py
+
+exit "${PIPESTATUS[0]}"

@@ -138,6 +138,20 @@ COPY templates/goal/watcher_agent_goal.sh /opt/foundry/watcher_agent_goal.sh
 COPY templates/goal/start-goal.sh.template /opt/foundry/start-goal.sh
 RUN chmod 0755 /opt/foundry/watcher_agent_goal.sh /opt/foundry/start-goal.sh
 
+# The fleet: its launcher, its configuration library, the gate and guard hooks,
+# the landing script, and the default role briefs and skills.
+#
+# The briefs and skills here are pristine copies. A project gets its own
+# editable copies in its volume root the first time a fleet runs, and after
+# that the project's copies win - which is why the defaults live in the image
+# rather than being written into the volume root at init time and forgotten.
+COPY templates/fleet/ /opt/foundry/fleet/
+RUN mv /opt/foundry/fleet/start-fleet.sh.template /opt/foundry/fleet/start-fleet.sh \
+    && chmod 0755 /opt/foundry/fleet/start-fleet.sh \
+                  /opt/foundry/fleet/fleet-lib.sh \
+                  /opt/foundry/fleet/hooks/*.sh \
+                  /opt/foundry/fleet/bin/fleet-land
+
 # The Forgejo watcher: receiver, main loop, shared helpers and hook manager.
 # It reads its configuration from the agent's home, which is the project's
 # volume root, so one image serves every project.

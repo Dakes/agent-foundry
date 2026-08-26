@@ -44,6 +44,20 @@ maintained against the code.
       or drop it from `_project_seed_config`.
 - [ ] `templates/systemd/` unit that runs `foundry up` for flagged projects
 
+### Fleet
+- [x] `claude-fleet` agent type, routed per request by the `fleet` keyword
+- [x] Gate as a `Stop` / `SubagentStop` hook; failures return as work orders
+- [x] Lane, protected-path and git guards; `fleet-land` as the only route to a
+      commit
+- [x] Editable role briefs and skills materialised into the volume root
+- [ ] **Verify whether `PreToolUse` deny is honoured under
+      `--dangerously-skip-permissions`.** `docs/FLEET.md` documents the layered
+      fallback that holds either way, but layer 1 is unverified. A 20-minute
+      spike: a hook that denies `Write`, a headless run as a non-root user, and
+      see whether the file appears.
+- [ ] End-to-end fleet run against a real forge event
+- [ ] A worked JSON-gate example under `docs/` that a project can copy
+
 ### Testing
 - [ ] Unit tests for policy derivation and `foundry.json` access
 - [ ] Integration test: `init` → `up` → `status` → `down` → `rm` on a scratch

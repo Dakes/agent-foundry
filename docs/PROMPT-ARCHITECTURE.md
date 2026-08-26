@@ -12,6 +12,28 @@ executed as the wrong kind of work.
 
 ---
 
+## Where the fleet's role briefs sit in this
+
+The fleet ([FLEET.md](FLEET.md)) puts durable per-role instructions in the
+volume root, at `.claude/agents/*.md` and `.claude/skills/fleet-*/SKILL.md`.
+That looks like the contradiction this document exists to prevent, so the line
+is worth stating explicitly:
+
+- A **role brief** says how to *be* a builder or a critic: never commit, run
+  the gate before the first edit, what a usable report contains. It is the
+  fleet's equivalent of `AGENT.md` — "how", scoped to a role.
+- A **task prompt** still says what to build, in which mode, with which
+  prohibitions. It is generated per request and it is authoritative.
+
+A brief that started saying what to build would re-create exactly the failure
+in §1 below, with the same symptom: two unranked imperatives and an agent
+resolving them differently on every run. `scripts/check-prompts.sh` guards the
+task-prompt side of this; the brief side is a review rule.
+
+The fleet block in the generated prompt names the skill and states the rules
+that outrank the briefs, so the precedence is written down where the agent
+reads it rather than only here.
+
 ## The problems this replaced
 
 ### 1. "Review this MR" produced a new merge request

@@ -397,6 +397,22 @@ _project_seed_config() {
   "network": {
     "allow": [],
     "deny": []
+  },
+  "packets": {
+    "enabled": true,
+    "dir": "packets"
+  },
+  "fleet": {
+    "enabled": false,
+    "strategy": "solo",
+    "gate": {
+      "command": "",
+      "format": "auto",
+      "timeout_seconds": 900,
+      "max_iterations": 12
+    },
+    "roles": {},
+    "lanes": {}
   }
 }
 EOF

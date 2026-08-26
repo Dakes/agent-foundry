@@ -165,7 +165,7 @@ _agent_adapter_file() {
     # completion condition, and neither varies by agent or by forge. The loop
     # belongs to the CLI, so there is nothing per-agent left to adapt.
     case "$AGENT_TYPE" in
-        *-goal)
+        *-goal|claude-fleet)
             echo "$FOUNDRY_LIB_DIR/watcher_agent_goal.sh"
             return
             ;;
@@ -241,7 +241,7 @@ init_watcher() {
     fi
 
     case "$AGENT_TYPE" in
-        claude-goal|codex-goal|agy-goal)
+        claude-goal|codex-goal|agy-goal|claude-fleet)
             ;;
         *)
             log_error "Unsupported watcher agent type: $AGENT_TYPE"
@@ -727,9 +727,18 @@ process_event() {
     # 78 means the request stated no task mode. The prompt library has written
     # the syntax reply to FOUNDRY_REPLY_FILE and no agent should run; posting
     # the generic workspace error here would discard it.
-    if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" && -s "$FOUNDRY_REPLY_FILE" ]]; then
-        log_info "No task mode stated for $task_id; replying with usage"
+    if [[ ( "$prepare_rc" -eq "${FOUNDRY_EXIT_HELP:-78}" ||
+            "$prepare_rc" -eq "${FOUNDRY_EXIT_REFUSED:-79}" ) && -s "$FOUNDRY_REPLY_FILE" ]]; then
         local reply_result="replied_no_mode"
+        # 79 means the request named something this project cannot run - a
+        # fleet with no gate, or a fleet on an agent that has no subagents.
+        # Same handling as 78: the reply is already written, and no agent runs.
+        if [[ "$prepare_rc" -eq "${FOUNDRY_EXIT_REFUSED:-79}" ]]; then
+            reply_result="replied_refused"
+            log_info "Request cannot be run as asked for $task_id; replying"
+        else
+            log_info "No task mode stated for $task_id; replying with usage"
+        fi
         if [[ "$task_type" != "pipeline_failure" ]] && ! reply_budget_ok "${repo}#${number}"; then
             reply_result="skipped_reply_cap"
         elif [[ "$task_type" != "pipeline_failure" ]]; then

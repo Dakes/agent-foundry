@@ -65,6 +65,7 @@ source "${LIB_DIR}/policy.sh"
 source "${LIB_DIR}/project.sh"
 source "${LIB_DIR}/agent-sandbox.sh"
 source "${LIB_DIR}/watcher.sh"
+source "${LIB_DIR}/fleet.sh"
 source "${LIB_DIR}/commands.sh"
 
 # Enable color output by default
@@ -111,6 +112,10 @@ COMMANDS:
     rm [project]        Remove the sandbox; the volume root is kept
     doctor [project]    Check host, policy, ports and keys (--fix repairs)
 
+    fleet <action>      init [--force] | show | check | gate
+                        Set up and inspect the orchestrated fleet for a
+                        project. init writes editable role briefs and skills
+                        into the volume root and seeds .fleet in foundry.json.
     watcher <action>    start | stop | restart | status | logs |
                         register | unregister | list
     policy <action>     baseline | allow | deny | check | ls
@@ -276,6 +281,9 @@ main() {
         image|img)
             cmd_image "$@"
             ;;
+        fleet)
+            cmd_fleet "$@"
+            ;;
         watcher)
             cmd_watcher "$@"
             ;;
@@ -302,7 +310,7 @@ main() {
         *)
             log_error "Unknown domain: $domain"
             echo ""
-            echo "Commands: init, up, down, status, logs, attach, shell, rm, doctor, watcher, policy, image, config"
+            echo "Commands: init, up, down, status, logs, attach, shell, rm, doctor, fleet, watcher, policy, image, config"
             echo "Run 'foundry --help' for usage"
             exit 1
             ;;

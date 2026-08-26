@@ -1,0 +1,24 @@
+{
+  "enabled": true,
+  "strategy": "solo",
+  "gate": {
+    "command": "",
+    "format": "auto",
+    "timeout_seconds": 900,
+    "max_iterations": 12,
+    "work_order_lines": 40
+  },
+  "roles": {
+    "fleet-builder": {
+      "count": 3,
+      "model": "sonnet",
+      "summary": "Implements one lane of the round. Reads a work order, changes code, proves it with the gate. Never commits."
+    },
+    "fleet-critic": {
+      "count": 1,
+      "model": "opus",
+      "summary": "Adversarial reviewer. Re-derives every claim from the code itself. Read-only, and decides its own scope of review."
+    }
+  },
+  "lanes": {}
+}

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# Agent Foundry - the sanctioned landing path for a fleet run
+#
+# The only route to a commit while a fleet is running, because it is the only
+# route that runs the gate first. Everything else is denied by
+# hooks/commit-guard.sh and pointed back here.
+#
+# Usage:
+#   fleet-land -m <message> -- <path> [<path>...]   verify, stage, commit
+#   fleet-land --push [<branch>]                    verify, then push
+#   fleet-land --gate                               run the gate and show it
+#
+# Deliberately refuses to stage the whole tree. In a fleet run the working tree
+# holds several agents' in-flight work at once, so `git add .` does not mean
+# "my changes" - it means "everything anyone has touched, reviewed or not".
+# Precise pathspecs are the only honest way to commit out of a shared tree.
+#
+
+set -uo pipefail
+
+FLEET_HOOKS_DIR="${FLEET_HOOKS_DIR:-${HOME}/.claude/hooks/fleet}"
+GATE_RUN="${FLEET_HOOKS_DIR}/gate-run.sh"
+
+_die() { printf 'fleet-land: %s\n' "$1" >&2; exit 1; }
+
+_usage() {
+    sed -n '5,20p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-1}"
+}
+
+[[ -x "$GATE_RUN" ]] || _die "gate runner not found at $GATE_RUN"
+
+# shellcheck source=../hooks/fleet-runtime.sh
+source "${FLEET_HOOKS_DIR}/fleet-runtime.sh" 2>/dev/null || true
+
+repo="${FLEET_REPO:-$PWD}"
+
+_run_gate() {
+    local output rc
+    output=$("$GATE_RUN" 2>&1)
+    rc=$?
+
+    printf '%s\n' "$output"
+
+    case "$rc" in
+        0) return 0 ;;
+        2)
+            printf '\nfleet-land: the gate could not be run, so nothing here has been verified.\n' >&2
+            printf 'Nothing was committed. Fix the gate or report it as a blocker.\n' >&2
+            return 2
+            ;;
+        *)
+            printf '\nfleet-land: the gate is failing. Nothing was committed.\n' >&2
+            printf 'Work the items above and try again. Do not edit the gate to get past it.\n' >&2
+            return 1
+            ;;
+    esac
+}
+
+mode="commit"
+message=""
+paths=()
+branch=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -m|--message) message="${2:-}"; shift 2 ;;
+        --push) mode="push"; branch="${2:-}"; shift; [[ -n "$branch" ]] && shift ;;
+        --gate) mode="gate"; shift ;;
+        -h|--help) _usage 0 ;;
+        --) shift; paths+=("$@"); break ;;
+        -a|-A|--all) _die "refusing --all: the tree holds other agents' work. Name the paths you are landing." ;;
+        *) paths+=("$1"); shift ;;
+    esac
+done
+
+cd "$repo" || _die "cannot enter $repo"
+
+case "$mode" in
+    gate)
+        _run_gate
+        exit $?
+        ;;
+
+    push)
+        _run_gate || exit $?
+        [[ -n "$branch" ]] || branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+        [[ -n "$branch" && "$branch" != "HEAD" ]] || _die "cannot determine the branch to push"
+        printf 'fleet-land: gate passed; pushing %s\n' "$branch"
+        git push -u origin "$branch" || _die "push failed"
+        exit 0
+        ;;
+
+    commit)
+        [[ -n "$message" ]] || _die "a commit message is required (-m)"
+        [[ ${#paths[@]} -gt 0 ]] || _die "name the paths you are landing; this never stages the whole tree"
+
+        for p in "${paths[@]}"; do
+            case "$p" in
+                .|./|"*"|-a|-A)
+                    _die "refusing pathspec '$p': the tree holds other agents' work. Name real paths."
+                    ;;
+            esac
+            [[ -e "$p" ]] || _die "no such path: $p"
+        done
+
+        _run_gate || exit $?
+
+        git add -- "${paths[@]}" || _die "git add failed"
+
+        # Shown, not just run: the whole discipline is that whoever lands has
+        # looked at exactly what they are landing.
+        printf '\nfleet-land: staged for commit:\n'
+        git diff --cached --name-status
+        printf '\n'
+
+        if git diff --cached --quiet; then
+            _die "nothing staged from those paths; there is nothing to land"
+        fi
+
+        git commit -m "$message" || _die "commit failed"
+        printf 'fleet-land: landed at gate PASS\n'
+        exit 0
+        ;;
+esac

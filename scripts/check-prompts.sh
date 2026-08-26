@@ -296,6 +296,7 @@ _defined_helpers() {
         templates/forgejo/forgejo_watcher.sh \
         templates/forgejo/forgejo_watcher_common.sh \
         templates/prompt-lib.sh \
+        templates/fleet/fleet-lib.sh \
         lib/agent-registry.sh \
         "${ADAPTERS[@]}" 2>/dev/null \
         | sed 's/()//' | sort -u
@@ -328,6 +329,62 @@ for f in templates/forgejo/forgejo_watcher.sh "${ADAPTERS[@]}"; do
 done
 rm -f /tmp/foundry-defined.$$
 ok "every helper the watcher calls is defined"
+
+# ---------------------------------------------------------------------------
+# 12. The fleet strategy must state explicit prohibitions, for the same reason
+#     every task mode must: the failure is a plausible adjacent action, and
+#     only an explicit "Do not" suppresses it. An orchestrator with no stated
+#     prohibitions lands unverified work and calls it done.
+# ---------------------------------------------------------------------------
+fleet_block=$(awk '/^foundry_fleet_block\(\) \{/{found=1} found{print} found && /^\}/{exit}' \
+    templates/prompt-lib.sh)
+if [[ -z "$fleet_block" ]]; then
+    fail "foundry_fleet_block not found in prompt-lib.sh"
+elif ! grep -q '_foundry_never' <<< "$fleet_block"; then
+    fail "the fleet block states no explicit prohibitions"
+fi
+ok "the fleet block states explicit prohibitions"
+
+# ---------------------------------------------------------------------------
+# 13. The fleet must be reachable end to end: a launcher, the library the
+#     launcher and the adapter both source, the hooks the launcher wires up,
+#     and the landing script the guard points agents at. Any one of these
+#     missing is an outage that only shows up when a forge event arrives.
+# ---------------------------------------------------------------------------
+for f in templates/fleet/start-fleet.sh.template \
+         templates/fleet/fleet-lib.sh \
+         templates/fleet/bin/fleet-land \
+         templates/fleet/defaults/fleet.json \
+         templates/fleet/defaults/settings.json \
+         templates/fleet/hooks/fleet-runtime.sh \
+         templates/fleet/hooks/gate-run.sh \
+         templates/fleet/hooks/stop-gate.sh \
+         templates/fleet/hooks/stop-audit.sh \
+         templates/fleet/hooks/lane-guard.sh \
+         templates/fleet/hooks/commit-guard.sh; do
+    [[ -f "$f" ]] || fail "fleet file missing: $f"
+done
+
+# Every role the defaults configure needs a brief whose frontmatter declares
+# that exact name: Claude Code resolves subagents by the name in the file, not
+# by the filename, so a rename in one place and not the other is a role that
+# silently does not exist.
+while IFS= read -r role; do
+    [[ -n "$role" ]] || continue
+    brief="templates/fleet/defaults/agents/${role}.md"
+    if [[ ! -f "$brief" ]]; then
+        fail "fleet role '$role' has no brief at $brief"
+        continue
+    fi
+    grep -q "^name: ${role}$" "$brief" || \
+        fail "$brief does not declare 'name: $role' in its frontmatter"
+done < <(jq -r '(.roles // {}) | keys[]' templates/fleet/defaults/fleet.json 2>/dev/null)
+
+# The image has to carry all of it, or the launcher finds nothing.
+grep -q 'templates/fleet/' docker/foundry-agent.Dockerfile || \
+    fail "the fleet is not copied into the agent image"
+
+ok "the fleet is reachable end to end"
 
 echo
 if [[ "$FAIL" -eq 0 ]]; then
