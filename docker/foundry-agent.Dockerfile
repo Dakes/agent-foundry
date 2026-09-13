@@ -84,11 +84,29 @@ RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
         docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
-# Interactive agent CLIs
-RUN npm install -g \
-        @anthropic-ai/claude-code \
-        @google/gemini-cli \
-        @openai/codex
+# Interactive agent CLIs.
+#
+# The versions are resolved from the npm registry by `foundry image build` and
+# pinned here. Bare package names would make this layer's cache key constant:
+# a rebuild months later reuses the layer and ships whatever Claude Code was
+# current the first time, which is exactly the trap `foundry image build` is
+# meant to get you out of. With the version in the command the key moves the
+# moment upstream publishes, and not otherwise.
+#
+# CLI_REFRESH is the fallback: when the host cannot reach the registry to
+# resolve versions it carries a timestamp instead, so the layer rebuilds and
+# `@latest` does the resolving. Referencing it in the RUN is what puts it in
+# the cache key.
+ARG CLAUDE_CODE_VERSION=latest
+ARG GEMINI_CLI_VERSION=latest
+ARG CODEX_VERSION=latest
+ARG CLI_REFRESH=pinned
+RUN echo "agent CLIs (refresh: ${CLI_REFRESH})" \
+    && npm install -g \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
+        "@openai/codex@${CODEX_VERSION}" \
+    && claude --version && gemini --version && codex --version
 
 # Antigravity CLI (agy), which ships no image of its own.
 #

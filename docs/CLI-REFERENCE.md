@@ -169,6 +169,26 @@ of its own. A project can still pin `.image` in `foundry.json`.
 
 Two things this command does that are easy to miss:
 
+- The agent CLIs are always rebuilt at the current release. Before building,
+  Foundry asks the npm registry for the latest `@anthropic-ai/claude-code`,
+  `@google/gemini-cli` and `@openai/codex`, and pins those versions into the
+  build:
+
+  ```
+  [INFO] @anthropic-ai/claude-code 2.1.270
+  ```
+
+  That version is part of the layer's cache key, so the layer rebuilds when
+  upstream publishes and is reused when it hasn't — a plain `npm install -g
+  <pkg>` line never changes, which is how a rebuild ends up shipping a
+  months-old Claude Code. If the registry can't be reached, the layer is
+  rebuilt anyway rather than trusted.
+
+  Existing sandboxes keep the image they were created from, so a rebuild alone
+  changes nothing for them; `up` warns when it sees the drift and the fix is
+  `foundry rm <project> && foundry init <project>`. To update one sandbox in
+  place instead: `foundry shell <project>` then
+  `sudo npm install -g @anthropic-ai/claude-code@latest`.
 - The image's `agent` user is created with **your** UID/GID, so files the
   sandbox writes into the volume root stay editable on the host.
 - After building, the image is imported into the sandbox runtime's own image

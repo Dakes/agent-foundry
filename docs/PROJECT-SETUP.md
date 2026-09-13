@@ -75,7 +75,10 @@ $EDITOR ~/.local/share/foundry/volumes/my-project/foundry.json
 - `repos[].url` — any git URL. `branch` and `dir` are optional; `dir` defaults
   to the repo name.
 - `resources.cpus` / `resources.memory` — memory takes a unit (`8g`, `4096m`);
-  a bare number is read as MiB. Empty means "let the sandbox decide".
+  a bare number is read as MiB. Empty means "let the sandbox decide". The
+  default is 4 GiB, which is a floor: the agent CLI uses 0.5-1.2 GB of it
+  during a run and the nested Docker daemon another ~160 MB, so raise it here
+  for projects that compile or run large test suites.
 - `network.allow` — rules derived from your remotes are written back here by
   `init`, so every exception is visible in a diff. You can add your own.
 - `watcher.receiver_port` — the port **the forge POSTs webhooks to**, not a

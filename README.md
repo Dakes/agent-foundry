@@ -153,9 +153,15 @@ in `~/.config/foundry/config.conf`. See
 
 ### Resources
 
-Defaults come from the sandbox runtime (all host CPUs, 50% of host memory).
+A sandbox gets all host CPUs and **4 GiB** of memory. 4 GiB is a floor, not a
+comfortable number: the agent CLI alone sits around 0.5-1.2 GB during a run and
+the nested Docker daemon takes ~160 MB, so a project with a real toolchain
+(cargo, gradle, a large test suite) wants more. There is no swap — running out
+means the kernel kills the agent mid-run.
+
 Override globally with `DEFAULT_CPUS` / `DEFAULT_MEMORY`, or per project with
-`.resources` in `foundry.json`.
+`.resources` in `foundry.json`. Clearing `DEFAULT_MEMORY` hands the decision to
+the sandbox runtime: 50% of host memory, capped at 32 GiB.
 
 ### Network policy — a required manual step
 

@@ -1071,6 +1071,27 @@ cmd_policy() {
     esac
 }
 
+# Latest published version of an npm package, from the registry.
+#
+# Resolved on the host rather than left to `npm install -g <pkg>` inside the
+# build: the Dockerfile line is identical on every rebuild, so Docker reuses
+# the cached layer and the image keeps the CLI version it was first built
+# with. Pinning the resolved version moves the layer's cache key exactly when
+# upstream publishes.
+#
+# Usage: version="$(_npm_latest_version @anthropic-ai/claude-code)" || ...
+_npm_latest_version() {
+    local pkg="$1"
+
+    check_command npm || return 1
+
+    local version
+    version="$(npm view "$pkg" version 2>/dev/null | tr -d '[:space:]')" || return 1
+    [[ -n "$version" ]] || return 1
+
+    printf '%s\n' "$version"
+}
+
 cmd_image() {
     local action="${1:-}"
     shift || true
@@ -1112,10 +1133,39 @@ cmd_image() {
             local image_id
             image_id="$(date -u +%Y%m%d%H%M%S)-$(git -C "$FOUNDRY_BASE" rev-parse --short HEAD 2>/dev/null || echo local)"
 
+            # The agent CLIs are the one part of the image that has to move
+            # with upstream: a cached npm layer is how a rebuild ends up
+            # shipping a months-old Claude Code. Resolving the versions here
+            # and pinning them into the build makes the layer rebuild when -
+            # and only when - there is something new to install.
+            local -a cli_args=()
+            local refresh="pinned"
+            local entry pkg var version
+            for entry in \
+                "@anthropic-ai/claude-code:CLAUDE_CODE_VERSION" \
+                "@google/gemini-cli:GEMINI_CLI_VERSION" \
+                "@openai/codex:CODEX_VERSION"
+            do
+                pkg="${entry%:*}"
+                var="${entry##*:}"
+                if version="$(_npm_latest_version "$pkg")"; then
+                    log_info "  ${pkg} ${version}"
+                    cli_args+=(--build-arg "${var}=${version}")
+                else
+                    # Unresolved means the pin cannot be trusted to change, so
+                    # fall back to busting the layer outright and letting npm
+                    # resolve @latest inside the build.
+                    log_warn "Could not resolve the latest ${pkg}; rebuilding the CLI layer"
+                    refresh="$(date -u +%s)"
+                fi
+            done
+            cli_args+=(--build-arg "CLI_REFRESH=${refresh}")
+
             log_info "Building ${repo}:${tag} (agent uid ${uid}:${gid})"
             docker build \
                 -f "$dockerfile" \
                 --build-arg "FOUNDRY_IMAGE_ID=${image_id}" \
+                "${cli_args[@]}" \
                 --build-arg "AGENT_UID=${uid}" \
                 --build-arg "AGENT_GID=${gid}" \
                 -t "${repo}:${tag}" \
