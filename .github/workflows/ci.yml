@@ -45,6 +45,11 @@ jobs:
       - name: Watcher run-outcome tests
         run: ./scripts/test-watcher-outcome.sh
 
+      # Port rolling decides what `init` publishes; sbx is stubbed, so the
+      # only real requirement is python3 for the listener.
+      - name: Host port tests
+        run: ./scripts/test-ports.sh
+
       # scripts/test-watcher-e2e.sh is deliberately not here: it builds an
       # image and creates a sandbox, which needs sbx and several minutes. Run
       # it by hand after touching templates/forgejo/ or lib/watcher.sh.

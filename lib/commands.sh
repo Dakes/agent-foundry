@@ -197,6 +197,17 @@ cmd_init() {
     memory="$(_project_memory "$name")"
     shared="$(project_shared_dir)"
 
+    # A host port can only be bound once, and sbx creates the sandbox before
+    # it publishes - so a collision here leaves a box behind with no mapping
+    # at all. Rolling to a free port happens only for a sandbox that does not
+    # exist yet: on a re-run of init the number is already out in the world,
+    # registered with the forge, and moving it would orphan those hooks.
+    if sandbox_exists "$box"; then
+        project_check_receiver_port "$name" "$box" || return 1
+    else
+        project_resolve_receiver_port "$name" "$box" || return 1
+    fi
+
     local -a specs=()
     mapfile -t specs < <(project_publish_specs "$name")
 
@@ -300,6 +311,14 @@ cmd_up() {
         log_error "Run: foundry init $FOUNDRY_PROJECT"
         return 1
     fi
+
+    # Checked, never changed: the receiver port is what the forge's webhooks
+    # were registered against, so `up` moving it would walk the port forward
+    # over a project's life and silently orphan every hook. Rolling belongs to
+    # init, where nothing points at the number yet. This runs before the start
+    # because a sandbox re-binds its mappings as it comes up, and sbx's bind
+    # failure says nothing about which port or what to do.
+    project_check_receiver_port "$FOUNDRY_PROJECT" "$FOUNDRY_BOX" || return 1
 
     sandbox_start "$FOUNDRY_BOX" || return 1
     sandbox_link_home "$FOUNDRY_BOX" "$FOUNDRY_ROOT" || return 1

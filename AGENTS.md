@@ -144,13 +144,14 @@ Do not rewrite working shell for its own sake.
 
 # Validation
 
-Run all four before committing:
+Run all five before committing:
 
 ```bash
 ./scripts/syntax-check.sh
 ./scripts/shellcheck.sh
 ./scripts/check-prompts.sh
 ./scripts/test-prompt-lib.sh
+./scripts/test-ports.sh
 ```
 
 CI runs the same set on every pull request (`.github/workflows/ci.yml`).

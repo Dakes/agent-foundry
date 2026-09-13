@@ -864,6 +864,103 @@ project_receiver_port() {
     project_get "$1" '.watcher.receiver_port' ""
 }
 
+# Roll the receiver port to a free one when the configured port is taken.
+#
+# init only. See project_check_receiver_port for why `up` refuses instead: at
+# init nothing has been told the number yet, so picking another one costs
+# nothing.
+#
+# The receiver port is published on the host, and a host port can only be bound
+# once - so a second project on the same port, or a config copied from another
+# machine, failed `init` at the publish step with a 409 and left behind a
+# sandbox with no mapping at all. Config-driven means deriving what can be
+# derived: the exact number only matters to the forge, and that comes from this
+# same field.
+#
+# The new value is written back to foundry.json rather than kept in memory, so
+# it is visible, stable across restarts, and picked up by everything else that
+# reads the port (the receiver inside the sandbox, the webhook URL, doctor).
+#
+# Usage: project_resolve_receiver_port <project> <box>
+project_resolve_receiver_port() {
+    local name="$1"
+    local box="${2:-}"
+
+    local port
+    port="$(project_receiver_port "$name")"
+
+    # Nothing configured, or deliberately disabled: nothing to publish.
+    [[ -n "$port" && "$port" != "0" ]] || return 0
+    # Malformed values are rejected by project_validate_config; not here.
+    [[ "$port" =~ ^[0-9]+$ ]] || return 0
+
+    sandbox_host_port_in_use "$port" "$box" || return 0
+
+    local free
+    if ! free="$(sandbox_next_free_port "$((port + 1))" "$box")"; then
+        log_error "Receiver port ${port} is in use and no free port follows it"
+        log_error "Set .watcher.receiver_port in $(project_config_path "$name") by hand"
+        return 1
+    fi
+
+    log_warn "Receiver port ${port} is already taken on this host"
+    log_warn "  Using ${free} instead and recording it in $(project_config_path "$name")"
+
+    project_set "$name" '.watcher.receiver_port' "$free" || return 1
+
+    # public_url is the operator's, and it may carry an explicit port that the
+    # forge already posts to. Rewriting it would be guesswork - there may be a
+    # proxy in front - so say what is now inconsistent instead.
+    local public
+    public="$(project_get "$name" '.watcher.public_url' "")"
+    if [[ -n "$public" && "$public" == *":${port}"* ]]; then
+        log_warn "  .watcher.public_url still points at port ${port}: update it,"
+        log_warn "  then re-run 'foundry watcher hooks ${name} register'"
+    fi
+
+    return 0
+}
+
+# Refuse to start on a receiver port something else holds - without moving it.
+#
+# `up` never rolls. The port is what the forge's webhooks were registered
+# against and what the operator wrote down, so bumping it on a start would walk
+# it forward over the life of a project and orphan every hook on the way.
+# Rolling is init's business, when nothing points at the number yet.
+#
+# Only what is bound on the host right now counts. Another sandbox's mapping
+# does not: while that sandbox is stopped it binds nothing, and this project
+# may well have had the port first.
+#
+# Usage: project_check_receiver_port <project> <box>
+project_check_receiver_port() {
+    local name="$1"
+    local box="${2:-}"
+
+    local port
+    port="$(project_receiver_port "$name")"
+
+    [[ -n "$port" && "$port" != "0" ]] || return 0
+    [[ "$port" =~ ^[0-9]+$ ]] || return 0
+
+    # Bound by our own running sandbox: that is the port working, not a clash.
+    if [[ -n "$box" ]] && sandbox_host_port_owned "$box" "$port"; then
+        return 0
+    fi
+
+    _host_port_bound "$port" || return 0
+
+    log_error "Receiver port ${port} is already bound on this host"
+    log_error "  Something else holds it, so this sandbox cannot publish it."
+    log_error "  Free that port, or set .watcher.receiver_port in"
+    log_error "  $(project_config_path "$name") to one that is free."
+    log_error "  It is not moved for you here: the forge posts webhooks to"
+    log_error "  this port, and changing it would orphan the hooks already"
+    log_error "  registered. Re-register them after a change with:"
+    log_error "    foundry watcher hooks ${name} register"
+    return 1
+}
+
 # Publish specs for a project, derived from its watcher config.
 # Watcher receivers must be reachable from the forge, so they bind 0.0.0.0
 # rather than the loopback default.

@@ -123,6 +123,50 @@ It is the port Forgejo **POSTs to**, not one the watcher talks to. It must be
 1024 or above: the sandbox runs the watcher unprivileged, so a privileged port
 cannot be bound.
 
+### A taken port rolls
+
+The receiver port is published on the host, and a host port can only be bound
+once — so a second project on the same number, or a config copied from another
+machine, used to fail `foundry init` at the publish step:
+
+```
+ERROR: publish host 0.0.0.0:9174 -> sandbox port 9174/tcp: 409 Conflict:
+       port is already allocated
+```
+
+The first `init` of a project — the one that creates the sandbox — now checks
+first and takes the next free port, writing it back to `foundry.json`:
+
+```
+[WARN] Receiver port 9174 is already taken on this host
+[WARN]   Using 9175 instead and recording it in .../foundry.json
+```
+
+Ports held by anything on the host count, as do ports mapped by other sandboxes
+that are merely stopped — those bind nothing today and would collide the moment
+they start.
+
+**Only that first `init` moves the port.** `up`, and `init` re-run on a project
+that already has a sandbox, refuse instead:
+
+```
+[ERROR] Receiver port 9174 is already bound on this host
+[ERROR]   Free that port, or set .watcher.receiver_port in ... to one that is free.
+```
+
+By then the number is out in the world: Forgejo posts webhooks to it, and a
+start that quietly moved it would orphan every registered hook and walk the port
+forward a little more on each restart. Free the port or choose a new one
+yourself, and re-register if you changed it:
+
+```bash
+foundry watcher hooks <project> register
+```
+
+The same applies when `init` does roll and `public_url` spells the old port out
+— it is not rewritten, since a reverse proxy in front means the external port
+need not match the receiver's.
+
 ### public_url
 
 Only you know how your forge addresses the machine running Foundry, so this is

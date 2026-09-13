@@ -702,6 +702,188 @@ sandbox_port_published() {
     sandbox_ports "$name" | grep -qE "(^|[^0-9])${port}([^0-9]|$)"
 }
 
+# ----------------------------------------------------------------------------
+# HOST PORT AVAILABILITY
+#
+# Publishing binds a port on the host, and a host port can only be bound once.
+# Two projects (or two machines' worth of copied config) landing on the same
+# receiver port made `init` fail at the publish step - with the sandbox already
+# created and the port never mapped:
+#
+#   publish host 0.0.0.0:9174 ...: 409 Conflict: port is already allocated
+#
+# The only way to avoid that is to look before publishing, which is what these
+# helpers are for; project_resolve_receiver_port rolls to the next free port.
+# ----------------------------------------------------------------------------
+
+# Is a port bound on the host right now?
+#
+# Output is captured rather than piped into grep -q: under `set -o pipefail` a
+# grep that exits early kills the producer with SIGPIPE, and the pipeline then
+# reports failure for a port that was in fact found.
+_host_port_bound() {
+    local port="$1"
+    local listening=""
+
+    if check_command ss; then
+        listening="$(ss -ltn 2>/dev/null | awk 'NR > 1 { print $4 }')" || true
+    elif check_command netstat; then
+        listening="$(netstat -ltn 2>/dev/null | awk '{ print $4 }')" || true
+    else
+        _host_port_probe "$port"
+        return $?
+    fi
+
+    # The separator before the port matters: "0.0.0.0:19174" must not match a
+    # search for 9174. Covers IPv4 (0.0.0.0:9174) and IPv6 ([::]:9174) alike.
+    grep -qE "[:.]${port}\$" <<< "$listening"
+}
+
+# Fallback for hosts with no way to list listeners: try to take the port.
+#
+# Binding asks exactly the question publishing will ask, and it answers
+# immediately. A connect probe is the last resort because it can hang: a
+# listener whose accept backlog is full never answers the SYN, and the kernel
+# retries for minutes before giving up - so it only runs under a timeout.
+_host_port_probe() {
+    local port="$1"
+
+    # Out of range: nothing can publish it, so report it taken and let the
+    # caller move past rather than try to bind it.
+    if (( port < 1 || port > 65535 )); then
+        return 0
+    fi
+
+    if check_command python3; then
+        # A clean exit means the bind worked, so nothing else holds the port.
+        if python3 - "$port" <<'PROBE'
+import socket, sys
+
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("0.0.0.0", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PROBE
+        then
+            return 1
+        fi
+        return 0
+    fi
+
+    if check_command timeout; then
+        timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/${port}" 2>/dev/null && return 0
+        return 1
+    fi
+
+    # Nothing left to ask with. Treating the port as free keeps the old
+    # behaviour: publishing tries, and sbx reports the conflict.
+    return 1
+}
+
+# Host ports mapped by one sandbox, one per line.
+_sandbox_host_ports() {
+    local name="$1"
+
+    local json
+    json="$("$SBX_BIN" ports "$name" --json 2>/dev/null)" || return 0
+
+    printf '%s' "$json" | jq -r '
+        (if type == "array" then . else (.ports // []) end)
+        | .[]? | (.host_port // .HostPort // .published // empty) | tostring
+    ' 2>/dev/null || true
+}
+
+# Is a host port already claimed by some other sandbox?
+#
+# A stopped sandbox binds nothing, so the kernel cannot answer this: sbx keeps
+# its mappings for the sandbox's lifetime and re-binds them on start. Taking a
+# port from one would work now and break that project the next time it comes
+# up.
+_sandbox_host_port_claimed() {
+    local port="$1"
+    local skip="${2:-}"
+
+    check_command "$SBX_BIN" || return 1
+
+    local box
+    while read -r box; do
+        [[ -n "$box" ]] || continue
+        [[ "$box" == "$skip" ]] && continue
+        if grep -qxF "$port" <<< "$(_sandbox_host_ports "$box")"; then
+            return 0
+        fi
+    done < <(sandbox_list_json | jq -r '.[]? | (.name // .Name // empty)' 2>/dev/null)
+
+    return 1
+}
+
+# Is a host port bound because this very sandbox publishes it?
+#
+# Only while it runs: a stopped sandbox's mapping binds nothing, so whatever
+# holds the port then belongs to someone else.
+#
+# Usage: sandbox_host_port_owned <name> <host_port> && ...
+sandbox_host_port_owned() {
+    local name="$1"
+    local port="$2"
+
+    sandbox_is_running "$name" || return 1
+    grep -qxF "$port" <<< "$(_sandbox_host_ports "$name")"
+}
+
+# Is a host port unavailable for publishing?
+#
+# The second argument names the sandbox asking. A mapping it already owns is
+# not a conflict while it runs - it is the reason the port is bound - and
+# rolling away from it on every `up` would move the receiver for nothing.
+#
+# While it is stopped that mapping binds nothing, so a bound port really is
+# someone else's: the sandbox would fail to start on it, which is precisely
+# the case worth rolling out of.
+#
+# Usage: sandbox_host_port_in_use 9174 [own-sandbox] && ...
+sandbox_host_port_in_use() {
+    local port="$1"
+    local own="${2:-}"
+
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+
+    if [[ -n "$own" ]] && sandbox_host_port_owned "$own" "$port"; then
+        return 1
+    fi
+
+    _host_port_bound "$port" && return 0
+    _sandbox_host_port_claimed "$port" "$own" && return 0
+
+    return 1
+}
+
+# First free host port at or above <start>.
+# Usage: port="$(sandbox_next_free_port 9174 [own-sandbox] [tries])"
+sandbox_next_free_port() {
+    local start="$1"
+    local own="${2:-}"
+    local tries="${3:-64}"
+
+    [[ "$start" =~ ^[0-9]+$ ]] || return 1
+
+    local port="$start" n=0
+    while (( n < tries && port < 65536 )); do
+        if ! sandbox_host_port_in_use "$port" "$own"; then
+            printf '%s\n' "$port"
+            return 0
+        fi
+        port=$(( port + 1 ))
+        n=$(( n + 1 ))
+    done
+
+    return 1
+}
+
 # ============================================================================
 # TEMPLATES (snapshots)
 # ============================================================================
