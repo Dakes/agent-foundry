@@ -222,6 +222,7 @@ foundry logs [project]     # -f to follow
 foundry attach [project]   # attach to the agent's tmux session
 foundry shell [project]    # shell inside the sandbox
 foundry rm [project]       # remove the sandbox; volume root is kept
+foundry update [project]   # update the agent CLIs in the sandbox in place
 foundry doctor [project]   # check host, policy, ports, keys (--fix repairs)
 
 foundry watcher <action>   # start | stop | status | logs | secret | register

@@ -28,6 +28,7 @@ foundry init <project> [--no-clone]
 foundry up [project] [--no-agent]
 foundry down [project]
 foundry rm [project] [--purge-volume] [-y|--yes]
+foundry update [project]
 ```
 
 - `init` scaffolds the volume root, validates config, applies the network
@@ -38,6 +39,11 @@ foundry rm [project] [--purge-volume] [-y|--yes]
   Run it any time; there is no separate `restart`.
 - `rm` removes the sandbox. The volume root — repos, agent memory, keys, logs —
   is kept unless you pass `--purge-volume` and confirm.
+- `update` installs the latest claude, gemini and codex CLIs inside an
+  existing sandbox, without recreating it. A running agent keeps the old
+  version until `down` + `up`. The update lasts as long as the sandbox; `rm` +
+  `init` goes back to the image's versions. agy is only updated by rebuilding
+  the image.
 
 Published ports persist for the sandbox's lifetime, so `up` reconciles them:
 it publishes what the config asks for and unpublishes what it no longer does.
@@ -186,9 +192,8 @@ Two things this command does that are easy to miss:
 
   Existing sandboxes keep the image they were created from, so a rebuild alone
   changes nothing for them; `up` warns when it sees the drift and the fix is
-  `foundry rm <project> && foundry init <project>`. To update one sandbox in
-  place instead: `foundry shell <project>` then
-  `sudo npm install -g @anthropic-ai/claude-code@latest`.
+  `foundry rm <project> && foundry init <project>`. To update the CLIs of one
+  sandbox in place instead: `foundry update <project>`.
 - The image's `agent` user is created with **your** UID/GID, so files the
   sandbox writes into the volume root stay editable on the host.
 - After building, the image is imported into the sandbox runtime's own image

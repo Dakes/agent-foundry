@@ -109,6 +109,7 @@ COMMANDS:
     attach [project]    Attach to the agent's tmux session
     shell [project]     Shell inside the sandbox (--ssh to use ssh)
     rm [project]        Remove the sandbox; the volume root is kept
+    update [project]    Update the agent CLIs inside the sandbox in place
     doctor [project]    Check host, policy, ports and keys (--fix repairs)
 
     watcher <action>    start | stop | restart | status | logs |
@@ -267,6 +268,9 @@ main() {
         rm|remove)
             cmd_rm "$@"
             ;;
+        update)
+            cmd_update "$@"
+            ;;
         doctor)
             cmd_doctor "$@"
             ;;
@@ -302,7 +306,7 @@ main() {
         *)
             log_error "Unknown domain: $domain"
             echo ""
-            echo "Commands: init, up, down, status, logs, attach, shell, rm, doctor, watcher, policy, image, config"
+            echo "Commands: init, up, down, status, logs, attach, shell, rm, update, doctor, watcher, policy, image, config"
             echo "Run 'foundry --help' for usage"
             exit 1
             ;;

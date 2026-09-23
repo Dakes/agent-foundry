@@ -3,7 +3,7 @@
 # Agent Foundry - Verb Commands
 #
 # The project-centric CLI: init, up, down, status, logs, attach, shell, rm,
-# doctor, policy, image.
+# update, doctor, policy, image.
 #
 # These replaced the old noun domains (vm, agent, workspace, network, template,
 # host): everything they did is either folded into these verbs or gone
@@ -135,6 +135,7 @@ _warn_if_image_is_stale() {
     log_warn "  A sandbox keeps the image it was created from, so a rebuild"
     log_warn "  alone changes nothing. Pick it up with:"
     log_warn "    foundry rm ${name} && foundry init ${name}"
+    log_warn "  or, for just the agent CLIs: foundry update ${name}"
     return 0
 }
 
@@ -1071,6 +1072,71 @@ cmd_policy() {
     esac
 }
 
+# ============================================================================
+# update
+# ============================================================================
+
+# The npm-installed agent CLIs, as "package:build-arg" pairs. `image build`
+# pins each one via its build arg; `update` installs them in place. agy is
+# not on npm and is only ever refreshed by rebuilding the image.
+FOUNDRY_CLI_PACKAGES=(
+    "@anthropic-ai/claude-code:CLAUDE_CODE_VERSION"
+    "@google/gemini-cli:GEMINI_CLI_VERSION"
+    "@openai/codex:CODEX_VERSION"
+)
+
+# Update the agent CLIs inside an existing sandbox, without recreating it.
+#
+# The in-place counterpart to `image build`: a sandbox keeps the image it was
+# created from, and rm + init is heavy when all that is stale is a CLI. The
+# update lives only as long as the sandbox - rm + init goes back to whatever
+# the image carries.
+cmd_update() {
+    local name="${1:-}"
+
+    _resolve_existing "$name" || return 1
+    sandbox_require || return 1
+
+    if ! sandbox_is_running "$FOUNDRY_BOX"; then
+        log_info "Sandbox is stopped; starting it"
+        sandbox_start "$FOUNDRY_BOX" || return 1
+    fi
+
+    local -a specs=()
+    local entry
+    for entry in "${FOUNDRY_CLI_PACKAGES[@]}"; do
+        specs+=("${entry%:*}@latest")
+    done
+
+    log_info "Updating agent CLIs in $FOUNDRY_BOX"
+    if ! sandbox_exec "$FOUNDRY_BOX" "$FOUNDRY_ROOT" \
+        sudo npm install -g --no-fund --no-audit "${specs[@]}"; then
+        log_error "npm install failed inside $FOUNDRY_BOX"
+        return 1
+    fi
+
+    local cli version
+    for cli in claude gemini codex; do
+        version="$(sandbox_exec "$FOUNDRY_BOX" "$FOUNDRY_ROOT" "$cli" --version 2>/dev/null | head -n1)" || true
+        log_info "  ${cli} ${version:-(unknown)}"
+    done
+
+    # A running CLI keeps the binary it started with; only a restart picks up
+    # the new one.
+    local agent
+    agent="$(project_get "$FOUNDRY_PROJECT" '.agent' "${FOUNDRY_DEFAULT_AGENT:-claude}")"
+    if foundry_agent_running "$FOUNDRY_BOX" "$FOUNDRY_ROOT" "$agent"; then
+        log_warn "The running agent still uses the old version until it restarts:"
+        log_warn "  foundry down ${FOUNDRY_PROJECT} && foundry up ${FOUNDRY_PROJECT}"
+    fi
+    if sandbox_exec "$FOUNDRY_BOX" "$FOUNDRY_ROOT" \
+        tmux has-session -t "$(agent_watcher_session_name)" >/dev/null 2>&1; then
+        log_warn "A watcher run is in progress; the next run uses the new version"
+    fi
+
+    return 0
+}
+
 # Latest published version of an npm package, from the registry.
 #
 # Resolved on the host rather than left to `npm install -g <pkg>` inside the
@@ -1141,11 +1207,7 @@ cmd_image() {
             local -a cli_args=()
             local refresh="pinned"
             local entry pkg var version
-            for entry in \
-                "@anthropic-ai/claude-code:CLAUDE_CODE_VERSION" \
-                "@google/gemini-cli:GEMINI_CLI_VERSION" \
-                "@openai/codex:CODEX_VERSION"
-            do
+            for entry in "${FOUNDRY_CLI_PACKAGES[@]}"; do
                 pkg="${entry%:*}"
                 var="${entry##*:}"
                 if version="$(_npm_latest_version "$pkg")"; then
