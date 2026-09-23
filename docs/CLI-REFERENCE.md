@@ -53,6 +53,7 @@ Re-publishing an existing mapping is a 409, not a no-op.
 
 ```bash
 foundry status [project]
+foundry list
 foundry logs [project] [-f|--follow] [--watcher]
 foundry attach [project]
 foundry shell [project] [--ssh] [command...]
@@ -62,6 +63,9 @@ foundry doctor [project] [--fix]
 - `status` with no project lists every project. With one, it shows the sandbox
   state, agent, cloned repositories and their branches, published ports, and
   the sandbox's active network rules.
+- `list` prints every sandbox as `sbx ls` reports it, with the project it
+  belongs to, then any project that has no sandbox. Unlike `status`, a failing
+  `sbx ls` shows its error rather than making every sandbox look absent.
 - `logs` reads files directly from the volume root on the host — no exec, no
   SSH.
 - `shell` uses `sbx exec` by default. `--ssh` connects over `ssh <box>.sbx`,

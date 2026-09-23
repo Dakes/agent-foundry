@@ -103,6 +103,7 @@ COMMANDS:
     down [project]      Stop agent and sandbox, keeping all state
     status [project]    Sandbox, agent, repos, ports and policy; no project
                         lists everything
+    list                Every sandbox as sbx reports it, with its project
     logs [project]      Agent, watcher and receiver logs together, each line
                         tagged with its source (-f follows; --agent,
                         --watcher, --receiver narrow it; -n sets the lines)
@@ -256,6 +257,9 @@ main() {
         status|st)
             cmd_status "$@"
             ;;
+        list|ls)
+            cmd_list "$@"
+            ;;
         logs|log)
             cmd_logs "$@"
             ;;
@@ -306,7 +310,7 @@ main() {
         *)
             log_error "Unknown domain: $domain"
             echo ""
-            echo "Commands: init, up, down, status, logs, attach, shell, rm, update, doctor, watcher, policy, image, config"
+            echo "Commands: init, up, down, status, list, logs, attach, shell, rm, update, doctor, watcher, policy, image, config"
             echo "Run 'foundry --help' for usage"
             exit 1
             ;;

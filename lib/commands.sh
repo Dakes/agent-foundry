@@ -2,8 +2,8 @@
 #
 # Agent Foundry - Verb Commands
 #
-# The project-centric CLI: init, up, down, status, logs, attach, shell, rm,
-# update, doctor, policy, image.
+# The project-centric CLI: init, up, down, status, list, logs, attach, shell,
+# rm, update, doctor, policy, image.
 #
 # These replaced the old noun domains (vm, agent, workspace, network, template,
 # host): everything they did is either folded into these verbs or gone
@@ -501,6 +501,55 @@ cmd_status() {
     if [[ "$any" == "false" ]]; then
         echo "(no projects - create one with 'foundry init <name>')"
     fi
+
+    return 0
+}
+
+# ============================================================================
+# list
+# ============================================================================
+
+# Every sandbox as sbx itself reports it, next to the project it belongs to.
+#
+# Reads `sbx ls --json` directly and shows its error, where sandbox_exists
+# treats a failed or hung listing the same as "no such sandbox".
+cmd_list() {
+    sandbox_require || return 1
+
+    local json err
+    err="$(mktemp)"
+    if ! json="$("$SBX_BIN" ls --json 2>"$err")"; then
+        log_error "sbx ls failed; every sandbox will look absent until it works"
+        sed 's/^/  /' "$err" >&2
+        rm -f "$err"
+        return 1
+    fi
+    rm -f "$err"
+
+    printf '%-28s %-10s %s\n' "SANDBOX" "STATUS" "PROJECT"
+
+    local -A seen=()
+    local box status project
+    while IFS=$'\t' read -r box status; do
+        [[ -z "$box" ]] && continue
+        project="-"
+        if [[ "$box" == foundry-* && -d "$(project_root "${box#foundry-}")" ]]; then
+            project="${box#foundry-}"
+            seen[$project]=1
+        fi
+        printf '%-28s %-10s %s\n' "$box" "${status:-?}" "$project"
+    done < <(printf '%s' "$json" | jq -r '
+        (if type == "array" then . else (.sandboxes // .items // []) end)[]
+        | [(.name // .Name // ""), (.status // .state // .Status // .State // "")]
+        | @tsv
+    ')
+
+    # Projects whose sandbox sbx does not list: these are the ones that
+    # report "does not exist".
+    while IFS= read -r project; do
+        [[ -z "$project" || -n "${seen[$project]:-}" ]] && continue
+        printf '%-28s %-10s %s\n' "$(sandbox_name_for "$project")" "absent" "$project"
+    done < <(project_list)
 
     return 0
 }

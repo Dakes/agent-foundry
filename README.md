@@ -218,6 +218,7 @@ foundry init <project>     # volume root + config + policy + sandbox + clone
 foundry up [project]       # start, publish ports, clone missing, start agent
 foundry down [project]     # stop agent and sandbox, keep all state
 foundry status [project]   # sandbox, agent, repos, ports, policy
+foundry list               # every sandbox as sbx reports it
 foundry logs [project]     # -f to follow
 foundry attach [project]   # attach to the agent's tmux session
 foundry shell [project]    # shell inside the sandbox
