@@ -112,6 +112,14 @@ sandbox_require() {
         return 1
     fi
 
+    # Signed out, every sbx call fails, and the helpers that read `sbx ls`
+    # take that as "no such sandbox" - so an existing project reports "does
+    # not exist, run foundry init". Gate here, once per invocation.
+    if [[ -z "${_FOUNDRY_SBX_OK:-}" ]]; then
+        sandbox_check_login || return 1
+        _FOUNDRY_SBX_OK=1
+    fi
+
     return 0
 }
 
@@ -136,8 +144,26 @@ sandbox_check_kvm() {
 # Check the user is signed in to Docker (sbx requires it).
 # Usage: sandbox_check_login || return 1
 sandbox_check_login() {
-    # `sbx ls` is the cheapest command that fails when signed out.
-    if ! _sbx ls >/dev/null; then
+    # `sbx ls` is the cheapest command that fails when signed out. Signed out,
+    # it can also sit waiting instead of failing, which looks like foundry
+    # hanging - so no stdin, and a time limit.
+    local limit="${FOUNDRY_SBX_TIMEOUT:-60}"
+    local -a cmd=("$SBX_BIN" ls)
+    if check_command timeout; then
+        cmd=(timeout "$limit" "${cmd[@]}")
+    fi
+
+    local stderr_file rc=0
+    stderr_file="$(mktemp)"
+    "${cmd[@]}" </dev/null >/dev/null 2>"$stderr_file" || rc=$?
+    _SBX_STDERR="$(cat "$stderr_file")"
+    rm -f "$stderr_file"
+
+    if [[ $rc -eq 124 ]]; then
+        log_error "sbx did not answer within ${limit}s - are you signed in? Run: sbx login"
+        return 1
+    fi
+    if [[ $rc -ne 0 ]]; then
         log_error "sbx is not usable - are you signed in? Run: sbx login"
         if [[ -n "${_SBX_STDERR:-}" ]]; then
             printf '%s\n' "$_SBX_STDERR" >&2
